@@ -12,6 +12,30 @@ const exactRegex = (value) => new RegExp(`^${escRegex(value)}$`, "i");
 
 const studentSelect = "name email phone regno academicyear admissionyear program programcode regulation Major Minor semester section category gender department colid";
 
+exports.getClassGroupUsers = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const query = { colid, role: { $not: /^Student$/i } };
+    if (req.query.search) {
+      const value = escRegex(req.query.search);
+      query.$or = [
+        { name: new RegExp(value, "i") },
+        { email: new RegExp(value, "i") },
+        { department: new RegExp(value, "i") }
+      ];
+    }
+    const data = await User.find(query)
+      .select("name email phone department designation role colid")
+      .sort({ name: 1, email: 1 })
+      .limit(500)
+      .lean();
+    res.json({ success: true, count: data.length, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.getFacultyCourses = async (req, res) => {
   try {
     const colid = number(req.query.colid);

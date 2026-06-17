@@ -3,6 +3,7 @@ const NepLmsTimetable = require("../Models/neplmstimetableds");
 const NepLmsAttendance = require("../Models/neplmsattendanceds");
 const User = require("../Models/user");
 const NepLmsClassGroup = require("../Models/neplmsclassgroupds");
+const NepLmsAttendanceOtp = require("../Models/neplmsattendanceotpds");
 
 const text = (value) => String(value || "").trim();
 const number = (value) => {
@@ -10,6 +11,7 @@ const number = (value) => {
   return Number.isNaN(parsed) ? undefined : parsed;
 };
 const regexText = (value) => new RegExp(`^${text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+const randomOtp = () => String(Math.floor(100000 + Math.random() * 900000));
 
 const classFields = [
   "academicyear",
@@ -29,7 +31,7 @@ const classFields = [
   "status"
 ];
 
-const studentSelect = "name email phone regno admissionyear programcode regulation Major Minor semester section category gender department colid";
+const studentSelect = "name email phone regno admissionyear academicyear programcode regulation Major Minor semester section category gender department photo colid";
 
 const buildClassFilter = (source = {}) => {
   const filter = {};
@@ -73,7 +75,7 @@ exports.getStudentsForAttendance = async (req, res) => {
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
 
     const query = { colid, role: /^Student$/i };
-    if (req.query.academicyear) query.admissionyear = text(req.query.academicyear);
+    if (req.query.academicyear) query.academicyear = text(req.query.academicyear);
     if (req.query.semester) query.semester = text(req.query.semester);
     if (req.query.major) query.Major = text(req.query.major);
     if (req.query.programcode) query.programcode = text(req.query.programcode);
@@ -98,7 +100,10 @@ exports.getStudentsForAttendance = async (req, res) => {
         ...student,
         existingAttendance: attendance?.attendance,
         attendanceId: attendance?._id,
-        attendanceComments: attendance?.comments || ""
+        attendanceComments: attendance?.comments || "",
+        changereason: attendance?.changereason || "",
+        changedby: attendance?.changedby || "",
+        changedat: attendance?.changedat || ""
       };
     });
 
@@ -204,6 +209,195 @@ exports.saveAttendance = async (req, res) => {
     }
 
     res.json({ success: true, saved: saved.length, data: saved });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const attendancePayloadFrom = ({ colid, classInfo, item, attendanceType, attendance, comments, user, changereason }) => ({
+  classid: classInfo._id || classInfo.classid,
+  studentid: item.studentid || item._id,
+  student: text(item.student || item.name),
+  studentemail: text(item.studentemail || item.email),
+  studentphone: text(item.studentphone || item.phone),
+  regno: text(item.regno),
+  program: text(classInfo.program),
+  programcode: text(classInfo.programcode || item.programcode),
+  academicyear: text(classInfo.academicyear || item.academicyear),
+  semester: text(classInfo.semester || item.semester),
+  major: text(classInfo.major || item.Major),
+  faculty: text(classInfo.faculty),
+  facultyemail: text(classInfo.facultyemail),
+  course: text(classInfo.course),
+  coursecode: text(classInfo.coursecode),
+  classdate: text(classInfo.classdate),
+  classtime: text(classInfo.classtime),
+  attendance: Number(attendance) === 0 ? 0 : 1,
+  type: attendanceType,
+  comments: text(comments),
+  changereason: text(changereason),
+  changedby: changereason ? text(user) : undefined,
+  changedat: changereason ? new Date() : undefined,
+  colid,
+  user: text(user)
+});
+
+exports.createAttendanceOtps = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const classInfo = req.body.classInfo || {};
+    const attendanceType = text(req.body.type) || "Regular";
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!classInfo._id && !classInfo.classid) return res.status(400).json({ success: false, message: "Class is required" });
+    const otps = Array.from({ length: 6 }, randomOtp);
+    const classid = classInfo._id || classInfo.classid;
+    await NepLmsAttendanceOtp.updateMany({ colid, classid, type: attendanceType, status: "Active" }, { status: "Closed" });
+    const data = await NepLmsAttendanceOtp.create({
+      classid,
+      otps,
+      academicyear: text(classInfo.academicyear),
+      program: text(classInfo.program),
+      programcode: text(classInfo.programcode),
+      semester: text(classInfo.semester),
+      major: text(classInfo.major),
+      faculty: text(classInfo.faculty),
+      facultyemail: text(classInfo.facultyemail),
+      course: text(classInfo.course),
+      coursecode: text(classInfo.coursecode),
+      classdate: text(classInfo.classdate),
+      classtime: text(classInfo.classtime),
+      type: attendanceType,
+      status: "Active",
+      colid,
+      user: text(req.body.user),
+      createdby: text(req.body.user)
+    });
+    res.json({ success: true, data, otps });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getStudentOtpSessions = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    const regno = text(req.query.regno);
+    const email = text(req.query.email || req.query.user);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!regno && !email) return res.status(400).json({ success: false, message: "student regno or email is required" });
+    const student = await User.findOne({
+      colid,
+      role: /^Student$/i,
+      ...(regno ? { regno } : { email: regexText(email) })
+    }).lean();
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+    const query = {
+      colid,
+      status: "Active",
+      academicyear: text(student.academicyear),
+      programcode: text(student.programcode),
+      semester: text(student.semester)
+    };
+    if (text(student.Major)) query.major = text(student.Major);
+    const data = await NepLmsAttendanceOtp.find(query).sort({ createdAt: -1 }).select("-otps").lean();
+    res.json({ success: true, student, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.submitStudentOtps = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const sessionid = text(req.body.sessionid);
+    const submittedOtps = Array.isArray(req.body.otps) ? req.body.otps.map(text) : [];
+    const regno = text(req.body.regno);
+    const email = text(req.body.email || req.body.user);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!sessionid) return res.status(400).json({ success: false, message: "OTP session is required" });
+    if (submittedOtps.length !== 6 || submittedOtps.some((otp) => !/^\d{6}$/.test(otp))) {
+      return res.status(400).json({ success: false, message: "Enter all six 6 digit OTPs" });
+    }
+    const session = await NepLmsAttendanceOtp.findOne({ _id: sessionid, colid, status: "Active" }).lean();
+    if (!session) return res.status(404).json({ success: false, message: "Active OTP session not found" });
+    const matches = session.otps.every((otp, index) => text(otp) === submittedOtps[index]);
+    if (!matches) return res.status(400).json({ success: false, message: "OTP values do not match" });
+    const student = await User.findOne({
+      colid,
+      role: /^Student$/i,
+      ...(regno ? { regno } : { email: regexText(email) })
+    }).lean();
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+    if (
+      text(student.academicyear) !== text(session.academicyear)
+      || text(student.programcode) !== text(session.programcode)
+      || text(student.semester) !== text(session.semester)
+      || (text(session.major) && text(student.Major) !== text(session.major))
+    ) {
+      return res.status(400).json({ success: false, message: "This OTP session is not for the selected student/class" });
+    }
+    const classInfo = {
+      _id: session.classid,
+      academicyear: session.academicyear,
+      program: session.program,
+      programcode: session.programcode,
+      semester: session.semester,
+      major: session.major,
+      faculty: session.faculty,
+      facultyemail: session.facultyemail,
+      course: session.course,
+      coursecode: session.coursecode,
+      classdate: session.classdate,
+      classtime: session.classtime
+    };
+    const payload = attendancePayloadFrom({
+      colid,
+      classInfo,
+      item: student,
+      attendanceType: text(session.type) || "Regular",
+      attendance: 1,
+      comments: "OTP attendance",
+      user: email || regno
+    });
+    const data = await NepLmsAttendance.findOneAndUpdate(
+      { colid, classid: session.classid, studentid: student._id, type: payload.type },
+      payload,
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    res.json({ success: true, message: "Attendance marked present", data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.changeAttendanceStatus = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const classInfo = req.body.classInfo || {};
+    const student = req.body.student || {};
+    const attendanceType = text(req.body.type) || "Regular";
+    const reason = text(req.body.reason);
+    const attendance = Number(req.body.attendance) === 0 ? 0 : 1;
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!classInfo._id && !classInfo.classid) return res.status(400).json({ success: false, message: "Class is required" });
+    if (!student.studentid && !student._id) return res.status(400).json({ success: false, message: "Student is required" });
+    if (!reason) return res.status(400).json({ success: false, message: "Reason is required when changing status" });
+    const payload = attendancePayloadFrom({
+      colid,
+      classInfo,
+      item: student,
+      attendanceType,
+      attendance,
+      comments: text(req.body.comments) || "Attendance status changed",
+      user: req.body.user,
+      changereason: reason
+    });
+    const data = await NepLmsAttendance.findOneAndUpdate(
+      { colid, classid: payload.classid, studentid: payload.studentid, type: attendanceType },
+      payload,
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

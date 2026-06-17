@@ -4646,6 +4646,7 @@ const neplmsstudentworkspacectlrds = require("./controllers/neplmsstudentworkspa
 const neplmsstudentdashboardctlrds = require("./controllers/neplmsstudentdashboardctlrds");
 const neplmsfacultydashboardctlrds = require("./controllers/neplmsfacultydashboardctlrds");
 const neplmsattendancectlrds = require("./controllers/neplmsattendancectlrds");
+const studentphotoattendancectlrds = require("./controllers/studentphotoattendancectlrds");
 const neplmsassessmentmarksctlrds = require("./controllers/neplmsassessmentmarksctlrds");
 const neplmsfinalmarksctlrds = require("./controllers/neplmsfinalmarksctlrds");
 const neplmsclassgroupctlrds = require("./controllers/neplmsclassgroupctlrds");
@@ -5015,11 +5016,19 @@ app.get("/api/v2/neplms/attendance/students", neplmsattendancectlrds.getStudents
 app.get("/api/v2/neplms/attendance/class-group-students", neplmsattendancectlrds.getClassGroupStudentsForAttendance);
 app.post("/api/v2/neplms/attendance", neplmsattendancectlrds.saveAttendance);
 app.get("/api/v2/neplms/attendance", neplmsattendancectlrds.getAttendance);
+app.post("/api/v2/neplms/attendance/otp/create", neplmsattendancectlrds.createAttendanceOtps);
+app.get("/api/v2/neplms/attendance/otp/student-sessions", neplmsattendancectlrds.getStudentOtpSessions);
+app.post("/api/v2/neplms/attendance/otp/submit", neplmsattendancectlrds.submitStudentOtps);
+app.post("/api/v2/neplms/attendance/change-status", neplmsattendancectlrds.changeAttendanceStatus);
+app.get("/api/v2/student-photo/students", studentphotoattendancectlrds.searchStudents);
+app.post("/api/v2/student-photo/upload", studentphotoattendancectlrds.uploadMiddleware, studentphotoattendancectlrds.uploadStudentPhoto);
+app.post("/api/v2/neplms/photo-attendance/analyze", studentphotoattendancectlrds.groupPhotosMiddleware, studentphotoattendancectlrds.analyzePhotoAttendance);
 app.get("/api/v2/neplms/attendance/studentwise-report", neplmsattendancectlrds.getStudentwiseAttendanceReport);
 app.get("/api/v2/neplms/attendance/my-summary", neplmsattendancectlrds.getMyStudentAttendanceSummary);
 app.get("/api/v2/neplms/attendance/student-coursewise-report", neplmsattendancectlrds.getStudentCoursewiseAttendanceReport);
 app.get("/api/v2/neplms/attendance/faculty-course-low-report", neplmsattendancectlrds.getFacultyCoursewiseLowAttendanceReport);
 app.get("/api/v2/neplms/class-groups/courses", neplmsclassgroupctlrds.getFacultyCourses);
+app.get("/api/v2/neplms/class-groups/users", neplmsclassgroupctlrds.getClassGroupUsers);
 app.get("/api/v2/neplms/class-groups/sections", neplmsclassgroupctlrds.getSectionsForCourse);
 app.get("/api/v2/neplms/class-groups/students", neplmsclassgroupctlrds.getStudentsForCourse);
 app.get("/api/v2/neplms/class-groups", neplmsclassgroupctlrds.getClassGroups);

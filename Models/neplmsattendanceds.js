@@ -21,6 +21,9 @@ const nepLmsAttendanceSchema = new mongoose.Schema({
   attendance: { type: Number, enum: [0, 1], default: 1 },
   type: { type: String, default: "Regular" },
   comments: { type: String },
+  changereason: { type: String },
+  changedby: { type: String },
+  changedat: { type: Date },
   colid: { type: Number, required: true },
   user: { type: String }
 }, { timestamps: true });
