@@ -114,6 +114,7 @@ const provisionalAdmissionLetterController = require('./controllers/provisionala
 const offerLetterController = require('./controllers/offerletterctlr');
 const emailConfigurationController = require('./controllers/emailconfigurationdsctlr');
 const aiConfigurationController = require('./controllers/aiconfigurationdsctlr');
+const ollamaConfigurationController = require('./controllers/ollamaconfigurationdsctlr');
 const transcriptController = require('./controllers/transcriptctlrds');
 const transcriptMeetingController = require('./controllers/transcriptmeetingctlrds');
 const userCustomFieldController = require('./controllers/usercustomfielddsctlr');
@@ -407,6 +408,10 @@ app.get('/api/v2/ai-configuration', aiConfigurationController.getAiConfiguration
 app.post('/api/v2/ai-configuration', aiConfigurationController.createAiConfiguration);
 app.post('/api/v2/ai-configuration-update', aiConfigurationController.updateAiConfiguration);
 app.post('/api/v2/ai-configuration-delete', aiConfigurationController.deleteAiConfiguration);
+app.get('/api/v2/ollama-configuration', ollamaConfigurationController.getOllamaConfigurations);
+app.post('/api/v2/ollama-configuration', ollamaConfigurationController.createOllamaConfiguration);
+app.post('/api/v2/ollama-configuration-update', ollamaConfigurationController.updateOllamaConfiguration);
+app.post('/api/v2/ollama-configuration-delete', ollamaConfigurationController.deleteOllamaConfiguration);
 app.get('/api/v2/student-email-message/options', studentEmailMessagingController.getStudentFilterOptions);
 app.post('/api/v2/student-email-message/search', studentEmailMessagingController.searchStudents);
 app.post('/api/v2/student-email-message/send', studentEmailMessagingController.sendMessage);

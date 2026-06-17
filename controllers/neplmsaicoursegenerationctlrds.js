@@ -3,6 +3,7 @@ const AWS = require("aws-sdk");
 const WorkloadAssignment = require("../Models/workloadassignmentds");
 const Syllabus = require("../Models/syllabusds");
 const AiConfiguration = require("../Models/aiconfigurationds");
+const OllamaConfiguration = require("../Models/ollamaconfigurationds");
 const Awsconfig = require("../Models/awsconfig");
 const NepLmsResource = require("../Models/neplmsresourceds");
 
@@ -92,6 +93,19 @@ const getAiConfig = async (colid, provider) => {
       type: providerRegex,
       active: /^yes$/i
     }).sort({ _id: -1 }).lean();
+};
+
+const getOllamaConfig = async (colid, configId) => {
+  const baseQuery = {
+    colid: Number(colid),
+    active: /^yes$/i
+  };
+  if (text(configId)) {
+    const selected = await OllamaConfiguration.findOne({ ...baseQuery, _id: configId }).lean();
+    if (selected) return selected;
+  }
+  return OllamaConfiguration.findOne({ ...baseQuery, default: /^yes$/i }).sort({ _id: -1 }).lean()
+    || OllamaConfiguration.findOne(baseQuery).sort({ _id: -1 }).lean();
 };
 
 const stripCodeFence = (content) => text(content)
@@ -189,10 +203,32 @@ const callClaude = async (apikey, prompt) => {
   return data.content?.map((part) => part.text || "").join("\n") || "";
 };
 
-const generateHtml = async (provider, apikey, prompt) => {
+const callOllama = async (config, prompt) => {
+  const server = text(config.serveraddress || "http://localhost:11434").replace(/\/+$/, "");
+  const model = text(config.modelname);
+  if (!server) throw new Error("Ollama server address is missing");
+  if (!model) throw new Error("Ollama model name is missing");
+
+  const response = await fetch(`${server}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      prompt,
+      stream: false,
+      options: { temperature: 0.4 }
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Ollama request failed at ${server}`);
+  return data.response || "";
+};
+
+const generateHtml = async ({ provider, apikey, ollamaConfig, prompt }) => {
   const normalized = text(provider).toLowerCase();
   if (normalized === "gemini") return callGemini(apikey, prompt);
   if (normalized === "claude") return callClaude(apikey, prompt);
+  if (normalized === "ollama") return callOllama(ollamaConfig, prompt);
   return callChatGpt(apikey, prompt);
 };
 
@@ -235,6 +271,7 @@ exports.getContext = async (req, res) => {
     const query = buildAssignedCourseQuery(req.query);
     const courses = await WorkloadAssignment.find(query).sort({ academicyear: 1, program: 1, semester: 1, course: 1 }).lean();
     const aiConfigs = await AiConfiguration.find({ colid, active: /^yes$/i }).sort({ type: 1 }).lean();
+    const ollamaConfigs = await OllamaConfiguration.find({ colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean();
 
     const syllabusQuery = { colid };
     courseFields.forEach((field) => {
@@ -247,7 +284,11 @@ exports.getContext = async (req, res) => {
       courses,
       modules,
       languages,
-      providers: uniq(aiConfigs.map((item) => item.type)).filter((item) => ["ChatGPT", "Gemini", "Claude"].includes(item)),
+      providers: [
+        ...uniq(aiConfigs.map((item) => item.type)).filter((item) => ["ChatGPT", "Gemini", "Claude"].includes(item)),
+        ...(ollamaConfigs.length ? ["Ollama"] : [])
+      ],
+      ollamaConfigs,
       options: {
         academicyears: uniq(courses.map((item) => item.academicyear)),
         programs: uniq(courses.map((item) => item.program)),
@@ -279,8 +320,15 @@ exports.generateCourseMaterial = async (req, res) => {
     const modules = await getSelectedModules(body);
     if (!modules.length) return res.status(400).json({ success: false, message: "Please select at least one syllabus module" });
 
-    const aiConfig = await getAiConfig(colid, body.provider);
-    if (!aiConfig?.apikey) return res.status(400).json({ success: false, message: `Active ${body.provider} AI configuration is missing` });
+    let aiConfig = null;
+    let ollamaConfig = null;
+    if (text(body.provider).toLowerCase() === "ollama") {
+      ollamaConfig = await getOllamaConfig(colid, body.ollamaConfigId);
+      if (!ollamaConfig) return res.status(400).json({ success: false, message: "Active Ollama configuration is missing" });
+    } else {
+      aiConfig = await getAiConfig(colid, body.provider);
+      if (!aiConfig?.apikey) return res.status(400).json({ success: false, message: `Active ${body.provider} AI configuration is missing` });
+    }
 
     const awsConfig = await getDefaultAwsConfig(colid);
     if (!awsConfig?.username || !awsConfig?.password || !awsConfig?.bucket || !awsConfig?.region) {
@@ -288,7 +336,12 @@ exports.generateCourseMaterial = async (req, res) => {
     }
 
     const prompt = buildPrompt({ body: { ...assigned, ...body }, modules });
-    const generated = await generateHtml(body.provider, aiConfig.apikey, prompt);
+    const generated = await generateHtml({
+      provider: body.provider,
+      apikey: aiConfig?.apikey,
+      ollamaConfig,
+      prompt
+    });
     const html = wrapHtml({ ...assigned, ...body }, modules, generated);
     const buffer = Buffer.from(html, "utf8");
     const cleanCourse = path.basename(text(assigned.coursecode || body.coursecode)).replace(/[^\w.\-() ]/g, "_");
@@ -325,7 +378,7 @@ exports.generateCourseMaterial = async (req, res) => {
       title: text(body.title) || `AI Course Material - ${assigned.course}`,
       module: modules.map((item) => item.module).join(", "),
       topic: `AI generated material in ${body.language}`,
-      description: `Generated using ${body.provider}. Includes practical applications, employability focus, and YouTube references.`,
+      description: `Generated using ${body.provider}${ollamaConfig?.name ? ` (${ollamaConfig.name} - ${ollamaConfig.modelname})` : ""}. Includes practical applications, employability focus, and YouTube references.`,
       filename: fileName,
       originalname: fileName,
       mimetype: "text/html",
