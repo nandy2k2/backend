@@ -16,6 +16,7 @@ const allowedFields = [
   "feegroup",
   "feeitem",
   "feecategory",
+  "feetype",
   "status",
   "paymode",
   "type",

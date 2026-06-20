@@ -95,6 +95,7 @@ exports.getFeeApplicationOptions = async (req, res) => {
       feeGroups,
       feeItems,
       feeCategories,
+      feeTypes,
       feeStatuses
     ] = await Promise.all([
       distinctSorted(User, "academicyear", studentQuery),
@@ -118,6 +119,7 @@ exports.getFeeApplicationOptions = async (req, res) => {
       distinctSorted(Fees, "feegroup", feeQuery),
       distinctSorted(Fees, "feeeitem", feeQuery),
       distinctSorted(Fees, "feecategory", feeQuery),
+      distinctSorted(Fees, "feetype", feeQuery),
       distinctSorted(Fees, "status", feeQuery)
     ]);
 
@@ -146,6 +148,7 @@ exports.getFeeApplicationOptions = async (req, res) => {
         feegroup: feeGroups,
         feeeitem: feeItems,
         feecategory: feeCategories,
+        feetype: feeTypes,
         status: feeStatuses
       }
     });
@@ -179,7 +182,7 @@ exports.searchFeeApplicationFees = async (req, res) => {
 
     const query = buildFeeQuery(colid, Array.isArray(req.body.filters) ? req.body.filters : []);
     const data = await Fees.find(query)
-      .select("program programcode regulation major minor IDC gender feegroup semester feeeitem academicyear feecategory feebook cashbook classdate amount colid status")
+      .select("program programcode regulation major minor IDC gender feegroup semester feeeitem academicyear feecategory feetype feebook cashbook classdate amount colid status")
       .sort({ academicyear: -1, programcode: 1, semester: 1, feegroup: 1, feeeitem: 1 })
       .limit(1000)
       .lean();
@@ -239,6 +242,7 @@ exports.applyFeesToStudents = async (req, res) => {
           paymode: "",
           paydetails: "",
           feecategory: fee.feecategory || student.category || "",
+          feetype: fee.feetype || "",
           semester: fee.semester || student.semester || "",
           cashbook: fee.cashbook || "",
           institution: student.institution || "",

@@ -16,7 +16,7 @@ exports.getClassGroupUsers = async (req, res) => {
   try {
     const colid = number(req.query.colid);
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
-    const query = { colid, role: { $not: /^Student$/i } };
+    const query = { colid, role: { $nin: [/^Student$/i, /^Alumni$/i] } };
     if (req.query.search) {
       const value = escRegex(req.query.search);
       query.$or = [

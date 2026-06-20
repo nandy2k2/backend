@@ -102,6 +102,20 @@ exports.deleteRegulationCourseMap = async (req, res) => {
   }
 };
 
+exports.bulkDeleteRegulationCourseMaps = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select records to delete" });
+    const query = { _id: { $in: ids } };
+    const colid = toNumber(req.body.colid);
+    if (colid !== undefined) query.colid = colid;
+    const result = await RegulationCourseMap.deleteMany(query);
+    res.json({ success: true, deleted: result.deletedCount || 0, message: "Selected records deleted" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.bulkCreateRegulationCourseMaps = async (req, res) => {
   try {
     const items = Array.isArray(req.body.items) ? req.body.items : [];

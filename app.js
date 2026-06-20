@@ -356,6 +356,7 @@ app.post('/api/v2/student-data-upload-bulk-delete', studentDataUploadController.
 app.post('/api/v2/student-data-upload-bulk', studentDataUploadController.bulkStudents);
 app.post('/api/v2/student-data-upload-bulk-subject-update', studentDataUploadController.bulkUpdateSubject);
 app.post('/api/v2/student-data-upload-selected-subject-update', studentDataUploadController.bulkUpdateSelectedSubjects);
+app.post('/api/v2/student-data-upload-ai-field', studentDataUploadController.generateFieldWithAi);
 app.post('/api/v2/student-data-upload-photo', studentDataUploadController.uploadPhotoMiddleware, studentDataUploadController.uploadPhoto);
 app.get('/api/v2/employee-database/meta', employeeDatabaseController.getMeta);
 app.get('/api/v2/employee-database-fields', employeeDatabaseController.getFields);
@@ -4741,12 +4742,14 @@ app.post("/api/v2/regulationsubject", regulationsubjectctlrds.createRegulationSu
 app.get("/api/v2/regulationsubject", regulationsubjectctlrds.getRegulationSubjects);
 app.post("/api/v2/regulationsubject/update", regulationsubjectctlrds.updateRegulationSubject);
 app.post("/api/v2/regulationsubject/delete", regulationsubjectctlrds.deleteRegulationSubject);
+app.post("/api/v2/regulationsubject/bulk-delete", regulationsubjectctlrds.bulkDeleteRegulationSubjects);
 app.post("/api/v2/regulationsubject/bulkupload", regulationsubjectctlrds.bulkCreateRegulationSubjects);
 app.get("/api/v2/regulationcoursemap/options", regulationcoursemapctlrds.getRegulationCourseMapOptions);
 app.post("/api/v2/regulationcoursemap", regulationcoursemapctlrds.createRegulationCourseMap);
 app.get("/api/v2/regulationcoursemap", regulationcoursemapctlrds.getRegulationCourseMaps);
 app.post("/api/v2/regulationcoursemap/update", regulationcoursemapctlrds.updateRegulationCourseMap);
 app.post("/api/v2/regulationcoursemap/delete", regulationcoursemapctlrds.deleteRegulationCourseMap);
+app.post("/api/v2/regulationcoursemap/bulk-delete", regulationcoursemapctlrds.bulkDeleteRegulationCourseMaps);
 app.post("/api/v2/regulationcoursemap/bulkupload", regulationcoursemapctlrds.bulkCreateRegulationCourseMaps);
 app.get("/api/v2/conductexam/exams", conductexamctlrds.getExams);
 app.post("/api/v2/conductexam/exams", conductexamctlrds.saveExam);
@@ -5395,6 +5398,7 @@ app.get("/api/v2/collegerepledgerreportds", collegerepotdsctlr.collegeStudentLed
 const ledgerstuddsctlr = require("./controllers/ledgerstuddsctlr");
 const studentfeeapplyctlrds = require("./controllers/studentfeeapplyctlrds");
 const feeapplicationctlrds = require("./controllers/feeapplicationctlrds");
+const studentledgercrudctlrds = require("./controllers/studentledgercrudctlrds");
 const studentledgerapprovalrolectlr = require("./controllers/studentledgerapprovalrolectlr");
 const studentledgerapprovalctlr = require("./controllers/studentledgerapprovalctlr");
 const studentledgeradjustctlr = require("./controllers/studentledgeradjustctlr");
@@ -5430,6 +5434,11 @@ app.get("/api/v2/feeapplication/options", feeapplicationctlrds.getFeeApplication
 app.post("/api/v2/feeapplication/students", feeapplicationctlrds.searchFeeApplicationStudents);
 app.post("/api/v2/feeapplication/fees", feeapplicationctlrds.searchFeeApplicationFees);
 app.post("/api/v2/feeapplication/apply", feeapplicationctlrds.applyFeesToStudents);
+app.get("/api/v2/studentledgercrud/options", studentledgercrudctlrds.getOptions);
+app.post("/api/v2/studentledgercrud/list", studentledgercrudctlrds.list);
+app.post("/api/v2/studentledgercrud/save", studentledgercrudctlrds.save);
+app.post("/api/v2/studentledgercrud/delete", studentledgercrudctlrds.delete);
+app.post("/api/v2/studentledgercrud/bulk", studentledgercrudctlrds.bulk);
 app.get("/studentledgerapprovalroles", studentledgerapprovalrolectlr.getStudentLedgerApprovalRoles);
 app.post("/studentledgerapprovalroles", studentledgerapprovalrolectlr.createStudentLedgerApprovalRole);
 app.post("/studentledgerapprovalroles-update", studentledgerapprovalrolectlr.updateStudentLedgerApprovalRole);
@@ -6654,6 +6663,8 @@ app.post('/indstock-delete/:id', indcontroller1.indDeleteStock);
 const budgetCtrl = require('./controllers/indbudgetcontroller');
 const indBudgetApprovalRoleCtrl = require('./controllers/indbudgetapprovalrolectlr');
 const indBudgetLogCtrl = require('./controllers/indbudgetlogcontroller');
+const newBudgetApprovalCtrl = require('./controllers/newbudgetapprovalctlrds');
+const purchaseNewCtrl = require('./controllers/purchasenewctlrds');
 
 // BUDGET ROUTES
 app.post('/indbudget', budgetCtrl.indCreateBudget);
@@ -6668,6 +6679,50 @@ app.get('/indbudgetapprovalroles', indBudgetApprovalRoleCtrl.getIndBudgetApprova
 app.post('/indbudgetapprovalroles', indBudgetApprovalRoleCtrl.createIndBudgetApprovalRole);
 app.post('/indbudgetapprovalroles-update', indBudgetApprovalRoleCtrl.updateIndBudgetApprovalRole);
 app.post('/indbudgetapprovalroles-delete', indBudgetApprovalRoleCtrl.deleteIndBudgetApprovalRole);
+
+app.get('/api/v2/newbudget/users', newBudgetApprovalCtrl.getUsers);
+app.get('/api/v2/newbudget/department-workflow', newBudgetApprovalCtrl.getDepartmentWorkflow);
+app.post('/api/v2/newbudget/department-workflow', newBudgetApprovalCtrl.saveDepartmentWorkflow);
+app.post('/api/v2/newbudget/department-workflow-delete', newBudgetApprovalCtrl.deleteDepartmentWorkflow);
+app.post('/api/v2/newbudget/department-workflow-bulk', newBudgetApprovalCtrl.bulkDepartmentWorkflow);
+app.get('/api/v2/newbudget/institution-workflow', newBudgetApprovalCtrl.getInstitutionWorkflow);
+app.post('/api/v2/newbudget/institution-workflow', newBudgetApprovalCtrl.saveInstitutionWorkflow);
+app.post('/api/v2/newbudget/institution-workflow-delete', newBudgetApprovalCtrl.deleteInstitutionWorkflow);
+app.post('/api/v2/newbudget/institution-workflow-bulk', newBudgetApprovalCtrl.bulkInstitutionWorkflow);
+app.get('/api/v2/newbudget/categories', newBudgetApprovalCtrl.getCategories);
+app.post('/api/v2/newbudget/categories', newBudgetApprovalCtrl.saveCategory);
+app.post('/api/v2/newbudget/categories-delete', newBudgetApprovalCtrl.deleteCategory);
+app.post('/api/v2/newbudget/categories-bulk', newBudgetApprovalCtrl.bulkCategories);
+app.get('/api/v2/newbudget/items', newBudgetApprovalCtrl.getBudgetItems);
+app.post('/api/v2/newbudget/items', newBudgetApprovalCtrl.saveBudgetItem);
+app.post('/api/v2/newbudget/items-delete', newBudgetApprovalCtrl.deleteBudgetItem);
+app.post('/api/v2/newbudget/items-submit', newBudgetApprovalCtrl.submitBudgetItems);
+app.get('/api/v2/newbudget/approval-queue', newBudgetApprovalCtrl.getApprovalQueue);
+app.post('/api/v2/newbudget/items-approve', newBudgetApprovalCtrl.approveBudgetItem);
+app.post('/api/v2/newbudget/items-reject', newBudgetApprovalCtrl.rejectBudgetItem);
+app.post('/api/v2/newbudget/items-institution-add', newBudgetApprovalCtrl.addInstitutionBudgetItem);
+app.get('/api/v2/newbudget/audit-logs', newBudgetApprovalCtrl.getAuditLogs);
+app.post('/api/v2/newbudget/blockchain-store', newBudgetApprovalCtrl.storeYearlyBudgetBlockchain);
+app.get('/api/v2/public/newbudget/blockchain-verify', newBudgetApprovalCtrl.verifyYearlyBudgetBlockchain);
+app.get('/api/v2/purchasenew/users', purchaseNewCtrl.getUsers);
+app.get('/api/v2/purchasenew/categories', purchaseNewCtrl.getCategories);
+app.get('/api/v2/purchasenew/budget-summary', purchaseNewCtrl.getBudgetSummary);
+app.get('/api/v2/purchasenew/department-workflow', purchaseNewCtrl.getDepartmentWorkflow);
+app.post('/api/v2/purchasenew/department-workflow', purchaseNewCtrl.saveDepartmentWorkflow);
+app.post('/api/v2/purchasenew/department-workflow-delete', purchaseNewCtrl.deleteDepartmentWorkflow);
+app.get('/api/v2/purchasenew/institution-workflow', purchaseNewCtrl.getInstitutionWorkflow);
+app.post('/api/v2/purchasenew/institution-workflow', purchaseNewCtrl.saveInstitutionWorkflow);
+app.post('/api/v2/purchasenew/institution-workflow-delete', purchaseNewCtrl.deleteInstitutionWorkflow);
+app.get('/api/v2/purchasenew/indents', purchaseNewCtrl.getIndents);
+app.post('/api/v2/purchasenew/indents', purchaseNewCtrl.saveIndent);
+app.post('/api/v2/purchasenew/indents-delete', purchaseNewCtrl.deleteIndent);
+app.post('/api/v2/purchasenew/indents-submit', purchaseNewCtrl.submitIndents);
+app.get('/api/v2/purchasenew/approval-queue', purchaseNewCtrl.getApprovalQueue);
+app.post('/api/v2/purchasenew/indents-approve', purchaseNewCtrl.approveIndent);
+app.post('/api/v2/purchasenew/indents-reject', purchaseNewCtrl.rejectIndent);
+app.get('/api/v2/purchasenew/indent-audit-logs', purchaseNewCtrl.getIndentAuditLogs);
+app.post('/api/v2/purchasenew/indent-blockchain-store', purchaseNewCtrl.storeIndentBlockchain);
+app.get('/api/v2/purchasenew/indent-blockchain-verify', purchaseNewCtrl.verifyIndentBlockchain);
 
 
 // const indentCtrl = require('./controllers/indentController');

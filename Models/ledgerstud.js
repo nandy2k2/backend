@@ -78,6 +78,9 @@ const ledgerstudschema = new mongoose.Schema({
     feecategory: {
         type: String
     },
+    feetype: {
+        type: String
+    },
     semester: {
         type: String
     },
