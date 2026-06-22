@@ -5,6 +5,7 @@ const User = require('../Models/user');
 const Awsconfig = require('../Models/awsconfig');
 const UserCustomField = require('../Models/usercustomfieldds');
 const AiConfiguration = require('../Models/aiconfigurationds');
+const OllamaConfiguration = require('../Models/ollamaconfigurationds');
 
 const fields = [
   'name',
@@ -43,7 +44,7 @@ const fields = [
 const clean = (value) => String(value ?? '').trim();
 const colidFilter = (colid) => ({ colid: Number(colid), role: 'Student' });
 const upload = multer({ storage: multer.memoryStorage() });
-const geminiModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+const geminiModels = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'];
 
 const encodeS3Key = (key) => String(key || '').split('/').map(encodeURIComponent).join('/');
 const s3Url = (bucket, region, key) => {
@@ -144,7 +145,25 @@ const getDefaultGeminiConfig = async (colid) => AiConfiguration.findOne({
   type: /^Gemini$/i,
   active: /^Yes$/i,
   default: /^Yes$/i
-}).lean();
+}).sort({ _id: -1 }).lean()
+  || AiConfiguration.findOne({
+    colid,
+    type: /^Gemini$/i,
+    active: /^Yes$/i
+  }).sort({ _id: -1 }).lean();
+
+const getOllamaConfig = async (colid, configId) => {
+  const baseQuery = {
+    colid: Number(colid),
+    active: /^Yes$/i
+  };
+  if (clean(configId)) {
+    const selected = await OllamaConfiguration.findOne({ ...baseQuery, _id: configId }).lean();
+    if (selected) return selected;
+  }
+  return OllamaConfiguration.findOne({ ...baseQuery, default: /^Yes$/i }).sort({ _id: -1 }).lean()
+    || OllamaConfiguration.findOne(baseQuery).sort({ _id: -1 }).lean();
+};
 
 const readGeminiText = (payload = {}) => (
   payload.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('\n').trim() || ''
@@ -161,9 +180,13 @@ const parseGeminiValue = (value) => {
   return raw;
 };
 
-const callGeminiValue = async (apikey, prompt) => {
+const callGeminiValue = async (apikey, prompt, selectedModel) => {
   let lastError = '';
-  for (const model of geminiModels) {
+  const preferredModel = clean(selectedModel);
+  const models = preferredModel
+    ? [preferredModel, ...geminiModels.filter((model) => model !== preferredModel)]
+    : geminiModels;
+  for (const model of models) {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apikey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -177,6 +200,28 @@ const callGeminiValue = async (apikey, prompt) => {
     lastError = data.error?.message || `Gemini failed for ${model}`;
   }
   throw new Error(lastError || 'Gemini request failed');
+};
+
+const callOllamaValue = async (config, prompt) => {
+  const server = clean(config.serveraddress || 'http://localhost:11434').replace(/\/+$/, '');
+  const model = clean(config.modelname);
+  if (!server) throw new Error('Ollama server address is missing');
+  if (!model) throw new Error('Ollama model name is missing');
+
+  const response = await fetch(`${server}/api/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      prompt,
+      stream: false,
+      format: 'json',
+      options: { temperature: 0.2 }
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Ollama request failed at ${server}`);
+  return parseGeminiValue(data.response || '');
 };
 
 exports.uploadPhotoMiddleware = upload.single('photo');
@@ -409,13 +454,11 @@ exports.generateFieldWithAi = async (req, res) => {
     const field = clean(req.body.field);
     const label = clean(req.body.label || field);
     const rule = clean(req.body.rule);
+    const provider = clean(req.body.provider || 'Gemini');
     const rowData = req.body.rowData && typeof req.body.rowData === 'object' ? req.body.rowData : {};
     if (!colid) return res.status(400).json({ msg: 'colid is required' });
     if (!field) return res.status(400).json({ msg: 'Field is required' });
     if (!rule) return res.status(400).json({ msg: 'Rule is required' });
-
-    const config = await getDefaultGeminiConfig(colid);
-    if (!config?.apikey) return res.status(400).json({ msg: 'Default active Gemini configuration is missing' });
 
     const prompt = [
       'You generate exactly one student data field value for an ERP upload form.',
@@ -426,7 +469,17 @@ exports.generateFieldWithAi = async (req, res) => {
       `Rule: ${rule}`,
       `Row data JSON: ${JSON.stringify(rowData)}`
     ].join('\n');
-    const value = await callGeminiValue(config.apikey, prompt);
+
+    let value = '';
+    if (provider.toLowerCase() === 'ollama') {
+      const ollamaConfig = await getOllamaConfig(colid, req.body.ollamaConfigId);
+      if (!ollamaConfig) return res.status(400).json({ msg: 'Active Ollama configuration is missing' });
+      value = await callOllamaValue(ollamaConfig, prompt);
+    } else {
+      const config = await getDefaultGeminiConfig(colid);
+      if (!config?.apikey) return res.status(400).json({ msg: 'Default active Gemini configuration is missing' });
+      value = await callGeminiValue(config.apikey, prompt, req.body.geminiModel);
+    }
     res.json({ success: true, field, value });
   } catch (err) {
     res.status(500).json({ msg: err.message });

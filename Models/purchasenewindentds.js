@@ -12,6 +12,8 @@ const purchaseNewIndentSchema = new mongoose.Schema({
   approximatetotalcost: { type: Number, default: 0 },
   status: { type: String, default: "Draft" },
   stage: { type: String, default: "Draft" },
+  procurementstatus: { type: String, default: "Pending RFP" },
+  rfpid: { type: String },
   currentlevel: { type: Number, default: 0 },
   submittedby: { type: String },
   submittedbyname: { type: String },
