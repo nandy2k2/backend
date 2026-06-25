@@ -4,6 +4,7 @@ const AWS = require("aws-sdk");
 const mongoose = require("mongoose");
 const DepartmentWorkflow = require("../Models/purchasenewdepartmentworkflowds");
 const InstitutionWorkflow = require("../Models/purchasenewinstitutionworkflowds");
+const StoreWorkflow = require("../Models/purchasenewstoreworkflowds");
 const PurchaseIndent = require("../Models/purchasenewindentds");
 const PurchaseIndentAudit = require("../Models/purchasenewindentauditds");
 const PurchaseApprovalWorkflow = require("../Models/purchasenewapprovalworkflowds");
@@ -16,6 +17,9 @@ const PurchaseNewRfpSubmission = require("../Models/purchasenewrfpsubmissionds")
 const PurchaseNewPurchaseOrder = require("../Models/purchasenewpurchaseorderds");
 const PurchaseNewDeliverySchedule = require("../Models/purchasenewdeliveryscheduleds");
 const PurchaseNewInvoice = require("../Models/purchasenewinvoiceds");
+const PurchaseNewStore = require("../Models/purchasenewstoreds");
+const PurchaseNewItemMaster = require("../Models/purchasenewitemmasterds");
+const PurchaseNewStoreUser = require("../Models/purchasenewstoreuserds");
 const BudgetCategory = require("../Models/newbudgetcategoryds");
 const BudgetItem = require("../Models/newbudgetitemds");
 const User = require("../Models/user");
@@ -112,6 +116,7 @@ const logAudit = async (action, item, req, olddata = null, newdata = null, comme
     colid: item.colid,
     indentid: item._id,
     department: item.department,
+    store: item.store,
     category: item.category,
     categorytype: item.categorytype,
     item: item.item,
@@ -301,7 +306,45 @@ const nextDepartmentState = async (item) => {
   await nextInstitutionState(item);
 };
 
+const nextStoreState = async (item) => {
+  const levels = await StoreWorkflow.find({
+    colid: item.colid,
+    active: "Yes",
+    store: item.store
+  }).lean();
+  levels.sort(byLevelAsc);
+  if (levels.length) {
+    item.stage = "Store";
+    item.currentlevel = num(levels[0].level, 1);
+    item.status = `Store Pending Level ${item.currentlevel}`;
+    return;
+  }
+  await nextDepartmentState(item);
+};
+
+const approveIndentState = (item) => {
+  item.stage = "Approved";
+  item.currentlevel = 0;
+  item.status = "Approved";
+  item.approvedat = new Date();
+};
+
 const progressItem = async (item) => {
+  if (item.stage === "Store") {
+    const levels = await StoreWorkflow.find({
+      colid: item.colid,
+      active: "Yes",
+      store: item.store
+    }).lean();
+    const next = levels.filter((level) => num(level.level, 0) > num(item.currentlevel, 0)).sort(byLevelAsc)[0];
+    if (next) {
+      item.currentlevel = num(next.level, item.currentlevel);
+      item.status = `Store Pending Level ${item.currentlevel}`;
+      return;
+    }
+    approveIndentState(item);
+    return;
+  }
   if (item.stage === "Department") {
     const levels = await DepartmentWorkflow.find({
       colid: item.colid,
@@ -326,10 +369,7 @@ const progressItem = async (item) => {
       return;
     }
   }
-  item.stage = "Approved";
-  item.currentlevel = 0;
-  item.status = "Approved";
-  item.approvedat = new Date();
+  approveIndentState(item);
 };
 
 const regressItem = async (item) => {
@@ -367,6 +407,19 @@ const regressItem = async (item) => {
       return;
     }
   }
+  if (item.stage === "Store") {
+    const levels = await StoreWorkflow.find({
+      colid: item.colid,
+      active: "Yes",
+      store: item.store
+    }).lean();
+    const previousStore = levels.filter((level) => num(level.level, 0) < num(item.currentlevel, 0)).sort(byLevelDesc)[0];
+    if (previousStore) {
+      item.currentlevel = num(previousStore.level, item.currentlevel);
+      item.status = `Store Pending Level ${item.currentlevel}`;
+      return;
+    }
+  }
   item.status = "Rejected";
   item.stage = "Rejected";
   item.currentlevel = 0;
@@ -376,6 +429,15 @@ const matchingWorkflowLevel = async (item, req) => {
   const role = clean(req.body.role || req.query.role);
   const useremail = clean(req.body.useremail || req.query.useremail || req.body.user || req.query.user);
   if (!role) return null;
+  if (item.stage === "Store") {
+    const levels = await StoreWorkflow.find({
+      colid: item.colid,
+      active: "Yes",
+      approverrole: role,
+      store: item.store
+    }).lean();
+    return levels.find((level) => num(level.level, 0) === num(item.currentlevel, 0) && approverMatches(level, useremail)) || null;
+  }
   if (item.stage === "Department") {
     const levels = await DepartmentWorkflow.find({
       colid: item.colid,
@@ -395,7 +457,7 @@ const matchingWorkflowLevel = async (item, req) => {
 const indentFilter = (query = {}) => {
   const filter = {};
   if (query.colid) filter.colid = num(query.colid);
-  ["department", "category", "categorytype", "item", "status", "stage", "submittedby"].forEach((field) => {
+  ["department", "store", "category", "categorytype", "item", "status", "stage", "submittedby"].forEach((field) => {
     if (query[field]) filter[field] = query[field];
   });
   return filter;
@@ -404,7 +466,7 @@ const indentFilter = (query = {}) => {
 const auditFilter = (query = {}) => {
   const filter = {};
   if (query.colid) filter.colid = num(query.colid);
-  ["department", "category", "categorytype", "item", "action", "status", "stage", "useremail"].forEach((field) => {
+  ["department", "store", "category", "categorytype", "item", "action", "status", "stage", "useremail"].forEach((field) => {
     if (query[field]) filter[field] = query[field];
   });
   return filter;
@@ -469,6 +531,208 @@ exports.getCategories = async (req, res) => {
     }
     const data = await BudgetCategory.find({ colid, active: "Yes" }).sort({ category: 1, type: 1 }).lean();
     res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+const storePayload = (body = {}) => ({
+  colid: num(body.colid),
+  store: clean(body.store || body.storename),
+  description: clean(body.description || body.storedescription),
+  status: clean(body.status) || "Active",
+  user: clean(body.user)
+});
+
+const itemMasterPayload = (body = {}) => ({
+  colid: num(body.colid),
+  store: clean(body.store || body.storename),
+  storedescription: clean(body.storedescription),
+  category: clean(body.category),
+  categorytype: clean(body.categorytype || body.type),
+  item: clean(body.item || body.itemname),
+  description: clean(body.description || body.itemdescription),
+  approximateprice: num(body.approximateprice || body.approxprice || body.price, 0),
+  unit: clean(body.unit),
+  dimension: clean(body.dimension),
+  status: clean(body.status) || "Active",
+  user: clean(body.user)
+});
+
+exports.getStores = async (req, res) => {
+  try {
+    const filter = {};
+    if (req.query.colid) filter.colid = num(req.query.colid);
+    ["store", "status"].forEach((field) => {
+      if (req.query[field]) filter[field] = req.query[field];
+    });
+    const data = await PurchaseNewStore.find(filter).sort({ store: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.saveStore = async (req, res) => {
+  try {
+    const payload = storePayload(req.body);
+    if (!payload.colid || !payload.store) return res.status(400).json({ success: false, message: "Store is required" });
+    const data = req.body.id
+      ? await PurchaseNewStore.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true, runValidators: true })
+      : await PurchaseNewStore.create(payload);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.deleteStore = async (req, res) => {
+  try {
+    const used = await PurchaseNewItemMaster.countDocuments({ colid: num(req.body.colid), store: clean(req.body.store) });
+    if (used) return res.status(400).json({ success: false, message: "Store is used in item master" });
+    await PurchaseNewStore.findOneAndDelete({ _id: req.body.id, colid: num(req.body.colid) });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.bulkStores = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    const docs = rows.map((row) => storePayload({ ...row, colid: req.body.colid, user: req.body.user })).filter((row) => row.colid && row.store);
+    if (!docs.length) return res.status(400).json({ success: false, message: "No valid store rows found" });
+    const data = await PurchaseNewStore.insertMany(docs, { ordered: false });
+    res.json({ success: true, inserted: data.length });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.getItemMasters = async (req, res) => {
+  try {
+    const filter = {};
+    if (req.query.colid) filter.colid = num(req.query.colid);
+    ["store", "category", "categorytype", "item", "status"].forEach((field) => {
+      if (req.query[field]) filter[field] = req.query[field];
+    });
+    const data = await PurchaseNewItemMaster.find(filter).sort({ store: 1, category: 1, item: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.saveItemMaster = async (req, res) => {
+  try {
+    const payload = itemMasterPayload(req.body);
+    if (!payload.colid || !payload.store || !payload.category || !payload.item) {
+      return res.status(400).json({ success: false, message: "Store, category and item are required" });
+    }
+    const data = req.body.id
+      ? await PurchaseNewItemMaster.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true, runValidators: true })
+      : await PurchaseNewItemMaster.create(payload);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.deleteItemMaster = async (req, res) => {
+  try {
+    await PurchaseNewItemMaster.findOneAndDelete({ _id: req.body.id, colid: num(req.body.colid) });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.bulkItemMasters = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    const docs = rows.map((row) => itemMasterPayload({ ...row, colid: req.body.colid, user: req.body.user })).filter((row) => row.colid && row.store && row.category && row.item);
+    if (!docs.length) return res.status(400).json({ success: false, message: "No valid item rows found" });
+    const data = await PurchaseNewItemMaster.insertMany(docs, { ordered: false });
+    res.json({ success: true, inserted: data.length });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+const storeUserPayload = (body = {}) => ({
+  colid: num(body.colid),
+  store: clean(body.store),
+  storedescription: clean(body.storedescription),
+  username: clean(body.username || body.name),
+  useremail: clean(body.useremail || body.email),
+  role: clean(body.role),
+  status: clean(body.status) || "Active",
+  user: clean(body.user)
+});
+
+exports.getStoreUsers = async (req, res) => {
+  try {
+    const filter = {};
+    if (req.query.colid) filter.colid = num(req.query.colid);
+    ["store", "useremail", "role", "status"].forEach((field) => {
+      if (req.query[field]) filter[field] = req.query[field];
+    });
+    const data = await PurchaseNewStoreUser.find(filter).sort({ store: 1, username: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.saveStoreUser = async (req, res) => {
+  try {
+    const payload = storeUserPayload(req.body);
+    if (!payload.colid || !payload.store || !payload.useremail) {
+      return res.status(400).json({ success: false, message: "Store and user are required" });
+    }
+    const data = req.body.id
+      ? await PurchaseNewStoreUser.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true, runValidators: true })
+      : await PurchaseNewStoreUser.create(payload);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.deleteStoreUser = async (req, res) => {
+  try {
+    await PurchaseNewStoreUser.findOneAndDelete({ _id: req.body.id, colid: num(req.body.colid) });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.getAssignedStoreIndents = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const useremail = clean(req.query.useremail || req.query.user);
+    const store = clean(req.query.store);
+    if (!colid || !useremail) return res.status(400).json({ success: false, message: "colid and user are required" });
+    const assignments = await PurchaseNewStoreUser.find({ colid, useremail, status: "Active" }).sort({ store: 1 }).lean();
+    const assignedStores = [...new Set(assignments.map((item) => item.store).filter(Boolean))];
+    if (!store) return res.json({ success: true, stores: assignments, data: [] });
+    if (!assignedStores.includes(store)) return res.status(403).json({ success: false, message: "Store is not assigned to this user" });
+    const filter = { colid, store };
+    if (req.query.fromdate || req.query.todate) {
+      filter.createdAt = {};
+      if (req.query.fromdate) filter.createdAt.$gte = new Date(req.query.fromdate);
+      if (req.query.todate) {
+        const toDate = new Date(req.query.todate);
+        toDate.setHours(23, 59, 59, 999);
+        filter.createdAt.$lte = toDate;
+      }
+    }
+    ["department", "category", "categorytype", "item", "submittedby", "stage", "status"].forEach((field) => {
+      if (req.query[field]) filter[field] = new RegExp(clean(req.query[field]), "i");
+    });
+    const data = await PurchaseIndent.find(filter).sort({ createdAt: -1 }).lean();
+    res.json({ success: true, stores: assignments, data });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -597,6 +861,72 @@ exports.deleteInstitutionWorkflow = async (req, res) => {
   }
 };
 
+exports.getStoreWorkflow = async (req, res) => {
+  try {
+    const filter = { colid: num(req.query.colid) };
+    if (req.query.store) filter.store = clean(req.query.store);
+    const data = await StoreWorkflow.find(filter).sort({ store: 1, level: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.saveStoreWorkflow = async (req, res) => {
+  try {
+    const payload = {
+      colid: num(req.body.colid),
+      store: clean(req.body.store),
+      level: num(req.body.level, 1),
+      approverrole: clean(req.body.approverrole),
+      approvername: clean(req.body.approvername),
+      approveremail: clean(req.body.approveremail),
+      active: clean(req.body.active) || "Yes",
+      remarks: clean(req.body.remarks),
+      user: clean(req.body.user)
+    };
+    if (!payload.colid || !payload.store || !payload.approverrole) {
+      return res.status(400).json({ success: false, message: "Store, level and approver role are required" });
+    }
+    const data = req.body.id
+      ? await StoreWorkflow.findByIdAndUpdate(req.body.id, payload, { new: true, runValidators: true })
+      : await StoreWorkflow.create(payload);
+    await PurchaseIndentAudit.create({
+      colid: payload.colid,
+      action: req.body.id ? "Update Store Workflow" : "Create Store Workflow",
+      username: req.body.username || req.body.user || "",
+      useremail: req.body.user || "",
+      role: req.body.role || "",
+      department: req.body.department || "",
+      store: payload.store,
+      newdata: data
+    });
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.deleteStoreWorkflow = async (req, res) => {
+  try {
+    const data = await StoreWorkflow.findByIdAndDelete(req.body.id);
+    if (data) {
+      await PurchaseIndentAudit.create({
+        colid: data.colid,
+        action: "Delete Store Workflow",
+        username: req.body.username || req.body.user || "",
+        useremail: req.body.user || "",
+        role: req.body.role || "",
+        store: data.store,
+        olddata: data
+      });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
 exports.getIndents = async (req, res) => {
   try {
     const data = await PurchaseIndent.find(indentFilter(req.query)).sort({ createdAt: -1 }).lean();
@@ -609,15 +939,18 @@ exports.getIndents = async (req, res) => {
 exports.saveIndent = async (req, res) => {
   try {
     const quantity = num(req.body.quantity, 0);
-    const approximatevalue = num(req.body.approximatevalue, 0);
+    const approximatevalue = num(req.body.approximatevalue || req.body.approxprice, 0);
     const payload = {
       colid: num(req.body.colid),
       department: clean(req.body.department),
+      store: clean(req.body.store),
+      storedescription: clean(req.body.storedescription),
       category: clean(req.body.category),
       categorytype: clean(req.body.categorytype),
       item: clean(req.body.item),
       description: clean(req.body.description),
       quantity,
+      approxprice: approximatevalue,
       approximatevalue,
       approximatetotalcost: num(req.body.approximatetotalcost, quantity * approximatevalue),
       submittedby: clean(req.body.useremail || req.body.user),
@@ -685,6 +1018,12 @@ exports.getApprovalQueue = async (req, res) => {
     const department = clean(req.query.department);
     const stage = clean(req.query.stage);
     const or = [];
+    if (!stage || stage === "Store") {
+      const levels = await StoreWorkflow.find({ colid, active: "Yes", approverrole: role }).lean();
+      levels.filter((level) => approverMatches(level, useremail)).forEach((level) => {
+        or.push({ stage: "Store", currentlevel: num(level.level, 0), store: level.store });
+      });
+    }
     if (!stage || stage === "Department") {
       const levels = await DepartmentWorkflow.find({ colid, active: "Yes", approverrole: role, department: { $in: [department, "All"] } }).lean();
       levels.filter((level) => approverMatches(level, useremail)).forEach((level) => {
@@ -2069,13 +2408,48 @@ exports.verifyDeliveryNoteBlockchain = async (req, res) => {
 exports.getInvoices = async (req, res) => {
   try {
     const filter = { colid: num(req.query.colid) };
-    ["invoiceid", "invoiceno", "poid", "vendorusername", "vendorname", "status"].forEach((field) => {
+    ["invoiceid", "invoiceno", "poid", "vendorusername", "vendorname", "status", "paymentstatus", "paymentmode", "bankaccount", "ifsc", "beneficiary", "paymentrefno"].forEach((field) => {
       if (req.query[field]) filter[field] = new RegExp(clean(req.query[field]), "i");
     });
     if (req.query.po) filter.po = req.query.po;
     if (req.query.vendorusernameExact) filter.vendorusername = clean(req.query.vendorusernameExact);
+    const dateField = clean(req.query.datefield || "invoicedate");
+    if (["invoicedate", "paymentdate", "approvedat", "createdAt"].includes(dateField) && (req.query.fromdate || req.query.todate)) {
+      filter[dateField] = {};
+      if (req.query.fromdate) filter[dateField].$gte = new Date(req.query.fromdate);
+      if (req.query.todate) {
+        const toDate = new Date(req.query.todate);
+        toDate.setHours(23, 59, 59, 999);
+        filter[dateField].$lte = toDate;
+      }
+    }
     const data = await PurchaseNewInvoice.find(filter).sort({ createdAt: -1 }).lean();
     res.json({ success: true, data });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.recordInvoicePayment = async (req, res) => {
+  try {
+    const invoice = await PurchaseNewInvoice.findOne({ _id: clean(req.body.id), colid: num(req.body.colid) });
+    if (!invoice) return res.status(404).json({ success: false, message: "Invoice not found" });
+    if (invoice.status !== "Approved" && invoice.status !== "Paid") {
+      return res.status(400).json({ success: false, message: "Only approved invoices can be paid" });
+    }
+    invoice.paymentmode = clean(req.body.paymentmode);
+    invoice.paidamount = num(req.body.paidamount || req.body.amount, 0);
+    invoice.paymentdate = req.body.paymentdate ? new Date(req.body.paymentdate) : new Date();
+    invoice.bankaccount = clean(req.body.bankaccount);
+    invoice.ifsc = clean(req.body.ifsc);
+    invoice.beneficiary = clean(req.body.beneficiary);
+    invoice.paymentrefno = clean(req.body.paymentrefno || req.body.refnumber);
+    invoice.paymentremarks = clean(req.body.paymentremarks || req.body.remarks);
+    invoice.paymentstatus = "Paid";
+    invoice.status = "Paid";
+    addRfpHistory(invoice, "Record Invoice Payment", req, `Paid ${invoice.paidamount} by ${invoice.paymentmode || "payment"}`);
+    await invoice.save();
+    res.json({ success: true, data: invoice, message: "Invoice payment recorded" });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }

@@ -4,6 +4,7 @@ const purchaseNewIndentAuditSchema = new mongoose.Schema({
   colid: { type: Number, required: true, index: true },
   indentid: { type: mongoose.Schema.Types.ObjectId, ref: "purchasenewindentds" },
   department: { type: String },
+  store: { type: String },
   category: { type: String },
   categorytype: { type: String },
   item: { type: String },

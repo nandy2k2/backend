@@ -24,6 +24,15 @@ const purchaseNewInvoiceSchema = new mongoose.Schema({
   grandtotal: { type: Number, default: 0 },
   paymode: { type: String, trim: true, default: "" },
   bankdetails: { type: String, trim: true, default: "" },
+  paymentmode: { type: String, trim: true, default: "" },
+  paidamount: { type: Number, default: 0 },
+  paymentdate: { type: Date },
+  bankaccount: { type: String, trim: true, default: "" },
+  ifsc: { type: String, trim: true, default: "" },
+  beneficiary: { type: String, trim: true, default: "" },
+  paymentrefno: { type: String, trim: true, default: "" },
+  paymentstatus: { type: String, trim: true, default: "" },
+  paymentremarks: { type: String, trim: true, default: "" },
   remarks: { type: String, trim: true, default: "" },
   documents: [{
     documenttype: String,
@@ -53,5 +62,6 @@ const purchaseNewInvoiceSchema = new mongoose.Schema({
 
 purchaseNewInvoiceSchema.index({ colid: 1, status: 1, stage: 1, currentlevel: 1 });
 purchaseNewInvoiceSchema.index({ colid: 1, po: 1, vendorusername: 1 });
+purchaseNewInvoiceSchema.index({ colid: 1, paymentstatus: 1, invoicedate: 1 });
 
 module.exports = mongoose.model("purchasenewinvoiceds", purchaseNewInvoiceSchema);
