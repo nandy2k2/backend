@@ -553,6 +553,7 @@ const itemMasterPayload = (body = {}) => ({
   item: clean(body.item || body.itemname),
   description: clean(body.description || body.itemdescription),
   approximateprice: num(body.approximateprice || body.approxprice || body.price, 0),
+  quantityavailable: num(body.quantityavailable || body.quantityAvailable || body["Quantity Available"], 0),
   unit: clean(body.unit),
   dimension: clean(body.dimension),
   status: clean(body.status) || "Active",
@@ -2435,8 +2436,14 @@ exports.recordInvoicePayment = async (req, res) => {
     const invoice = await PurchaseNewInvoice.findOne({ _id: clean(req.body.id), colid: num(req.body.colid) });
     if (!invoice) return res.status(404).json({ success: false, message: "Invoice not found" });
     if (invoice.status !== "Approved" && invoice.status !== "Paid") {
-      return res.status(400).json({ success: false, message: "Only approved invoices can be paid" });
+      return res.status(400).json({ success: false, message: "Only approved invoices can be sent for payment voucher approval" });
     }
+    if (invoice.paymentvoucherstatus && invoice.paymentvoucherstatus !== "Rejected" && invoice.paymentstatus !== "Paid") {
+      return res.status(400).json({ success: false, message: "A payment voucher is already pending for this invoice" });
+    }
+    const count = await PurchaseNewInvoice.countDocuments({ colid: invoice.colid, paymentvoucherid: { $ne: "" } });
+    invoice.paymentvoucherid = clean(req.body.paymentvoucherid) || invoice.paymentvoucherid || `PNPV-${invoice.colid}-${String(count + 1).padStart(5, "0")}`;
+    invoice.paymentvoucherdate = req.body.paymentvoucherdate ? new Date(req.body.paymentvoucherdate) : new Date();
     invoice.paymentmode = clean(req.body.paymentmode);
     invoice.paidamount = num(req.body.paidamount || req.body.amount, 0);
     invoice.paymentdate = req.body.paymentdate ? new Date(req.body.paymentdate) : new Date();
@@ -2445,11 +2452,18 @@ exports.recordInvoicePayment = async (req, res) => {
     invoice.beneficiary = clean(req.body.beneficiary);
     invoice.paymentrefno = clean(req.body.paymentrefno || req.body.refnumber);
     invoice.paymentremarks = clean(req.body.paymentremarks || req.body.remarks);
-    invoice.paymentstatus = "Paid";
-    invoice.status = "Paid";
-    addRfpHistory(invoice, "Record Invoice Payment", req, `Paid ${invoice.paidamount} by ${invoice.paymentmode || "payment"}`);
+    invoice.paymentstatus = "Voucher Pending";
+    invoice.paymentvoucherstatus = "Pending";
+    await firstGenericState(invoice, "FinancePayment");
+    if (invoice.stage === "Approved") {
+      invoice.paymentvoucherstatus = "Approved";
+      invoice.paymentstatus = "Paid";
+      invoice.status = "Paid";
+      invoice.approvedat = new Date();
+    }
+    addRfpHistory(invoice, "Create Payment Voucher", req, `Payment voucher ${invoice.paymentvoucherid} created for ${invoice.paidamount} by ${invoice.paymentmode || "payment"}`);
     await invoice.save();
-    res.json({ success: true, data: invoice, message: "Invoice payment recorded" });
+    res.json({ success: true, data: invoice, message: "Payment voucher created and sent for finance approval" });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -2552,8 +2566,16 @@ exports.approveInvoice = async (req, res) => {
     if (!invoice) return res.status(404).json({ success: false, message: "Invoice not found" });
     const allowed = await matchingGenericLevel(invoice, req, "FinancePayment");
     if (!allowed) return res.status(403).json({ success: false, message: "You are not allowed to approve this level" });
-    addRfpHistory(invoice, "Approve Invoice", req, clean(req.body.comments));
+    const isPaymentVoucher = invoice.paymentvoucherstatus === "Pending" || invoice.paymentstatus === "Voucher Pending";
+    addRfpHistory(invoice, isPaymentVoucher ? "Approve Payment Voucher" : "Approve Invoice", req, clean(req.body.comments));
     await progressGeneric(invoice, "FinancePayment");
+    if (isPaymentVoucher && invoice.stage === "Approved") {
+      invoice.paymentvoucherstatus = "Approved";
+      invoice.paymentstatus = "Paid";
+      invoice.status = "Paid";
+      invoice.approvedat = new Date();
+      addRfpHistory(invoice, "Payment Completed", req, `Payment voucher ${invoice.paymentvoucherid || ""} finally approved`);
+    }
     await invoice.save();
     res.json({ success: true, data: invoice });
   } catch (err) {
@@ -2567,10 +2589,54 @@ exports.rejectInvoice = async (req, res) => {
     if (!invoice) return res.status(404).json({ success: false, message: "Invoice not found" });
     const allowed = await matchingGenericLevel(invoice, req, "FinancePayment");
     if (!allowed) return res.status(403).json({ success: false, message: "You are not allowed to reject this level" });
-    addRfpHistory(invoice, "Reject Invoice", req, clean(req.body.comments));
+    const isPaymentVoucher = invoice.paymentvoucherstatus === "Pending" || invoice.paymentstatus === "Voucher Pending";
+    addRfpHistory(invoice, isPaymentVoucher ? "Reject Payment Voucher" : "Reject Invoice", req, clean(req.body.comments));
     await regressGeneric(invoice, "FinancePayment");
+    if (isPaymentVoucher && invoice.stage === "Rejected") {
+      invoice.paymentvoucherstatus = "Rejected";
+      invoice.paymentstatus = "Voucher Rejected";
+      invoice.status = "Approved";
+      invoice.stage = "Approved";
+      invoice.currentlevel = 0;
+    }
     await invoice.save();
     res.json({ success: true, data: invoice });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.getInvoiceApprovalContext = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const invoice = await PurchaseNewInvoice.findOne({ _id: clean(req.query.id), colid }).lean();
+    if (!invoice) return res.status(404).json({ success: false, message: "Invoice not found" });
+    const po = invoice.po ? await PurchaseNewPurchaseOrder.findOne({ _id: invoice.po, colid }).lean() : null;
+    const [rfp, submission, deliverySchedules] = await Promise.all([
+      po?.rfp ? PurchaseRfp.findOne({ _id: po.rfp, colid }).lean() : Promise.resolve(null),
+      po?.submission ? PurchaseNewRfpSubmission.findOne({ _id: po.submission, colid }).lean() : Promise.resolve(null),
+      po?._id ? PurchaseNewDeliverySchedule.find({ colid, po: po._id }).sort({ deliverydatetime: 1 }).lean() : Promise.resolve([])
+    ]);
+    let indents = [];
+    if (rfp?.indentids?.length) {
+      indents = await PurchaseIndent.find({ colid, _id: { $in: rfp.indentids } }).sort({ createdAt: 1 }).lean();
+    } else if (rfp?.items?.length) {
+      const ids = rfp.items.map((item) => item.indentid).filter(Boolean);
+      if (ids.length) indents = await PurchaseIndent.find({ colid, _id: { $in: ids } }).sort({ createdAt: 1 }).lean();
+    }
+    res.json({
+      success: true,
+      data: {
+        invoice,
+        po,
+        rfp,
+        indents,
+        submission,
+        deliverySchedules,
+        goodsReceiptNotes: deliverySchedules.filter((item) => num(item.acceptedquantity, 0) > 0 || item.grnhash),
+        goodsReturnNotes: deliverySchedules.filter((item) => num(item.returnedquantity, 0) > 0 || item.returnhash)
+      }
+    });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }

@@ -9,6 +9,7 @@ const purchaseNewItemMasterSchema = new mongoose.Schema({
   item: { type: String, required: true, trim: true },
   description: { type: String, trim: true },
   approximateprice: { type: Number, default: 0 },
+  quantityavailable: { type: Number, default: 0 },
   unit: { type: String, trim: true },
   dimension: { type: String, trim: true },
   status: { type: String, trim: true, default: "Active" },

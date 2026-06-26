@@ -85,6 +85,20 @@ exports.deleteField = async (req, res) => {
   }
 };
 
+exports.bulkDelete = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!colid) return res.status(400).json({ msg: 'College id is required' });
+    if (!ids.length) return res.status(400).json({ msg: 'No custom fields selected' });
+
+    const result = await UserCustomField.deleteMany({ _id: { $in: ids }, colid });
+    res.json({ msg: 'Deleted', deleted: result.deletedCount || 0 });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
 exports.bulkCreate = async (req, res) => {
   try {
     const items = Array.isArray(req.body.items) ? req.body.items : [];
