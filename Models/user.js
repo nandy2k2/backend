@@ -26,6 +26,9 @@ const userschema = new mongoose.Schema({
         type: String,
         required: [true,'Please enter regno']
     },
+    scholarnumber: {
+        type: String
+    },
     program: {
         type: String
     },

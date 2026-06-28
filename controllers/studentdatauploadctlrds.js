@@ -10,6 +10,7 @@ const OllamaConfiguration = require('../Models/ollamaconfigurationds');
 const fields = [
   'name',
   'regno',
+  'scholarnumber',
   'email',
   'phone',
   'program',
@@ -45,6 +46,31 @@ const clean = (value) => String(value ?? '').trim();
 const colidFilter = (colid) => ({ colid: Number(colid), role: 'Student' });
 const upload = multer({ storage: multer.memoryStorage() });
 const geminiModels = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+
+const scholarYearCode = (academicYear) => {
+  const value = clean(academicYear);
+  const match = value.match(/^(\d{4})\D*(\d{2})$/);
+  if (match) return `${match[1].slice(-2)}${match[2]}`;
+  const digits = value.replace(/\D/g, '');
+  if (digits.length >= 4) return digits.slice(0, 4);
+  return digits.padEnd(4, '0') || '0000';
+};
+
+const scholarPrefix = (payload) => `${scholarYearCode(payload.academicyear)}${clean(payload.programcode).replace(/\s+/g, '') || 'NA'}`;
+
+const addDefaultScholarNumber = async (payload, excludeId = '') => {
+  if (clean(payload.scholarnumber)) return payload;
+  const prefix = scholarPrefix(payload);
+  const query = {
+    colid: Number(payload.colid),
+    role: 'Student',
+    scholarnumber: new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\d{4}$`)
+  };
+  if (excludeId) query._id = { $ne: excludeId };
+  const count = await User.countDocuments(query);
+  payload.scholarnumber = `${prefix}${String(count + 1).padStart(4, '0')}`;
+  return payload;
+};
 
 const encodeS3Key = (key) => String(key || '').split('/').map(encodeURIComponent).join('/');
 const s3Url = (bucket, region, key) => {
@@ -82,6 +108,7 @@ const buildPayload = (body = {}) => {
   return {
     name: clean(body.name) || 'NA',
     regno: clean(body.regno) || 'NA',
+    scholarnumber: clean(body.scholarnumber),
     email: clean(body.email),
     phone: clean(body.phone) || 'NA',
     program: clean(body.program) || 'NA',
@@ -294,6 +321,7 @@ exports.createStudent = async (req, res) => {
     const payload = buildPayload(req.body);
     if (!payload.colid) return res.status(400).json({ msg: 'colid is required' });
     if (!payload.email) return res.status(400).json({ msg: 'Email is required' });
+    await addDefaultScholarNumber(payload);
     const data = await User.create(payload);
     res.json(serialize(data));
   } catch (err) {
@@ -311,6 +339,7 @@ exports.updateStudent = async (req, res) => {
 
     const duplicate = await User.findOne({ _id: { $ne: req.body.id }, email: payload.email });
     if (duplicate) return res.status(400).json({ msg: 'Duplicate email is not allowed' });
+    await addDefaultScholarNumber(payload, req.body.id);
 
     const data = await User.findOneAndUpdate(
       { _id: req.body.id, ...colidFilter(payload.colid) },
@@ -373,6 +402,7 @@ exports.bulkStudents = async (req, res) => {
         errors.push({ rowNumber, msg: 'Email is required' });
         continue;
       }
+      await addDefaultScholarNumber(payload);
 
       try {
         await User.findOneAndUpdate(

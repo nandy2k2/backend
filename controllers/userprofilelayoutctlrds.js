@@ -68,6 +68,7 @@ const layoutPayload = (body = {}) => ({
   label: clean(body.label),
   source: clean(body.source) === 'custom' ? 'custom' : 'user',
   tab: clean(body.tab) || 'Profile',
+  taborder: Number(body.taborder || 0),
   order: Number(body.order || 0),
   editable: clean(body.editable) || 'No',
   visible: clean(body.visible) || 'Yes',
@@ -104,7 +105,7 @@ exports.getLayouts = async (req, res) => {
   try {
     const filter = { colid: Number(req.query.colid) };
     if (req.query.role) filter.role = clean(req.query.role);
-    const data = await UserProfileLayout.find(filter).sort({ role: 1, tab: 1, order: 1, label: 1 }).lean();
+    const data = await UserProfileLayout.find(filter).sort({ role: 1, taborder: 1, tab: 1, order: 1, label: 1 }).lean();
     res.json(data);
   } catch (err) {
     res.status(500).json({ msg: err.message });
@@ -149,7 +150,7 @@ exports.getProfile = async (req, res) => {
     const user = await User.findOne({ colid, email }).lean();
     if (!user) return res.status(404).json({ msg: 'User not found' });
     const role = requestedRole || user.role || 'User';
-    let layout = await UserProfileLayout.find({ colid, role, visible: { $ne: 'No' } }).sort({ tab: 1, order: 1, label: 1 }).lean();
+    let layout = await UserProfileLayout.find({ colid, role, visible: { $ne: 'No' } }).sort({ taborder: 1, tab: 1, order: 1, label: 1 }).lean();
     if (!layout.length) {
       const defaults = ['name', 'email', 'phone', 'role', 'department', 'designation', 'program', 'programcode', 'regno', 'semester', 'section'];
       layout = defaults.filter((field) => user[field] !== undefined).map((field, index) => ({
@@ -157,6 +158,7 @@ exports.getProfile = async (req, res) => {
         label: field,
         source: 'user',
         tab: 'Profile',
+        taborder: 0,
         order: index + 1,
         editable: 'No',
         visible: 'Yes',

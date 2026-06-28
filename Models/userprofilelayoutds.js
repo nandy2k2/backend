@@ -7,6 +7,7 @@ const userProfileLayoutSchema = new mongoose.Schema({
   label: { type: String, required: true, trim: true },
   source: { type: String, enum: ['user', 'custom'], default: 'user' },
   tab: { type: String, default: 'Profile', trim: true },
+  taborder: { type: Number, default: 0 },
   order: { type: Number, default: 0 },
   editable: { type: String, default: 'No', trim: true },
   visible: { type: String, default: 'Yes', trim: true },
