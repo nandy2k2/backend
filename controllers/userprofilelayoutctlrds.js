@@ -1,6 +1,8 @@
 const User = require('../Models/user');
 const UserCustomField = require('../Models/usercustomfieldds');
 const UserProfileLayout = require('../Models/userprofilelayoutds');
+const UserProfileApprovalWorkflow = require('../Models/userprofileapprovalworkflowds');
+const UserProfileEditRequest = require('../Models/userprofileeditrequestds');
 
 const hiddenFields = new Set(['_id', '__v', 'colid', 'user', 'customFields']);
 const clean = (value) => String(value || '').trim();
@@ -60,6 +62,13 @@ const setValue = (user, field, value) => {
     user[field] = value;
   }
 };
+
+const profileWorkflow = async (colid, role) => UserProfileApprovalWorkflow.find({
+  colid,
+  role,
+  status: { $ne: 'Inactive' },
+  $or: [{ requesttype: 'Profile' }, { requesttype: 'All' }, { requesttype: '' }, { requesttype: { $exists: false } }]
+}).sort({ level: 1 }).lean();
 
 const layoutPayload = (body = {}) => ({
   colid: Number(body.colid),
@@ -186,13 +195,36 @@ exports.updateProfile = async (req, res) => {
     if (!user) return res.status(404).json({ msg: 'User not found' });
     const layout = await UserProfileLayout.find({ colid, role: role || user.role, visible: { $ne: 'No' } }).lean();
     const editableFields = new Set(layout.filter((field) => yes(field.editable)).map((field) => field.field));
+    const labels = Object.fromEntries(layout.map((field) => [field.field, field.label || field.field]));
     const values = req.body.values || {};
-    Object.keys(values).forEach((field) => {
-      if (editableFields.has(field)) setValue(user, field, values[field]);
+    const currentUser = serializeUser(user);
+    const fields = Object.keys(values)
+      .filter((field) => editableFields.has(field))
+      .map((field) => ({
+        field,
+        label: labels[field] || field,
+        oldvalue: getValue(currentUser, field),
+        newvalue: values[field],
+        level: 1,
+        status: 'Pending',
+        decisions: []
+      }))
+      .filter((field) => String(field.oldvalue ?? '') !== String(field.newvalue ?? ''));
+
+    if (!fields.length) return res.json({ msg: 'No changed editable fields to submit', user: serializeUser(user) });
+    const workflow = await profileWorkflow(colid, role || user.role);
+    if (!workflow.length) return res.status(400).json({ msg: `Profile approval workflow is not configured for role ${role || user.role}` });
+
+    const request = await UserProfileEditRequest.create({
+      colid,
+      role: role || user.role,
+      owneruser: email,
+      ownername: user.name,
+      submittedby: email,
+      status: 'Pending',
+      fields
     });
-    user.markModified('customFields');
-    await user.save({ validateBeforeSave: false });
-    res.json({ msg: 'Profile updated', user: serializeUser(user) });
+    res.json({ msg: 'Profile changes submitted for approval', request, user: serializeUser(user) });
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }

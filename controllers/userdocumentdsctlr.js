@@ -5,6 +5,8 @@ const User = require('../Models/user');
 const Awsconfig = require('../Models/awsconfig');
 const UserDocumentRequirement = require('../Models/userdocumentrequirementds');
 const UserUploadedDocument = require('../Models/useruploadeddocumentds');
+const UserProfileApprovalWorkflow = require('../Models/userprofileapprovalworkflowds');
+const UserDocumentApprovalRequest = require('../Models/userdocumentapprovalrequestds');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -24,6 +26,13 @@ const getAwsConfig = async (colid) => {
   if (defaultConfig) return defaultConfig;
   return Awsconfig.findOne(base).sort({ _id: -1 }).lean();
 };
+
+const documentWorkflow = async (colid, role) => UserProfileApprovalWorkflow.find({
+  colid,
+  role,
+  status: { $ne: 'Inactive' },
+  $or: [{ requesttype: 'Document' }, { requesttype: 'All' }, { requesttype: '' }, { requesttype: { $exists: false } }]
+}).sort({ level: 1 }).lean();
 
 exports.uploadMiddleware = upload.single('file');
 
@@ -177,6 +186,8 @@ exports.uploadDocument = async (req, res) => {
     if (!colid || !documentname || !role || !owneruser) {
       return res.status(400).json({ msg: 'Role, user and document name are required' });
     }
+    const workflow = await documentWorkflow(colid, role);
+    if (!workflow.length) return res.status(400).json({ msg: `Document approval workflow is not configured for role ${role}` });
 
     const config = await getAwsConfig(colid);
     if (!config?.username || !config?.password || !config?.bucket || !config?.region) {
@@ -223,8 +234,26 @@ exports.uploadDocument = async (req, res) => {
         mimetype: req.file.mimetype,
         size: req.file.size,
         url: s3Url(config.bucket, config.region, key),
-        status: 'Uploaded',
+        status: 'Pending',
         remarks: clean(req.body.remarks)
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    await UserDocumentApprovalRequest.findOneAndUpdate(
+      { colid, documentid: String(data._id), status: 'Pending' },
+      {
+        colid,
+        role,
+        owneruser,
+        ownername: clean(req.body.ownername),
+        documentid: String(data._id),
+        documentname,
+        url: data.url,
+        originalname: data.originalname,
+        level: 1,
+        status: 'Pending',
+        comments: ''
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );

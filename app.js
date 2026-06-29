@@ -121,6 +121,7 @@ const userCustomFieldController = require('./controllers/usercustomfielddsctlr')
 const userDataManagementController = require('./controllers/userdatamanagementdsctlr');
 const userProfileLayoutController = require('./controllers/userprofilelayoutctlrds');
 const userDocumentController = require('./controllers/userdocumentdsctlr');
+const userProfileApprovalController = require('./controllers/userprofileapprovalctlrds');
 const studentDataUploadController = require('./controllers/studentdatauploadctlrds');
 const studentEmailMessagingController = require('./controllers/studentemailmessagingctlrds');
 const userPivotReportController = require('./controllers/userpivotreportctlrds');
@@ -162,6 +163,15 @@ app.post('/api/v2/user-document-requirements-bulk', userDocumentController.bulkR
 app.get('/api/v2/user-uploaded-documents', userDocumentController.getUploads);
 app.post('/api/v2/user-uploaded-documents/upload', userDocumentController.uploadMiddleware, userDocumentController.uploadDocument);
 app.post('/api/v2/user-uploaded-documents-delete', userDocumentController.deleteUpload);
+app.get('/api/v2/user-profile-approval-workflows', userProfileApprovalController.getWorkflows);
+app.post('/api/v2/user-profile-approval-workflows', userProfileApprovalController.saveWorkflow);
+app.post('/api/v2/user-profile-approval-workflows-delete', userProfileApprovalController.deleteWorkflow);
+app.get('/api/v2/user-profile-approval-users', userProfileApprovalController.getUsers);
+app.get('/api/v2/user-profile-approval-status', userProfileApprovalController.getMyStatus);
+app.get('/api/v2/user-profile-approval-pending', userProfileApprovalController.getPendingApprovals);
+app.post('/api/v2/user-profile-approval-field-action', userProfileApprovalController.actOnProfileField);
+app.post('/api/v2/user-profile-approval-document-action', userProfileApprovalController.actOnDocument);
+app.get('/api/v2/user-profile-approval-report', userProfileApprovalController.getReport);
 app.post('/api/v2/transcript/send-email', transcriptController.sendTranscriptEmail);
 app.post('/api/v2/transcript/gemini-transcribe', transcriptController.uploadAudioMiddleware, transcriptController.transcribeWithGemini);
 app.get('/api/v2/transcript-meeting-users', transcriptMeetingController.searchUsers);
