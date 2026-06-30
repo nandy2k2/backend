@@ -123,6 +123,7 @@ const userProfileLayoutController = require('./controllers/userprofilelayoutctlr
 const userDocumentController = require('./controllers/userdocumentdsctlr');
 const userProfileApprovalController = require('./controllers/userprofileapprovalctlrds');
 const userProfileAuditLogController = require('./controllers/userprofileauditlogctlrds');
+const userConsentController = require('./controllers/userconsentctlrds');
 const studentDataUploadController = require('./controllers/studentdatauploadctlrds');
 const studentEmailMessagingController = require('./controllers/studentemailmessagingctlrds');
 const userPivotReportController = require('./controllers/userpivotreportctlrds');
@@ -176,6 +177,17 @@ app.get('/api/v2/user-profile-approval-report', userProfileApprovalController.ge
 app.get('/api/v2/user-profile-audit-logs', userProfileAuditLogController.getLogs);
 app.get('/api/v2/user-profile-audit-log-options', userProfileAuditLogController.getOptions);
 app.post('/api/v2/user-profile-audit-logs-bulk-delete', userProfileAuditLogController.bulkDelete);
+app.get('/api/v2/user-consent-contents', userConsentController.getContents);
+app.post('/api/v2/user-consent-contents', userConsentController.saveContent);
+app.post('/api/v2/user-consent-contents-delete', userConsentController.deleteContent);
+app.post('/api/v2/user-consent-contents-bulk-delete', userConsentController.bulkDeleteContents);
+app.get('/api/v2/user-consent-content-current', userConsentController.getConsentContent);
+app.get('/api/v2/user-consent-status', userConsentController.getConsentStatus);
+app.post('/api/v2/user-consent-give', userConsentController.giveConsent);
+app.post('/api/v2/user-consent-withdraw', userConsentController.withdrawConsent);
+app.get('/api/v2/user-consent-audits', userConsentController.getAudits);
+app.get('/api/v2/user-consent-audit-options', userConsentController.getAuditOptions);
+app.post('/api/v2/user-consent-audits-bulk-delete', userConsentController.bulkDeleteAudits);
 app.post('/api/v2/transcript/send-email', transcriptController.sendTranscriptEmail);
 app.post('/api/v2/transcript/gemini-transcribe', transcriptController.uploadAudioMiddleware, transcriptController.transcribeWithGemini);
 app.get('/api/v2/transcript-meeting-users', transcriptMeetingController.searchUsers);
