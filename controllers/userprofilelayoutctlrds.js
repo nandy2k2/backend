@@ -3,6 +3,7 @@ const UserCustomField = require('../Models/usercustomfieldds');
 const UserProfileLayout = require('../Models/userprofilelayoutds');
 const UserProfileApprovalWorkflow = require('../Models/userprofileapprovalworkflowds');
 const UserProfileEditRequest = require('../Models/userprofileeditrequestds');
+const userProfileAuditLogController = require('./userprofileauditlogctlrds');
 
 const hiddenFields = new Set(['_id', '__v', 'colid', 'user', 'customFields']);
 const clean = (value) => String(value || '').trim();
@@ -224,7 +225,46 @@ exports.updateProfile = async (req, res) => {
       status: 'Pending',
       fields
     });
+    for (const field of fields) {
+      await userProfileAuditLogController.createAuditLog(req, {
+        colid,
+        action: 'Submitted',
+        requesttype: 'Profile',
+        role: role || user.role,
+        owneruser: email,
+        ownername: user.name,
+        actorname: clean(req.body.actorname || req.body.name) || user.name,
+        actoremail: clean(req.body.actoruser || req.body.submittedby || req.body.email || req.body.user) || email,
+        actorrole: role || user.role,
+        field: field.field,
+        label: field.label,
+        oldvalue: field.oldvalue,
+        newvalue: field.newvalue,
+        status: field.status,
+        requestid: String(request._id),
+        details: { level: field.level }
+      });
+    }
     res.json({ msg: 'Profile changes submitted for approval', request, user: serializeUser(user) });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+exports.updateProfilePhoto = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const email = clean(req.body.email || req.body.user);
+    const photo = clean(req.body.photo);
+    if (!colid || !email || !photo) return res.status(400).json({ msg: 'colid, email and photo are required' });
+
+    const user = await User.findOneAndUpdate(
+      { colid, email },
+      { $set: { photo } },
+      { new: true, runValidators: true }
+    );
+    if (!user) return res.status(404).json({ msg: 'User not found' });
+    res.json({ msg: 'Photo updated', user: serializeUser(user) });
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }

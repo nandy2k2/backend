@@ -3,6 +3,7 @@ const UserUploadedDocument = require('../Models/useruploadeddocumentds');
 const UserProfileApprovalWorkflow = require('../Models/userprofileapprovalworkflowds');
 const UserProfileEditRequest = require('../Models/userprofileeditrequestds');
 const UserDocumentApprovalRequest = require('../Models/userdocumentapprovalrequestds');
+const userProfileAuditLogController = require('./userprofileauditlogctlrds');
 
 const clean = (value) => String(value || '').trim();
 const number = (value) => Number(value || 0);
@@ -201,6 +202,25 @@ exports.actOnProfileField = async (req, res) => {
     }
     request.status = resolveRequestStatus(request.fields.map((item) => item.status));
     await request.save();
+    await userProfileAuditLogController.createAuditLog(req, {
+      colid,
+      action,
+      requesttype: 'Profile',
+      role: request.role,
+      owneruser: request.owneruser,
+      ownername: request.ownername,
+      actorname: clean(req.body.approvername),
+      actoremail: clean(req.body.approveremail || req.body.user),
+      actorrole: clean(req.body.approverrole || req.body.role),
+      field: field.field,
+      label: field.label,
+      oldvalue: field.oldvalue,
+      newvalue: field.newvalue,
+      status: field.status,
+      comments: clean(req.body.comments),
+      requestid: String(request._id),
+      details: { level: field.level, requeststatus: request.status }
+    });
     res.json({ msg: `Field ${action.toLowerCase()}`, request });
   } catch (err) {
     res.status(500).json({ msg: err.message });
@@ -242,6 +262,28 @@ exports.actOnDocument = async (req, res) => {
       }
     }
     await request.save();
+    await userProfileAuditLogController.createAuditLog(req, {
+      colid,
+      action,
+      requesttype: 'Document',
+      role: request.role,
+      owneruser: request.owneruser,
+      ownername: request.ownername,
+      actorname: clean(req.body.approvername),
+      actoremail: clean(req.body.approveremail || req.body.user),
+      actorrole: clean(req.body.approverrole || req.body.role),
+      field: request.documentname,
+      label: request.documentname,
+      status: request.status,
+      comments: clean(req.body.comments),
+      requestid: String(request._id),
+      details: {
+        level: request.level,
+        documentid: request.documentid,
+        url: request.url,
+        originalname: request.originalname
+      }
+    });
     res.json({ msg: `Document ${action.toLowerCase()}`, request });
   } catch (err) {
     res.status(500).json({ msg: err.message });

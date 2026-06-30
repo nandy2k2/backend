@@ -122,6 +122,7 @@ const userDataManagementController = require('./controllers/userdatamanagementds
 const userProfileLayoutController = require('./controllers/userprofilelayoutctlrds');
 const userDocumentController = require('./controllers/userdocumentdsctlr');
 const userProfileApprovalController = require('./controllers/userprofileapprovalctlrds');
+const userProfileAuditLogController = require('./controllers/userprofileauditlogctlrds');
 const studentDataUploadController = require('./controllers/studentdatauploadctlrds');
 const studentEmailMessagingController = require('./controllers/studentemailmessagingctlrds');
 const userPivotReportController = require('./controllers/userpivotreportctlrds');
@@ -172,6 +173,9 @@ app.get('/api/v2/user-profile-approval-pending', userProfileApprovalController.g
 app.post('/api/v2/user-profile-approval-field-action', userProfileApprovalController.actOnProfileField);
 app.post('/api/v2/user-profile-approval-document-action', userProfileApprovalController.actOnDocument);
 app.get('/api/v2/user-profile-approval-report', userProfileApprovalController.getReport);
+app.get('/api/v2/user-profile-audit-logs', userProfileAuditLogController.getLogs);
+app.get('/api/v2/user-profile-audit-log-options', userProfileAuditLogController.getOptions);
+app.post('/api/v2/user-profile-audit-logs-bulk-delete', userProfileAuditLogController.bulkDelete);
 app.post('/api/v2/transcript/send-email', transcriptController.sendTranscriptEmail);
 app.post('/api/v2/transcript/gemini-transcribe', transcriptController.uploadAudioMiddleware, transcriptController.transcribeWithGemini);
 app.get('/api/v2/transcript-meeting-users', transcriptMeetingController.searchUsers);
@@ -374,6 +378,7 @@ app.post('/api/v2/user-profile-layouts', userProfileLayoutController.saveLayout)
 app.post('/api/v2/user-profile-layouts-delete', userProfileLayoutController.deleteLayout);
 app.get('/api/v2/user-profile', userProfileLayoutController.getProfile);
 app.post('/api/v2/user-profile-update', userProfileLayoutController.updateProfile);
+app.post('/api/v2/user-profile-photo-update', userProfileLayoutController.updateProfilePhoto);
 app.get('/api/v2/user-data/meta', userDataManagementController.getMeta);
 app.get('/api/v2/user-data/options', userDataManagementController.getOptions);
 app.post('/api/v2/user-data/search', userDataManagementController.search);
