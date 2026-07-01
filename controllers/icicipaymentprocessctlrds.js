@@ -2,6 +2,7 @@ const IciciGateway = require("../Models/icicigatewayds");
 const IciciPayment = require("../Models/icicipaymentds");
 const AdmissionApplication = require("../Models/admissionapplicationdynamic");
 const ICICIPaymentHandler = require("../utils/icicigatewayhandler");
+const studentOnlinePaymentController = require("./studentonlinepaymentctlrds");
 
 function text(value) {
   return String(value || "").trim();
@@ -10,6 +11,16 @@ function text(value) {
 function amount(value) {
   const parsed = Number(value || 0);
   return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function validEmail(value) {
+  const email = text(value);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : "payment@example.com";
+}
+
+function validPhone(value) {
+  const digits = text(value).replace(/\D/g, "").slice(-10);
+  return digits.length === 10 ? digits : "9999999999";
 }
 
 function regex(value) {
@@ -108,8 +119,8 @@ exports.initiateIciciPayment = async (req, res) => {
     const handler = buildHandler(config);
     const refno = `ICI_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     const merchantTxnNo = `ICI${Date.now()}${Math.floor(Math.random() * 1000)}`.slice(0, 20);
-    const email = text(req.body.email) || "payment@example.com";
-    const phone = text(req.body.phone).replace(/\D/g, "").slice(-10) || "9999999999";
+    const email = validEmail(req.body.email);
+    const phone = validPhone(req.body.phone);
     const backendCallbackUrl = fallbackBackendCallbackUrl(req);
 
     const payment = await IciciPayment.create({
@@ -123,6 +134,9 @@ exports.initiateIciciPayment = async (req, res) => {
       type: paymentType,
       paymentfor: text(req.body.paymentfor),
       applicationid: text(req.body.applicationid),
+      source: text(req.body.source),
+      sourceid: text(req.body.sourceid),
+      studentonlinepaymentid: text(req.body.studentonlinepaymentid),
       refno,
       merchantTxnNo,
       txnid: merchantTxnNo,
@@ -205,6 +219,9 @@ exports.handleIciciPaymentCallback = async (req, res) => {
     payment.gatewayresponse = { ...(payment.gatewayresponse || {}), callbackResponse: params };
     await payment.save();
     await updateAdmissionPayment(payment, params);
+    if (payment.status === "SUCCESS" && (payment.source === "StudentFeesOnline" || payment.studentonlinepaymentid)) {
+      await studentOnlinePaymentController.settleSuccessfulStudentOnlinePayment(payment, params);
+    }
 
     const redirectBase = callbackRedirectUrl(payment);
     const joiner = redirectBase.includes("?") ? "&" : "?";

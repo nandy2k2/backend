@@ -5473,6 +5473,7 @@ const easebuzzpaymentprocessctlrds = require("./controllers/easebuzzpaymentproce
 const mastergatewayctlrds = require("./controllers/mastergatewayctlrds");
 const icicigatewayconfigctlrds = require("./controllers/icicigatewayconfigctlrds");
 const icicipaymentprocessctlrds = require("./controllers/icicipaymentprocessctlrds");
+const studentonlinepaymentctlrds = require("./controllers/studentonlinepaymentctlrds");
 const purchase2crudctlrds = require("./controllers/purchase2crudctlrds");
 // Ledger routes
 app.post("/api/v2/addledgerds", ledgerstuddsctlr.addledgerds);
@@ -5559,6 +5560,10 @@ app.get("/api/v2/icicipayment", icicipaymentprocessctlrds.getIciciPayments);
 app.post("/api/v2/icicipayment/initiate", icicipaymentprocessctlrds.initiateIciciPayment);
 app.post("/api/v2/icicipayment/callback", icicipaymentprocessctlrds.handleIciciPaymentCallback);
 app.get("/api/v2/icicipayment/callback", icicipaymentprocessctlrds.handleIciciPaymentCallback);
+app.get("/api/v2/studentonlinepayment/pending", studentonlinepaymentctlrds.getPendingStudentFees);
+app.post("/api/v2/studentonlinepayment/session", studentonlinepaymentctlrds.createStudentPaymentSession);
+app.get("/api/v2/studentonlinepayment", studentonlinepaymentctlrds.getStudentOnlinePayments);
+app.get("/api/v2/studentonlinepayment/options", studentonlinepaymentctlrds.getStudentOnlinePaymentOptions);
 app.get("/api/v2/purchase2/:model", purchase2crudctlrds.getPurchase2Rows);
 app.post("/api/v2/purchase2/:model", purchase2crudctlrds.savePurchase2Row);
 app.post("/api/v2/purchase2/:model/delete", purchase2crudctlrds.deletePurchase2Row);

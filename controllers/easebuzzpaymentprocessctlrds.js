@@ -2,6 +2,7 @@ const EasebuzzGateway = require("../Models/easebuzzgatewayds");
 const EasebuzzPayment = require("../Models/easebuzzpaymentds");
 const AdmissionApplication = require("../Models/admissionapplicationdynamic");
 const EasebuzzPaymentHandler = require("../utils/easebuzzgatewayhandler");
+const studentOnlinePaymentController = require("./studentonlinepaymentctlrds");
 
 function text(value) {
   return String(value || "").trim();
@@ -10,6 +11,21 @@ function text(value) {
 function amount(value) {
   const parsed = Number(value || 0);
   return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function validEmail(value) {
+  const email = text(value);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : "payment@example.com";
+}
+
+function validPhone(value) {
+  const digits = text(value).replace(/\D/g, "").slice(-10);
+  return digits.length === 10 ? digits : "9999999999";
+}
+
+function gatewayText(value, fallback = "Student Fees") {
+  const cleaned = text(value).replace(/[^a-zA-Z0-9 ._-]/g, " ").replace(/\s+/g, " ").trim();
+  return (cleaned || fallback).slice(0, 100);
 }
 
 function regex(value) {
@@ -97,8 +113,10 @@ exports.initiateEasebuzzPayment = async (req, res) => {
       env: config.environment
     });
     const refno = `EBZ_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-    const email = text(req.body.email) || "payment@example.com";
-    const phone = text(req.body.phone).replace(/\D/g, "").slice(-10) || "9999999999";
+    const email = validEmail(req.body.email);
+    const phone = validPhone(req.body.phone);
+    const productinfo = gatewayText(req.body.feeitem);
+    const firstname = gatewayText(req.body.student, "Student");
     const configuredCallbackUrl = text(config.returnurl);
     const callbackUrl = configuredCallbackUrl.includes("/api/v2/easebuzzpayment/callback")
       ? configuredCallbackUrl
@@ -115,6 +133,9 @@ exports.initiateEasebuzzPayment = async (req, res) => {
       type: paymentType,
       paymentfor: text(req.body.paymentfor),
       applicationid: text(req.body.applicationid),
+      source: text(req.body.source),
+      sourceid: text(req.body.sourceid),
+      studentonlinepaymentid: text(req.body.studentonlinepaymentid),
       refno,
       description: text(req.body.description),
       email,
@@ -127,8 +148,8 @@ exports.initiateEasebuzzPayment = async (req, res) => {
       key: handler.key,
       txnid: refno,
       amount: paidAmount.toFixed(2),
-      productinfo: text(req.body.feeitem),
-      firstname: text(req.body.student),
+      productinfo,
+      firstname,
       email,
       phone,
       surl: callbackUrl,
@@ -243,6 +264,10 @@ exports.handleEasebuzzPaymentCallback = async (req, res) => {
         updatePayload,
         { new: true }
       );
+    }
+
+    if (isSuccess && (payment.source === "StudentFeesOnline" || payment.studentonlinepaymentid)) {
+      await studentOnlinePaymentController.settleSuccessfulStudentOnlinePayment(payment, params);
     }
 
     if (payment.type === "Admission" && payment.applicationid) {
