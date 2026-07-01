@@ -157,7 +157,14 @@ exports.getProfile = async (req, res) => {
     const colid = Number(req.query.colid);
     const email = clean(req.query.email || req.query.user);
     const requestedRole = clean(req.query.role);
-    const user = await User.findOne({ colid, email }).lean();
+    const user = await User.findOne({
+      colid,
+      $or: [
+        { email },
+        { user: email },
+        { regno: email }
+      ]
+    }).lean();
     if (!user) return res.status(404).json({ msg: 'User not found' });
     const role = requestedRole || user.role || 'User';
     let layout = await UserProfileLayout.find({ colid, role, visible: { $ne: 'No' } }).sort({ taborder: 1, tab: 1, order: 1, label: 1 }).lean();
@@ -181,7 +188,31 @@ exports.getProfile = async (req, res) => {
     layout.forEach((item) => {
       values[item.field] = getValue(data, item.field);
     });
-    res.json({ user: data, role, layout, values });
+    const ownerKeys = [email, user.email, user.user, user.regno].map(clean).filter(Boolean);
+    const pendingRequests = await UserProfileEditRequest.find({
+      colid,
+      owneruser: { $in: [...new Set(ownerKeys)] },
+      status: 'Pending'
+    }).sort({ createdAt: 1 }).lean();
+    const configuredFields = new Set(layout.map((item) => item.field));
+    const pendingValues = {};
+    pendingRequests.forEach((request) => {
+      (request.fields || [])
+        .filter((field) => field.status === 'Pending' && configuredFields.has(field.field))
+        .forEach((field) => {
+          values[field.field] = field.newvalue;
+          pendingValues[field.field] = {
+            requestid: request._id,
+            label: field.label || field.field,
+            oldvalue: field.oldvalue,
+            newvalue: field.newvalue,
+            level: field.level,
+            status: field.status,
+            submittedAt: request.createdAt
+          };
+        });
+    });
+    res.json({ user: data, role, layout, values, pendingValues });
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
@@ -192,7 +223,14 @@ exports.updateProfile = async (req, res) => {
     const colid = Number(req.body.colid);
     const email = clean(req.body.email || req.body.user);
     const role = clean(req.body.role);
-    const user = await User.findOne({ colid, email });
+    const user = await User.findOne({
+      colid,
+      $or: [
+        { email },
+        { user: email },
+        { regno: email }
+      ]
+    });
     if (!user) return res.status(404).json({ msg: 'User not found' });
     const layout = await UserProfileLayout.find({ colid, role: role || user.role, visible: { $ne: 'No' } }).lean();
     const editableFields = new Set(layout.filter((field) => yes(field.editable)).map((field) => field.field));
@@ -259,7 +297,14 @@ exports.updateProfilePhoto = async (req, res) => {
     if (!colid || !email || !photo) return res.status(400).json({ msg: 'colid, email and photo are required' });
 
     const user = await User.findOneAndUpdate(
-      { colid, email },
+      {
+        colid,
+        $or: [
+          { email },
+          { user: email },
+          { regno: email }
+        ]
+      },
       { $set: { photo } },
       { new: true, runValidators: true }
     );

@@ -13,6 +13,14 @@ const userDocumentRequirementSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  category: {
+    type: String,
+    default: ''
+  },
+  order: {
+    type: Number,
+    default: 0
+  },
   description: String,
   mandatory: {
     type: String,

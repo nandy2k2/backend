@@ -74,7 +74,7 @@ exports.getRequirements = async (req, res) => {
     const filter = { colid: number(req.query.colid) };
     if (clean(req.query.role)) filter.role = clean(req.query.role);
     if (clean(req.query.status)) filter.status = clean(req.query.status);
-    const data = await UserDocumentRequirement.find(filter).sort({ role: 1, documentname: 1 }).lean();
+    const data = await UserDocumentRequirement.find(filter).sort({ role: 1, category: 1, order: 1, documentname: 1 }).lean();
     res.json(data);
   } catch (err) {
     res.status(500).json({ msg: err.message });
@@ -87,6 +87,8 @@ exports.saveRequirement = async (req, res) => {
       colid: number(req.body.colid),
       role: clean(req.body.role),
       documentname: clean(req.body.documentname),
+      category: clean(req.body.category),
+      order: number(req.body.order),
       description: clean(req.body.description),
       mandatory: clean(req.body.mandatory) || 'Yes',
       status: clean(req.body.status) || 'Active',
@@ -145,6 +147,8 @@ exports.bulkRequirements = async (req, res) => {
         colid,
         role,
         documentname,
+        category: clean(item.category || item.Category),
+        order: number(item.order || item.Order),
         description: clean(item.description || item.Description),
         mandatory: clean(item.mandatory || item.Mandatory) || 'Yes',
         status: clean(item.status || item.Status) || 'Active',
