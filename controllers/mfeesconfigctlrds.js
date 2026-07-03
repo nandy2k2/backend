@@ -31,6 +31,7 @@ function cleanPayload(input = {}) {
     minor: text(input.minor),
     IDC: text(input.IDC || input.idc),
     gender: text(input.gender),
+    Medium: text(input.Medium || input.medium),
     feebook: text(input.feebook),
     cashbook: text(input.cashbook),
     feegroup: text(input.feegroup),
@@ -63,7 +64,7 @@ function buildQuery(source = {}) {
   const query = {};
   const colid = toNumber(source.colid);
   if (colid !== undefined) query.colid = colid;
-  ["academicyear", "programcode", "regulation", "major", "minor", "IDC", "gender", "semester", "feebook", "cashbook", "status"].forEach((key) => {
+  ["academicyear", "programcode", "regulation", "major", "minor", "IDC", "gender", "Medium", "semester", "feebook", "cashbook", "status"].forEach((key) => {
     if (source[key]) query[key] = source[key];
   });
   return query;
@@ -112,6 +113,7 @@ exports.getMFeesOptions = async (req, res) => {
       feeMinors,
       feeIdcs,
       feeGenders,
+      feeMediums,
       feeSemesters,
       feeStatuses
     ] = await Promise.all([
@@ -130,6 +132,7 @@ exports.getMFeesOptions = async (req, res) => {
       Fees.distinct("minor", { colid }),
       Fees.distinct("IDC", { colid }),
       Fees.distinct("gender", { colid }),
+      Fees.distinct("Medium", { colid }),
       Fees.distinct("semester", { colid }),
       Fees.distinct("status", { colid })
     ]);
@@ -166,6 +169,7 @@ exports.getMFeesOptions = async (req, res) => {
         minors: feeMinors.filter(Boolean).sort((a, b) => String(a).localeCompare(String(b))),
         idcs: feeIdcs.filter(Boolean).sort((a, b) => String(a).localeCompare(String(b))),
         genders: feeGenders.filter(Boolean).sort((a, b) => String(a).localeCompare(String(b))),
+        mediums: feeMediums.filter(Boolean).sort((a, b) => String(a).localeCompare(String(b))),
         semesters: feeSemesters.filter(Boolean).sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true })),
         statuses: feeStatuses.filter(Boolean).sort((a, b) => String(a).localeCompare(String(b)))
       }

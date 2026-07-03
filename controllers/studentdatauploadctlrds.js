@@ -16,6 +16,7 @@ const fields = [
   'phone',
   'program',
   'programcode',
+  'Mediumofinstruction',
   'regulation',
   'Major',
   'Minor',
@@ -47,6 +48,16 @@ const clean = (value) => String(value ?? '').trim();
 const colidFilter = (colid) => ({ colid: Number(colid), role: 'Student' });
 const upload = multer({ storage: multer.memoryStorage() });
 const geminiModels = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+
+const randomPassword = (length = 10) => {
+  const size = Math.max(6, Math.min(32, Number(length) || 10));
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*';
+  let password = '';
+  for (let index = 0; index < size; index += 1) {
+    password += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return password;
+};
 
 const scholarYearCode = (academicYear) => {
   const value = clean(academicYear);
@@ -88,6 +99,7 @@ const valueFromBody = (body, field) => {
     minor: ['minor', 'Minor'],
     Major: ['Major', 'major'],
     Minor: ['Minor', 'minor'],
+    Mediumofinstruction: ['Mediumofinstruction', 'mediumofinstruction', 'medium of instruction'],
     MDC: ['MDC', 'mdc', 'mdcsub'],
     mdc: ['mdc', 'MDC', 'mdcsub'],
     mdcsub: ['mdcsub', 'MDC', 'mdc']
@@ -117,6 +129,7 @@ const buildPayload = (body = {}) => {
     phone: clean(body.phone) || 'NA',
     program: clean(body.program) || 'NA',
     programcode: clean(body.programcode) || 'NA',
+    Mediumofinstruction: clean(valueFromBody(body, 'Mediumofinstruction')) || 'NA',
     regulation: clean(body.regulation) || 'NA',
     Major: clean(valueFromBody(body, 'Major')) || 'NA',
     Minor: clean(valueFromBody(body, 'Minor')) || 'NA',
@@ -395,11 +408,15 @@ exports.bulkStudents = async (req, res) => {
 
     for (let index = 0; index < items.length; index += 1) {
       const rowNumber = items[index].rowNumber || index + 2;
+      const row = { ...items[index] };
+      if (clean(req.body.generateRandomPassword) === 'Yes') {
+        row.password = randomPassword(req.body.passwordLength);
+      }
       const payload = buildPayload({
-        ...items[index],
+        ...row,
         colid,
-        user: req.body.user || items[index].user,
-        institution: req.body.institution || items[index].institution
+        user: req.body.user || row.user,
+        institution: req.body.institution || row.institution
       });
       if (!payload.email) {
         errors.push({ rowNumber, msg: 'Email is required' });

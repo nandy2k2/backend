@@ -29,6 +29,27 @@ type: String
 level: {
 type: String
 },
+institution: {
+type: String
+},
+department: {
+type: String
+},
+durationinyear: {
+type: Number
+},
+typeofsession: {
+type: String
+},
+introductionyear: {
+type: String
+},
+discontinueyear: {
+type: String
+},
+lastrevisionyear: {
+type: String
+},
 Order: {
 type: Number
 },

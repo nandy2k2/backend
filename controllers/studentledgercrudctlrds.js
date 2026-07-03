@@ -4,12 +4,13 @@ const fields = [
   "academicyear", "admissionyear", "programcode", "regulation", "major", "minor",
   "student", "regno", "user", "name", "feegroup", "feeitem", "feecategory", "feetype",
   "feebook", "cashbook", "semester", "amount", "paid", "concession", "balance",
+  "Latefinedue", "Latefinepaid",
   "cash", "upi", "cheque", "card", "pg", "neft", "paymode", "paydetails",
   "feecounter", "institution", "type", "installment", "status", "classdate",
   "duedate", "paiddate", "comments", "doclink", "feeid"
 ];
 
-const numberFields = ["amount", "paid", "concession", "balance", "cash", "upi", "cheque", "card", "pg", "neft"];
+const numberFields = ["amount", "paid", "concession", "balance", "Latefinedue", "Latefinepaid", "cash", "upi", "cheque", "card", "pg", "neft"];
 const dateFields = ["classdate", "duedate", "paiddate"];
 const requiredDefaults = {
   feegroup: "NA",

@@ -11,6 +11,8 @@ const programPayload = (body = {}) => {
   const program = text(body.program || body.name);
   const orderValue = body.Order ?? body.order ?? body.programorder ?? body.ProgramOrder;
   const parsedOrder = orderValue === '' || orderValue === undefined || orderValue === null ? 0 : Number(orderValue);
+  const durationValue = body.durationinyear ?? body.durationInYear ?? body["duration in year"] ?? body.DurationInYear ?? body["Duration in year"];
+  const parsedDuration = durationValue === '' || durationValue === undefined || durationValue === null ? 0 : Number(durationValue);
   return {
     name: text(body.name || program),
     user: text(body.user),
@@ -20,6 +22,13 @@ const programPayload = (body = {}) => {
     programcode: text(body.programcode || body.programCode),
     type: text(body.type),
     level: text(body.level),
+    institution: text(body.institution || body.Institution),
+    department: text(body.department || body.Department),
+    durationinyear: Number.isNaN(parsedDuration) ? 0 : parsedDuration,
+    typeofsession: text(body.typeofsession || body.typeOfSession || body["type of session"] || body.TypeOfSession || body["Type of session"]),
+    introductionyear: text(body.introductionyear || body.introductionYear || body["introduction year"] || body.IntroductionYear || body["Introduction year"]),
+    discontinueyear: text(body.discontinueyear || body.discontinueYear || body["discontinue year"] || body.DiscontinueYear || body["Discontinue year"]),
+    lastrevisionyear: text(body.lastrevisionyear || body.lastRevisionYear || body["last revision year"] || body.LastRevisionYear || body["Last revision year"]),
     Order: Number.isNaN(parsedOrder) ? 0 : parsedOrder,
     status1: text(body.status1 || body.status || "Active") || "Active",
     comments: text(body.comments)
@@ -32,7 +41,7 @@ exports.getPrograms = async (req, res) => {
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
 
     const filter = { colid };
-    ["year", "type", "level", "status1", "programcode"].forEach((field) => {
+    ["year", "type", "level", "status1", "programcode", "institution", "department", "typeofsession"].forEach((field) => {
       if (text(req.query[field])) filter[field] = text(req.query[field]);
     });
     if (text(req.query.program)) filter.program = new RegExp(text(req.query.program).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
@@ -112,18 +121,24 @@ exports.getProgramOptions = async (req, res) => {
   try {
     const colid = numberColid(req.query.colid);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
-    const [years, types, levels, statuses] = await Promise.all([
+    const [years, types, levels, statuses, institutions, departments, sessionTypes] = await Promise.all([
       MPrograms.distinct("year", { colid }),
       MPrograms.distinct("type", { colid }),
       MPrograms.distinct("level", { colid }),
-      MPrograms.distinct("status1", { colid })
+      MPrograms.distinct("status1", { colid }),
+      MPrograms.distinct("institution", { colid }),
+      MPrograms.distinct("department", { colid }),
+      MPrograms.distinct("typeofsession", { colid })
     ]);
     res.json({
       success: true,
       years: years.filter(Boolean).sort(),
       types: types.filter(Boolean).sort(),
       levels: levels.filter(Boolean).sort(),
-      statuses: statuses.filter(Boolean).sort()
+      statuses: statuses.filter(Boolean).sort(),
+      institutions: institutions.filter(Boolean).sort(),
+      departments: departments.filter(Boolean).sort(),
+      sessionTypes: sessionTypes.filter(Boolean).sort()
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

@@ -42,6 +42,12 @@ const ledgerstudschema = new mongoose.Schema({
      balance: {
         type: Number
     },
+     Latefinedue: {
+        type: Number
+    },
+     Latefinepaid: {
+        type: Number
+    },
      cash: {
         type: Number
     },

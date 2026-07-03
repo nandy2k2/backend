@@ -216,6 +216,9 @@ const userschema = new mongoose.Schema({
     institution:{
         type: String
     },
+    Mediumofinstruction:{
+        type: String
+    },
     customFields: {
         type: Map,
         of: mongoose.Schema.Types.Mixed,

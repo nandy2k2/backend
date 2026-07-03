@@ -39,6 +39,10 @@ const feesschema = new mongoose.Schema({
         type: String,
         unique: false
     },
+    Medium: {
+        type: String,
+        unique: false
+    },
     feebook: {
         type: String,
         unique: false
