@@ -40,6 +40,11 @@ const coursePayload = (body = {}) => ({
   coursecode: text(body.coursecode),
   faculty: text(body.faculty || body.facultyname),
   facultyemail: text(body.facultyemail),
+  campus: text(body.campus),
+  building: text(body.building),
+  floor: text(body.floor),
+  roomid: text(body.roomid),
+  roomno: text(body.roomno),
   colid: Number(body.colid),
   user: text(body.user)
 });
@@ -84,6 +89,11 @@ const courseFilter = (source = {}) => {
     "coursecode",
     "faculty",
     "facultyemail",
+    "campus",
+    "building",
+    "floor",
+    "roomid",
+    "roomno",
     "classdate",
     "period",
     "resourcetype",

@@ -11,9 +11,11 @@ const workloadAssignmentSchema = new mongoose.Schema(
     semester: { type: String, trim: true, required: true },
     course: { type: String, trim: true, required: true },
     coursecode: { type: String, trim: true, required: true },
+    coursetype: { type: String, trim: true, default: "" },
     facultyname: { type: String, trim: true, required: true },
     facultyemail: { type: String, trim: true, required: true },
     facultydepartment: { type: String, trim: true },
+    hoursperweek: { type: Number, default: 0 },
     status: { type: String, trim: true, default: "Active" },
     colid: { type: Number, required: true, index: true },
     user: { type: String, trim: true }
@@ -30,6 +32,7 @@ workloadAssignmentSchema.index({
   subject: 1,
   semester: 1,
   coursecode: 1,
+  coursetype: 1,
   facultyemail: 1
 });
 

@@ -278,3 +278,146 @@ exports.applyFeesToStudents = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+function ledgerEntryFromFee(student, fee, reqBody = {}) {
+  const amount = toNumber(fee.amount) || 0;
+  const paid = 0;
+  const concession = 0;
+  return {
+    name: text(reqBody.name) || text(reqBody.user),
+    user: text(reqBody.user),
+    feegroup: fee.feegroup || "NA",
+    regno: student.regno || "NA",
+    student: student.name || "NA",
+    feeitem: fee.feeeitem || "NA",
+    amount,
+    paid,
+    concession,
+    balance: amount,
+    Latefinedue: 0,
+    Latefinepaid: 0,
+    cash: 0,
+    upi: 0,
+    cheque: 0,
+    card: 0,
+    pg: 0,
+    neft: 0,
+    feebook: fee.feebook || "",
+    feecounter: "",
+    paymode: "",
+    paydetails: "",
+    feecategory: fee.feecategory || student.category || "",
+    feetype: fee.feetype || "",
+    semester: fee.semester || student.semester || "",
+    cashbook: fee.cashbook || "",
+    institution: student.institution || "",
+    type: "positive",
+    installment: "",
+    comments: "Fees Application Auto",
+    academicyear: fee.academicyear || student.academicyear || student.admissionyear || "",
+    colid: student.colid,
+    classdate: new Date(),
+    duedate: fee.classdate || new Date(),
+    status: "Active",
+    programcode: fee.programcode || student.programcode || "",
+    admissionyear: student.admissionyear || fee.academicyear || "",
+    regulation: fee.regulation || student.regulation || "",
+    major: fee.major || student.Major || "",
+    minor: fee.minor || student.Minor || "",
+    feeid: String(fee._id)
+  };
+}
+
+function feeDuplicateKey(row = {}) {
+  return [
+    text(row.academicyear),
+    text(row.regulation),
+    text(row.programcode),
+    text(row.semester),
+    text(row.feegroup),
+    text(row.feeeitem || row.feeitem)
+  ].join("|").toLowerCase();
+}
+
+exports.getAutoFeesForStudent = async (req, res) => {
+  try {
+    const colid = toNumber(req.query.colid);
+    const studentId = text(req.query.studentId);
+    if (colid === undefined || !studentId) return res.status(400).json({ success: false, message: "colid and studentId are required" });
+
+    const student = await User.findOne({ _id: studentId, colid, role: /^Student$/i }).lean();
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+
+    const query = {
+      colid,
+      academicyear: student.academicyear || student.admissionyear || "",
+      regulation: student.regulation || "",
+      programcode: student.programcode || "",
+      semester: student.semester || ""
+    };
+    const fees = await Fees.find(query)
+      .select("program programcode regulation major minor IDC gender Medium feegroup semester feeeitem academicyear feecategory feetype feebook cashbook classdate amount colid status")
+      .sort({ feegroup: 1, feeeitem: 1 })
+      .lean();
+    const existing = await Ledgerstud.find({ colid, regno: student.regno })
+      .select("feeid academicyear regulation programcode semester feegroup feeitem")
+      .lean();
+    const existingFeeIds = new Set(existing.map((row) => text(row.feeid)).filter(Boolean));
+    const existingKeys = new Set(existing.map(feeDuplicateKey));
+    const data = fees.map((fee) => ({
+      ...fee,
+      alreadyApplied: existingFeeIds.has(String(fee._id)) || existingKeys.has(feeDuplicateKey(fee))
+    }));
+
+    res.json({ success: true, student, data, query });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.applyAutoFeesToStudent = async (req, res) => {
+  try {
+    const colid = toNumber(req.body.colid);
+    const studentId = text(req.body.studentId);
+    const feeIds = Array.isArray(req.body.feeIds) ? req.body.feeIds.filter(Boolean) : [];
+    if (colid === undefined || !studentId || !feeIds.length) {
+      return res.status(400).json({ success: false, message: "Select student and fee items" });
+    }
+
+    const [student, fees] = await Promise.all([
+      User.findOne({ _id: studentId, colid, role: /^Student$/i }).lean(),
+      Fees.find({ _id: { $in: feeIds }, colid }).lean()
+    ]);
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+    if (!fees.length) return res.status(400).json({ success: false, message: "No fee items found" });
+
+    const existing = await Ledgerstud.find({
+      colid,
+      regno: student.regno,
+      $or: [
+        { feeid: { $in: fees.map((fee) => String(fee._id)) } },
+        {
+          academicyear: { $in: fees.map((fee) => fee.academicyear || student.academicyear || student.admissionyear || "") },
+          regulation: student.regulation || "",
+          programcode: student.programcode || "",
+          semester: { $in: fees.map((fee) => fee.semester || student.semester || "") },
+          feegroup: { $in: fees.map((fee) => fee.feegroup || "NA") },
+          feeitem: { $in: fees.map((fee) => fee.feeeitem || "NA") }
+        }
+      ]
+    }).select("feeid academicyear regulation programcode semester feegroup feeitem").lean();
+    const existingFeeIds = new Set(existing.map((row) => text(row.feeid)).filter(Boolean));
+    const existingKeys = new Set(existing.map(feeDuplicateKey));
+    const newFees = fees.filter((fee) => !existingFeeIds.has(String(fee._id)) && !existingKeys.has(feeDuplicateKey(fee)));
+    if (!newFees.length) {
+      return res.json({ success: true, inserted: 0, skipped: fees.length, message: "Selected fee item(s) are already applied to this student" });
+    }
+
+    const entries = newFees.map((fee) => ledgerEntryFromFee(student, fee, req.body));
+    const data = await Ledgerstud.insertMany(entries, { ordered: false });
+    const skipped = fees.length - data.length;
+    res.json({ success: true, inserted: data.length, skipped, message: `${data.length} fee item(s) applied to ${student.name}${skipped ? `, ${skipped} duplicate item(s) skipped` : ""}` });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

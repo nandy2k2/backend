@@ -18,6 +18,8 @@ const fields = [
   'programcode',
   'Mediumofinstruction',
   'regulation',
+  'specialization1',
+  'specialization2',
   'Major',
   'Minor',
   'AEC',
@@ -51,12 +53,22 @@ const geminiModels = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-f
 
 const randomPassword = (length = 10) => {
   const size = Math.max(6, Math.min(32, Number(length) || 10));
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*';
-  let password = '';
-  for (let index = 0; index < size; index += 1) {
-    password += chars[Math.floor(Math.random() * chars.length)];
+  const groups = [
+    'ABCDEFGHJKLMNPQRSTUVWXYZ',
+    'abcdefghijkmnopqrstuvwxyz',
+    '23456789',
+    '!@#$%&*'
+  ];
+  const allChars = groups.join('');
+  const chars = groups.map((group) => group[Math.floor(Math.random() * group.length)]);
+  for (let index = chars.length; index < size; index += 1) {
+    chars.push(allChars[Math.floor(Math.random() * allChars.length)]);
   }
-  return password;
+  for (let index = chars.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [chars[index], chars[swapIndex]] = [chars[swapIndex], chars[index]];
+  }
+  return chars.join('');
 };
 
 const scholarYearCode = (academicYear) => {
@@ -100,6 +112,8 @@ const valueFromBody = (body, field) => {
     Major: ['Major', 'major'],
     Minor: ['Minor', 'minor'],
     Mediumofinstruction: ['Mediumofinstruction', 'mediumofinstruction', 'medium of instruction'],
+    specialization1: ['specialization1', 'specialization 1', 'specialisation1', 'specialisation 1'],
+    specialization2: ['specialization2', 'specialization 2', 'specialisation2', 'specialisation 2'],
     MDC: ['MDC', 'mdc', 'mdcsub'],
     mdc: ['mdc', 'MDC', 'mdcsub'],
     mdcsub: ['mdcsub', 'MDC', 'mdc']
@@ -131,6 +145,8 @@ const buildPayload = (body = {}) => {
     programcode: clean(body.programcode) || 'NA',
     Mediumofinstruction: clean(valueFromBody(body, 'Mediumofinstruction')) || 'NA',
     regulation: clean(body.regulation) || 'NA',
+    specialization1: clean(valueFromBody(body, 'specialization1')) || '',
+    specialization2: clean(valueFromBody(body, 'specialization2')) || '',
     Major: clean(valueFromBody(body, 'Major')) || 'NA',
     Minor: clean(valueFromBody(body, 'Minor')) || 'NA',
     AEC: clean(body.AEC || body.aec) || 'NA',
@@ -493,6 +509,28 @@ exports.bulkUpdateSelectedSubjects = async (req, res) => {
       { $set: update }
     );
     res.json({ msg: 'Selected students updated', matched: result.matchedCount || 0, modified: result.modifiedCount || 0 });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+exports.updateStudentSpecialization = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const id = clean(req.body.id);
+    const target = clean(req.body.target);
+    const specialization = clean(req.body.specialization);
+    if (!colid) return res.status(400).json({ msg: 'colid is required' });
+    if (!id) return res.status(400).json({ msg: 'Student is required' });
+    if (!['specialization1', 'specialization2'].includes(target)) return res.status(400).json({ msg: 'Select Specialization 1 or Specialization 2' });
+    if (!specialization) return res.status(400).json({ msg: 'Select specialization' });
+    const data = await User.findOneAndUpdate(
+      { _id: id, ...colidFilter(colid) },
+      { $set: { [target]: specialization } },
+      { new: true, runValidators: true }
+    );
+    if (!data) return res.status(404).json({ msg: 'Student not found' });
+    res.json(serialize(data));
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }

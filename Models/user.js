@@ -219,6 +219,12 @@ const userschema = new mongoose.Schema({
     Mediumofinstruction:{
         type: String
     },
+    specialization1:{
+        type: String
+    },
+    specialization2:{
+        type: String
+    },
     customFields: {
         type: Map,
         of: mongoose.Schema.Types.Mixed,

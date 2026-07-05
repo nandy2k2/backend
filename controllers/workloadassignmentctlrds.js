@@ -11,6 +11,11 @@ const toNumber = (value) => {
 
 const text = (value) => String(value || "").trim();
 
+const numeric = (value) => {
+  const parsed = toNumber(value);
+  return parsed === undefined ? 0 : parsed;
+};
+
 const cleanPayload = (input = {}) => ({
   academicyear: text(input.academicyear || input.academicYear),
   regulation: text(input.regulation),
@@ -21,9 +26,11 @@ const cleanPayload = (input = {}) => ({
   semester: text(input.semester),
   course: text(input.course),
   coursecode: text(input.coursecode),
+  coursetype: text(input.coursetype || input.courseType || input["Course Type"]),
   facultyname: text(input.facultyname || input.facultyName),
   facultyemail: text(input.facultyemail || input.facultyEmail),
   facultydepartment: text(input.facultydepartment || input.department || input.facultyDepartment),
+  hoursperweek: numeric(input.hoursperweek || input.hoursPerWeek || input["hours per week"] || input.HoursPerWeek || input["Hours Per Week"]),
   status: text(input.status) || "Active",
   colid: toNumber(input.colid),
   user: text(input.user)
@@ -59,6 +66,7 @@ const buildQuery = (source = {}) => {
     "semester",
     "course",
     "coursecode",
+    "coursetype",
     "facultyname",
     "facultyemail",
     "facultydepartment",
@@ -126,7 +134,8 @@ exports.getWorkloadAssignmentOptions = async (req, res) => {
           subject: item.subject || "",
           semester: item.semester || "",
           course: item.course || "",
-          coursecode: item.coursecode || ""
+          coursecode: item.coursecode || "",
+          coursetype: item.coursetype || ""
         });
       }
     });
