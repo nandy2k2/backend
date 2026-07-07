@@ -5,6 +5,10 @@ const GradeConfiguration = require("../Models/gradeconfigurationds");
 const RelativeGradingConfiguration = require("../Models/relativegradingconfigurationds");
 const ZScoreConfiguration = require("../Models/zscoreconfigurationds");
 const User = require("../Models/user");
+const NepLmsAttendance = require("../Models/neplmsattendanceds");
+const ProgramwiseMarksheetConfiguration = require("../Models/programwisemarksheetconfigurationds");
+const AiConfiguration = require("../Models/aiconfigurationds");
+const OllamaConfiguration = require("../Models/ollamaconfigurationds");
 const BlockchainLedger = require("../Models/blockchainledgerds");
 const { appendBlock } = require("./blockchainledgerctlrds");
 const crypto = require("crypto");
@@ -40,6 +44,92 @@ const buildBlockchainHash = ({ colid, blockindex, modelname, collectionname, rec
   timestamp,
   user
 }));
+
+const defaultMarksheetConfig = {
+  programnamedisplay: "Full",
+  course: "Yes",
+  coursecode: "Yes",
+  internal: "Yes",
+  external: "Yes",
+  total: "Yes",
+  grade: "Yes",
+  credits: "Yes",
+  backlogindicator: "Yes",
+  attendance: "No",
+  signature: "Yes",
+  qrcodeposition: "bottomright",
+  watermark: "Original",
+  language: "English"
+};
+
+const gradeCardVerificationUrl = ({ origin = "", colid, regno, student = "", hash = "" }) => {
+  if (!origin) return "";
+  const params = new URLSearchParams();
+  if (student) params.set("student", student);
+  if (regno) params.set("regno", regno);
+  if (colid !== undefined) params.set("colid", String(colid));
+  if (hash) params.set("hash", hash);
+  return `${origin}/verify-grade-card-blockchain?${params.toString()}`;
+};
+
+const loadAdvancedGradeCardPayload = async ({ colid, regno, semester }) => {
+  const payload = await buildGradeCardPayload({ colid, regno, semester });
+  if (!payload.student) return payload;
+  const marks = Array.isArray(payload.marks) ? payload.marks : [];
+  const courseCodes = marks.map((row) => text(row.coursecode)).filter(Boolean);
+  const attendanceRows = courseCodes.length
+    ? await NepLmsAttendance.find({ colid, regno, semester, coursecode: { $in: courseCodes } }).lean()
+    : [];
+  const attendanceMap = new Map();
+  attendanceRows.forEach((row) => {
+    const key = text(row.coursecode);
+    const item = attendanceMap.get(key) || {
+      course: row.course || "",
+      coursecode: key,
+      totalclasses: 0,
+      present: 0,
+      absent: 0,
+      percentage: 0
+    };
+    item.totalclasses += 1;
+    if (Number(row.attendance) === 1) item.present += 1;
+    else item.absent += 1;
+    item.percentage = item.totalclasses ? Number(((item.present / item.totalclasses) * 100).toFixed(2)) : 0;
+    attendanceMap.set(key, item);
+  });
+  const attendance = marks.map((mark) => {
+    const key = text(mark.coursecode);
+    return attendanceMap.get(key) || {
+      course: mark.course || "",
+      coursecode: key,
+      totalclasses: 0,
+      present: 0,
+      absent: 0,
+      percentage: 0
+    };
+  });
+  const backlog = (payload.allMarks || []).filter((row) => normalizePassStatus(row.passstatus) === "Fail").map((row) => ({
+    academicyear: row.academicyear || "",
+    semester: row.semester || "",
+    course: row.course || "",
+    coursecode: row.coursecode || "",
+    total: row.total || 0,
+    grade: row.grade || "",
+    passstatus: row.passstatus || "Fail"
+  }));
+  const config = await ProgramwiseMarksheetConfiguration.findOne({
+    colid,
+    academicyear: payload.student.academicyear || "",
+    regulation: payload.student.regulation || "",
+    programcode: payload.student.programcode || ""
+  }).lean();
+  return {
+    ...payload,
+    attendance,
+    backlog,
+    marksheetconfiguration: { ...defaultMarksheetConfig, ...(config || {}) }
+  };
+};
 
 const buildFinalMarkPayload = (source = {}, colid, user = "") => {
   const internalmarks = toNumber(source.internalmarks) || 0;
@@ -1004,6 +1094,153 @@ exports.storeGradeCardOnBlockchain = async (req, res) => {
   }
 };
 
+exports.getAdvancedGradeCard = async (req, res) => {
+  try {
+    const colid = toNumber(req.query.colid);
+    const regno = text(req.query.regno);
+    const semester = text(req.query.semester);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!regno) return res.status(400).json({ success: false, message: "regno is required" });
+    if (!semester) return res.status(400).json({ success: false, message: "semester is required" });
+    const payload = await loadAdvancedGradeCardPayload({ colid, regno, semester });
+    if (!payload.student) return res.status(404).json({ success: false, message: "Student not found" });
+    res.json({ success: true, ...payload });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getAdvancedGradeCardAiOptions = async (req, res) => {
+  try {
+    const colid = toNumber(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const [gemini, ollama] = await Promise.all([
+      AiConfiguration.find({ colid, type: /^gemini$/i, active: /^yes$/i }).select("description default").lean(),
+      OllamaConfiguration.find({ colid, active: /^yes$/i }).select("name serveraddress modelname default").lean()
+    ]);
+    res.json({
+      success: true,
+      geminiModels: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash"],
+      geminiConfigured: gemini.length > 0,
+      ollama
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+async function callGeminiForGradeCard({ colid, model, prompt }) {
+  const config = await AiConfiguration.findOne({ colid, type: /^gemini$/i, active: /^yes$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
+    || await AiConfiguration.findOne({ colid, type: /^gemini$/i, active: /^yes$/i }).sort({ _id: -1 }).lean();
+  if (!config?.apikey) throw new Error("Gemini API key is not configured");
+  const selectedModel = text(model) || "gemini-2.5-flash";
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(selectedModel)}:generateContent?key=${encodeURIComponent(config.apikey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.2 }
+    })
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || "Gemini formatting failed");
+  return data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("\n") || "";
+}
+
+async function callOllamaForGradeCard({ colid, ollamaId, prompt }) {
+  const config = ollamaId
+    ? await OllamaConfiguration.findOne({ _id: ollamaId, colid, active: /^yes$/i }).lean()
+    : await OllamaConfiguration.findOne({ colid, active: /^yes$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
+      || await OllamaConfiguration.findOne({ colid, active: /^yes$/i }).sort({ _id: -1 }).lean();
+  if (!config?.serveraddress || !config?.modelname) throw new Error("Ollama configuration is not available");
+  const response = await fetch(`${config.serveraddress.replace(/\/$/, "")}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: config.modelname, prompt, stream: false })
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Ollama formatting failed");
+  return data.response || "";
+}
+
+const extractHtml = (value = "") => text(value).replace(/^```html\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
+
+exports.formatAdvancedGradeCard = async (req, res) => {
+  try {
+    const colid = toNumber(req.body.colid);
+    const payload = req.body.gradecard || {};
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!payload.student?.regno) return res.status(400).json({ success: false, message: "grade card data is required" });
+    const provider = text(req.body.provider || "Gemini");
+    const rules = text(req.body.rules);
+    const prompt = `
+Create a polished A4 printable marksheet HTML fragment for the following grade card data.
+Return only HTML inside one wrapping <div>; no markdown, no script tags.
+Use compact professional styling suitable for international academic records.
+Follow this programwise marksheet configuration strictly:
+${JSON.stringify(payload.marksheetconfiguration || {}, null, 2)}
+Additional user rules:
+${rules || "Use a clean official university style. Include attendance and backlog sections if data exists."}
+Grade card data:
+${JSON.stringify(payload, null, 2)}
+`;
+    const html = /^ollama$/i.test(provider)
+      ? await callOllamaForGradeCard({ colid, ollamaId: req.body.ollamaId, prompt })
+      : await callGeminiForGradeCard({ colid, model: req.body.geminiModel, prompt });
+    res.json({ success: true, html: extractHtml(html) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.storeAdvancedGradeCardOnBlockchain = async (req, res) => {
+  try {
+    const colid = toNumber(req.body.colid);
+    const regno = text(req.body.regno);
+    const semester = text(req.body.semester);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!regno) return res.status(400).json({ success: false, message: "regno is required" });
+    if (!semester) return res.status(400).json({ success: false, message: "semester is required" });
+
+    const payload = req.body.gradecard?.student?.regno
+      ? req.body.gradecard
+      : await loadAdvancedGradeCardPayload({ colid, regno, semester });
+    if (!payload.student) return res.status(404).json({ success: false, message: "Student not found" });
+    if (!Array.isArray(payload.marks) || !payload.marks.length) return res.status(400).json({ success: false, message: "No final marks found for this semester" });
+
+    const block = await appendBlock({
+      colid,
+      modelname: "neplmsadvancedgradecard",
+      collectionname: "neplmsfinalmarksds",
+      recordid: `${regno}::${semester}::advanced`,
+      action: "ADVANCED_GRADE_CARD_STORE",
+      payload: {
+        ...payload,
+        formattedHtml: req.body.formattedHtml || payload.formattedHtml || "",
+        storedAt: new Date().toISOString()
+      },
+      metadata: {
+        regno,
+        student: payload.student.name || "",
+        semester,
+        academicyear: payload.student.academicyear || "",
+        programcode: payload.student.programcode || ""
+      },
+      user: text(req.body.user)
+    });
+    const verificationurl = gradeCardVerificationUrl({
+      origin: text(req.body.origin),
+      colid,
+      regno,
+      student: payload.student.name || "",
+      hash: block.hash
+    });
+    res.json({ success: true, message: "Advanced grade card stored in blockchain", data: { ...block.toObject(), verificationurl } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.verifyGradeCardFromBlockchain = async (req, res) => {
   try {
     const regno = text(req.query.regno);
@@ -1012,11 +1249,13 @@ exports.verifyGradeCardFromBlockchain = async (req, res) => {
     if (!regno) return res.status(400).json({ success: false, message: "regno is required" });
     if (!studentName) return res.status(400).json({ success: false, message: "student name is required" });
 
+    const hash = text(req.query.hash);
     const query = {
-      modelname: "neplmsgradecard",
+      modelname: { $in: ["neplmsgradecard", "neplmsadvancedgradecard"] },
       recordid: { $regex: `^${regno.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}::`, $options: "i" }
     };
     if (colid !== undefined) query.colid = colid;
+    if (hash) query.hash = hash;
 
     const blocks = await BlockchainLedger.find(query).sort({ timestamp: -1 }).lean();
     const matches = [];

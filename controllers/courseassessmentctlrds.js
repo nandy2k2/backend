@@ -1,6 +1,8 @@
 const CourseAssessment = require("../Models/courseassessmentds");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
 const RegulationSubject = require("../Models/regulationsubjectds");
+const AiConfiguration = require("../Models/aiconfigurationds");
+const OllamaConfiguration = require("../Models/ollamaconfigurationds");
 
 const allowedTypes = new Set(["Major", "Minor"]);
 const allowedGroupTypes = new Set(["Best", "Average"]);
@@ -64,6 +66,50 @@ const buildQuery = (source = {}) => {
 
 const uniq = (items) => [...new Set(items.map(text).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
+const geminiModels = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash"];
+
+const readGeminiText = (payload = {}) => (
+  payload.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("\n").trim() || ""
+);
+
+const getDefaultGeminiConfig = async (colid) => (
+  await AiConfiguration.findOne({ colid, type: /^gemini$/i, active: /^yes$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
+  || await AiConfiguration.findOne({ colid, type: /^gemini$/i, active: /^yes$/i }).sort({ _id: -1 }).lean()
+);
+
+const callGeminiText = async ({ colid, model, prompt }) => {
+  const config = await getDefaultGeminiConfig(colid);
+  if (!config?.apikey) throw new Error("Default active Gemini configuration is missing");
+  const selectedModel = text(model) || "gemini-2.5-flash";
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(selectedModel)}:generateContent?key=${encodeURIComponent(config.apikey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.15 }
+    })
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || "Gemini validation failed");
+  return readGeminiText(data) || "Gemini did not return validation text.";
+};
+
+const callOllamaText = async ({ colid, ollamaId, prompt }) => {
+  const config = ollamaId
+    ? await OllamaConfiguration.findOne({ _id: ollamaId, colid, active: /^yes$/i }).lean()
+    : await OllamaConfiguration.findOne({ colid, active: /^yes$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
+      || await OllamaConfiguration.findOne({ colid, active: /^yes$/i }).sort({ _id: -1 }).lean();
+  if (!config?.serveraddress || !config?.modelname) throw new Error("Active Ollama configuration is missing");
+  const response = await fetch(`${config.serveraddress.replace(/\/$/, "")}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: config.modelname, prompt, stream: false })
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Ollama validation failed");
+  return data.response || "Ollama did not return validation text.";
+};
+
 exports.getCourseAssessmentOptions = async (req, res) => {
   try {
     const colid = toNumber(req.query.colid);
@@ -98,6 +144,11 @@ exports.getCourseAssessmentOptions = async (req, res) => {
     courseMaps.forEach((item) => {
       if (item.coursecode) courseMap.set(item.coursecode, {
         _id: item._id,
+        academicyear: item.academicyear || "",
+        regulation: item.regulation || "",
+        program: item.program || "",
+        programcode: item.programcode || "",
+        type: item.type || "",
         course: item.course || "",
         coursecode: item.coursecode || "",
         subject: item.subject || "",
@@ -120,6 +171,134 @@ exports.getCourseAssessmentOptions = async (req, res) => {
       scoretypes: Array.from(allowedScoreTypes),
       assessmentcomponents: uniq(assessments.map((item) => item.assessmentcomponent))
     });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getCourseAssessmentAiOptions = async (req, res) => {
+  try {
+    const colid = toNumber(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const [gemini, ollama] = await Promise.all([
+      AiConfiguration.find({ colid, type: /^gemini$/i, active: /^yes$/i }).select("description default").lean(),
+      OllamaConfiguration.find({ colid, active: /^yes$/i }).select("name serveraddress modelname default").lean()
+    ]);
+    res.json({ success: true, geminiConfigured: gemini.length > 0, geminiModels, ollama });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.validateProgramCourseAssessmentWithAi = async (req, res) => {
+  try {
+    const colid = toNumber(req.body.colid);
+    const academicyear = text(req.body.academicyear);
+    const programcode = text(req.body.programcode);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!academicyear) return res.status(400).json({ success: false, message: "Academic year is required" });
+    if (!programcode) return res.status(400).json({ success: false, message: "Program code is required" });
+
+    const courseQuery = { colid, academicyear, programcode };
+    const assessmentQuery = { colid, academicyear, programcode };
+    if (req.body.regulation) {
+      courseQuery.regulation = text(req.body.regulation);
+      assessmentQuery.regulation = text(req.body.regulation);
+    }
+
+    const [courses, assessments] = await Promise.all([
+      RegulationCourseMap.find(courseQuery).sort({ regulation: 1, semester: 1, coursecode: 1 }).lean(),
+      CourseAssessment.find(assessmentQuery).sort({ regulation: 1, semester: 1, coursecode: 1, assessmentgroup: 1, scoretype: 1 }).lean()
+    ]);
+    if (!courses.length && !assessments.length) return res.status(404).json({ success: false, message: "No course or assessment data found for selected program and year" });
+
+    const assessmentMap = new Map();
+    assessments.forEach((row) => {
+      const key = text(row.coursecode);
+      if (!assessmentMap.has(key)) assessmentMap.set(key, []);
+      assessmentMap.get(key).push({
+        assessmentgroup: row.assessmentgroup || "",
+        grouptype: row.grouptype || "",
+        scoretype: row.scoretype || "",
+        assessmentcomponent: row.assessmentcomponent || "",
+        marks: row.marks || 0,
+        passmarks: row.passmarks || 0,
+        weightage: row.weightage || 0,
+        credits: row.credits || 0,
+        status: row.status || ""
+      });
+    });
+
+    const courseMap = new Map();
+    courses.forEach((course) => {
+      const key = text(course.coursecode);
+      if (key && !courseMap.has(key)) {
+        courseMap.set(key, {
+          academicyear: course.academicyear || "",
+          regulation: course.regulation || "",
+          program: course.program || "",
+          programcode: course.programcode || "",
+          type: course.type || "",
+          subject: course.subject || "",
+          semester: course.semester || "",
+          course: course.course || "",
+          coursecode: key,
+          credits: course.credit || course.credits || 0
+        });
+      }
+    });
+    assessments.forEach((row) => {
+      const key = text(row.coursecode);
+      if (key && !courseMap.has(key)) {
+        courseMap.set(key, {
+          academicyear: row.academicyear || "",
+          regulation: row.regulation || "",
+          program: row.program || "",
+          programcode: row.programcode || "",
+          type: row.type || "",
+          subject: row.subject || "",
+          semester: row.semester || "",
+          course: row.course || "",
+          coursecode: key,
+          credits: row.credits || 0
+        });
+      }
+    });
+
+    const courseSummaries = [...courseMap.values()].map((course) => ({
+      ...course,
+      assessments: assessmentMap.get(course.coursecode) || []
+    }));
+    const rules = text(req.body.rules);
+    const prompt = `
+You are validating course assessment schemes for every course in one academic program.
+Check the data against the user rules and normal academic best practices.
+Pay special attention to:
+- missing assessment schemes for mapped courses
+- internal/external assessment components
+- total marks, pass marks and weightage consistency
+- whether weightage totals are appropriate for each course
+- group type logic such as Best/Average
+- score type consistency
+- duplicate or conflicting assessment components
+- credit mismatch between course map and assessment rows
+
+Program scope:
+${JSON.stringify({ academicyear, regulation: assessmentQuery.regulation || "Any", programcode }, null, 2)}
+
+Validation rules given by user:
+${rules || "For each course, assessment components should be complete, weightage should normally total 100, pass marks should not exceed marks, and internal/external score types should be clear."}
+
+Course and assessment data:
+${JSON.stringify(courseSummaries, null, 2)}
+
+Return a concise report with sections: Overall Status, Coursewise Issues, Missing Assessments, Weightage/Marks Issues, Recommendations.
+`;
+    const provider = text(req.body.provider || "Gemini");
+    const report = /^ollama$/i.test(provider)
+      ? await callOllamaText({ colid, ollamaId: req.body.ollamaId, prompt })
+      : await callGeminiText({ colid, model: req.body.geminiModel, prompt });
+    res.json({ success: true, report, courses: courseSummaries });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

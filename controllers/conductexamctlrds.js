@@ -214,6 +214,12 @@ const rollPayload = (body = {}) => ({
   applied: text(body.applied) || "Yes",
   admitcardeligible: text(body.admitcardeligible) || "Yes",
   attended: text(body.attended) || "No",
+  attendance: text(body.attendance),
+  fees: text(body.fees),
+  disciplinary: text(body.disciplinary),
+  noofbacklogs: number(body.noofbacklogs || body.noOfBacklogs || body["No of Backlogs"]) || 0,
+  atkt: text(body.atkt),
+  remarks: text(body.remarks),
   examdate: text(body.examdate),
   examslot: text(body.examslot),
   campus: text(body.campus),
@@ -585,7 +591,7 @@ exports.getCourseMapOptions = async (req, res) => {
 
 exports.getExamRolls = async (req, res) => {
   try {
-    const filter = buildFilter(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "student", "regno", "email", "phone", "section", "applied", "admitcardeligible", "attended", "examdate", "examslot", "campus", "building", "examroom", "seatno"]);
+    const filter = buildFilter(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "student", "regno", "email", "phone", "section", "applied", "admitcardeligible", "attended", "attendance", "fees", "disciplinary", "noofbacklogs", "atkt", "remarks", "examdate", "examslot", "campus", "building", "examroom", "seatno"]);
     if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const data = await ConductExamRoll.find(filter).sort({ program: 1, semester: 1, course: 1, regno: 1 }).lean();
     res.json({ success: true, data });
