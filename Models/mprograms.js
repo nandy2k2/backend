@@ -38,6 +38,9 @@ type: String
 durationinyear: {
 type: Number
 },
+totalcredits: {
+type: Number
+},
 typeofsession: {
 type: String
 },

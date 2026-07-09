@@ -13,6 +13,8 @@ const programPayload = (body = {}) => {
   const parsedOrder = orderValue === '' || orderValue === undefined || orderValue === null ? 0 : Number(orderValue);
   const durationValue = body.durationinyear ?? body.durationInYear ?? body["duration in year"] ?? body.DurationInYear ?? body["Duration in year"];
   const parsedDuration = durationValue === '' || durationValue === undefined || durationValue === null ? 0 : Number(durationValue);
+  const totalCreditsValue = body.totalcredits ?? body.totalCredits ?? body["total credits"] ?? body.TotalCredits ?? body["Total credits"];
+  const parsedTotalCredits = totalCreditsValue === '' || totalCreditsValue === undefined || totalCreditsValue === null ? 0 : Number(totalCreditsValue);
   return {
     name: text(body.name || program),
     user: text(body.user),
@@ -25,6 +27,7 @@ const programPayload = (body = {}) => {
     institution: text(body.institution || body.Institution),
     department: text(body.department || body.Department),
     durationinyear: Number.isNaN(parsedDuration) ? 0 : parsedDuration,
+    totalcredits: Number.isNaN(parsedTotalCredits) ? 0 : parsedTotalCredits,
     typeofsession: text(body.typeofsession || body.typeOfSession || body["type of session"] || body.TypeOfSession || body["Type of session"]),
     introductionyear: text(body.introductionyear || body.introductionYear || body["introduction year"] || body.IntroductionYear || body["Introduction year"]),
     discontinueyear: text(body.discontinueyear || body.discontinueYear || body["discontinue year"] || body.DiscontinueYear || body["Discontinue year"]),

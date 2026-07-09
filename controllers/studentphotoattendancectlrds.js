@@ -74,6 +74,7 @@ const uploadToAws = async ({ colid, buffer, originalname, mimetype, folder }) =>
 };
 
 const studentSelect = "name email phone regno admissionyear academicyear program programcode regulation Major Minor semester section category gender department photo colid status role";
+const userSelect = "name email user phone regno admissionyear academicyear program programcode regulation Major Minor semester section category gender department designation institution photo colid status role";
 
 const studentQueryFrom = (source = {}) => {
   const colid = number(source.colid);
@@ -250,6 +251,78 @@ exports.uploadStudentPhoto = async (req, res) => {
       { new: true }
     ).select(studentSelect).lean();
     if (!data) return res.status(404).json({ success: false, message: "Student not found" });
+    res.json({ success: true, data, url: uploaded.url });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.searchUsersForPhoto = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const query = { colid };
+    [
+      "role", "admissionyear", "academicyear", "program", "programcode", "regulation",
+      "Major", "Minor", "semester", "section", "category", "gender", "department", "designation"
+    ].forEach((field) => {
+      if (text(req.query[field])) query[field] = text(req.query[field]);
+    });
+    ["name", "email", "phone", "regno"].forEach((field) => {
+      if (text(req.query[field])) query[field] = new RegExp(escapeRegex(text(req.query[field])), "i");
+    });
+    const data = await User.find(query).select(userSelect).sort({ name: 1, email: 1 }).limit(1000).lean();
+    const optionFields = [
+      "role", "admissionyear", "academicyear", "program", "programcode", "regulation",
+      "Major", "Minor", "semester", "section", "category", "gender", "department",
+      "designation", "name", "email", "phone", "regno"
+    ];
+    const options = {};
+    await Promise.all(optionFields.map(async (field) => {
+      const querySource = { ...req.query, [field]: "" };
+      const optionQuery = { colid };
+      [
+        "role", "admissionyear", "academicyear", "program", "programcode", "regulation",
+        "Major", "Minor", "semester", "section", "category", "gender", "department", "designation"
+      ].forEach((item) => {
+        if (text(querySource[item])) optionQuery[item] = text(querySource[item]);
+      });
+      ["name", "email", "phone", "regno"].forEach((item) => {
+        if (text(querySource[item])) optionQuery[item] = new RegExp(escapeRegex(text(querySource[item])), "i");
+      });
+      const rows = await User.find(optionQuery).select(field).sort({ [field]: 1 }).limit(1000).lean();
+      options[field] = [...new Set(rows.map((row) => text(row[field])).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    }));
+    res.json({ success: true, data, options });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.uploadUserPhoto = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const userid = text(req.body.userid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!userid) return res.status(400).json({ success: false, message: "userid is required" });
+    if (!req.file) return res.status(400).json({ success: false, message: "Photo file is required" });
+    if (!/^image\//i.test(req.file.mimetype || "")) {
+      return res.status(400).json({ success: false, message: "Only image files are allowed" });
+    }
+    const uploaded = await uploadToAws({
+      colid,
+      buffer: req.file.buffer,
+      originalname: req.file.originalname,
+      mimetype: req.file.mimetype,
+      folder: "user-photos"
+    });
+    const data = await User.findOneAndUpdate(
+      { _id: userid, colid },
+      { photo: uploaded.url },
+      { new: true }
+    ).select(userSelect).lean();
+    if (!data) return res.status(404).json({ success: false, message: "User not found" });
     res.json({ success: true, data, url: uploaded.url });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

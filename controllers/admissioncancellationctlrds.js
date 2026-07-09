@@ -75,8 +75,10 @@ const summaryTotals = (rows) => rows.reduce((sum, row) => ({
   amount: sum.amount + Number(row.amount || 0),
   paid: sum.paid + Number(row.paid || 0),
   refunded: sum.refunded + Number(row.refunded || 0),
+  administrativecharges: sum.administrativecharges + Number(row.administrativecharges || 0),
+  netrefund: sum.netrefund + Number(row.netrefund || row.refunded || 0),
   count: sum.count + 1
-}), { amount: 0, paid: 0, refunded: 0, count: 0 });
+}), { amount: 0, paid: 0, refunded: 0, administrativecharges: 0, netrefund: 0, count: 0 });
 
 exports.getStudentOptions = async (req, res) => {
   try {
@@ -144,6 +146,7 @@ exports.saveCancellation = async (req, res) => {
     const refunddate = req.body.refunddate ? new Date(req.body.refunddate) : new Date();
     const refundmode = clean(req.body.refundmode);
     const refundrefno = clean(req.body.refundrefno);
+    const administrativecharges = Math.max(0, Number(req.body.administrativecharges || 0));
 
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     if (!regno) return res.status(400).json({ success: false, message: "Please select a student" });
@@ -157,7 +160,15 @@ exports.saveCancellation = async (req, res) => {
     const user = await User.findOne({ colid, regno, role: { $regex: /^Student$/i } }).lean();
     if (!user) return res.status(404).json({ success: false, message: "Student not found" });
 
-    const docs = validRefunds.map((row) => ({
+    const grossRefund = validRefunds.reduce((sum, row) => sum + Number(row.refunded || 0), 0);
+    const totalCharges = Math.min(administrativecharges, grossRefund);
+    const docs = validRefunds.map((row, index) => {
+      const refunded = Number(row.refunded || 0);
+      const proportionalCharge = grossRefund > 0 ? (refunded / grossRefund) * totalCharges : 0;
+      const rowCharge = index === validRefunds.length - 1
+        ? totalCharges - validRefunds.slice(0, index).reduce((sum, item) => sum + (grossRefund > 0 ? (Number(item.refunded || 0) / grossRefund) * totalCharges : 0), 0)
+        : proportionalCharge;
+      return ({
       academicyear: clean(user.academicyear || row.academicyear),
       regulation: clean(user.regulation || row.regulation),
       major: clean(user.Major || row.major),
@@ -174,7 +185,10 @@ exports.saveCancellation = async (req, res) => {
       feeitem: clean(row.feeitem),
       amount: Number(row.amount || 0),
       paid: Number(row.paid || 0),
-      refunded: Number(row.refunded || 0),
+      refunded,
+      grossrefund: refunded,
+      administrativecharges: Math.round(rowCharge * 100) / 100,
+      netrefund: Math.max(0, Math.round((refunded - rowCharge) * 100) / 100),
       refunddate,
       refundmode,
       refundrefno,
@@ -182,7 +196,8 @@ exports.saveCancellation = async (req, res) => {
       colid,
       createdby: clean(req.body.createdby),
       createdname: clean(req.body.createdname)
-    }));
+    });
+    });
 
     await AdmissionRefund.insertMany(docs);
     await User.updateOne({ _id: user._id, colid }, { $set: { status: 0, status1: "Admission Cancelled" } });

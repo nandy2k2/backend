@@ -29,6 +29,9 @@ const userschema = new mongoose.Schema({
     scholarnumber: {
         type: String
     },
+    abcid: {
+        type: String
+    },
     program: {
         type: String
     },
