@@ -1,4 +1,6 @@
 const ExamMarks = require("../Models/examinationmodel2marksds");
+const GradingTemplate = require("../Models/exammodel2gradingtemplateds");
+const GradingTemplateDetail = require("../Models/exammodel2gradingtemplatedetailds");
 const User = require("../Models/user");
 const MPrograms = require("../Models/mprograms");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
@@ -21,15 +23,17 @@ const percent = (obtained, total) => number(total) ? Number(((number(obtained) /
 
 const markFields = [
   "academicyear", "regulation", "exam", "examcode", "program", "programcode", "semester", "course", "coursecode",
-  "credit", "student", "regno", "abcid", "theorymarks", "theoryobtained", "theorypercentage", "theorygrade",
-  "practicalmarks", "practicaltotal", "practicalpercentage", "practicalgrade", "overallgradepoint", "overallgrade",
+  "credit", "student", "regno", "abcid", "theorymarks", "theoryobtained", "theorypercentage", "theorygradepoint", "theorygrade",
+  "practicalmarks", "practicaltotal", "practicalpercentage", "practicalgradepoint", "practicalgrade", "overalltotalmarks", "overallgradepoint", "overallgrade",
   "overallpercentage", "gpa", "status", "attempt", "type", "examdate", "resultprocessdate"
 ];
+const gradingTemplateFields = ["academicyear", "templatedescription", "status"];
+const gradingTemplateDetailFields = ["academicyear", "templatename", "templateid", "frommarks", "tomarks", "gradepoint", "grade"];
 
 const buildFilter = (source = {}) => {
   const filter = { colid: number(source.colid) };
   markFields.forEach((field) => {
-    if (["credit", "theorymarks", "theoryobtained", "theorypercentage", "practicalmarks", "practicaltotal", "practicalpercentage", "overallgradepoint", "overallpercentage", "gpa", "attempt"].includes(field)) return;
+    if (["credit", "theorymarks", "theoryobtained", "theorypercentage", "theorygradepoint", "practicalmarks", "practicaltotal", "practicalpercentage", "practicalgradepoint", "overalltotalmarks", "overallgradepoint", "overallpercentage", "gpa", "attempt"].includes(field)) return;
     if (text(source[field])) filter[field] = text(source[field]);
   });
   if (text(source.name)) filter.student = new RegExp(escapeRegex(source.name), "i");
@@ -47,6 +51,9 @@ const payloadFrom = (body = {}) => {
   const practicaltotal = number(body.practicaltotal);
   const credit = number(body.credit);
   const overallgradepoint = number(body.overallgradepoint);
+  const overalltotalmarks = body.overalltotalmarks === "" || body.overalltotalmarks === undefined
+    ? theoryobtained + practicalmarks
+    : number(body.overalltotalmarks);
   const totalObtained = theoryobtained + practicalmarks;
   const totalMarks = theorymarks + practicaltotal;
   return {
@@ -67,11 +74,14 @@ const payloadFrom = (body = {}) => {
     theorymarks,
     theoryobtained,
     theorypercentage: body.theorypercentage === "" || body.theorypercentage === undefined ? percent(theoryobtained, theorymarks) : number(body.theorypercentage),
+    theorygradepoint: number(body.theorygradepoint),
     theorygrade: text(body.theorygrade),
     practicalmarks,
     practicaltotal,
     practicalpercentage: body.practicalpercentage === "" || body.practicalpercentage === undefined ? percent(practicalmarks, practicaltotal) : number(body.practicalpercentage),
+    practicalgradepoint: number(body.practicalgradepoint),
     practicalgrade: text(body.practicalgrade),
+    overalltotalmarks,
     overallgradepoint,
     overallgrade: text(body.overallgrade),
     overallpercentage: body.overallpercentage === "" || body.overallpercentage === undefined ? percent(totalObtained, totalMarks) : number(body.overallpercentage),
@@ -212,6 +222,251 @@ exports.bulk = async (req, res) => {
       }
     }
     res.json({ success: true, saved, errors });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const templatePayload = (body = {}) => ({
+  colid: number(body.colid),
+  academicyear: text(body.academicyear),
+  templatedescription: text(body.templatedescription),
+  status: text(body.status) || "Active",
+  user: text(body.user)
+});
+
+const templateDetailPayload = (body = {}) => ({
+  colid: number(body.colid),
+  academicyear: text(body.academicyear),
+  templatename: text(body.templatename),
+  templateid: text(body.templateid),
+  frommarks: number(body.frommarks),
+  tomarks: number(body.tomarks),
+  gradepoint: number(body.gradepoint),
+  grade: text(body.grade),
+  user: text(body.user)
+});
+
+exports.gradingTemplates = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const filter = { colid };
+    gradingTemplateFields.forEach((field) => {
+      if (text(req.query[field])) filter[field] = text(req.query[field]);
+    });
+    const data = await GradingTemplate.find(filter).sort({ academicyear: -1, templatedescription: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.saveGradingTemplate = async (req, res) => {
+  try {
+    const payload = templatePayload(req.body);
+    if (!payload.colid || !payload.academicyear) return res.status(400).json({ success: false, message: "Academic year is required" });
+    const id = req.body.id || req.body._id;
+    const data = id
+      ? await GradingTemplate.findOneAndUpdate({ _id: id, colid: payload.colid }, payload, { new: true, runValidators: true })
+      : await GradingTemplate.create(payload);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteGradingTemplate = async (req, res) => {
+  try {
+    const data = await GradingTemplate.findOneAndDelete({ _id: req.body.id || req.body._id, colid: number(req.body.colid) });
+    if (!data) return res.status(404).json({ success: false, message: "Template not found" });
+    res.json({ success: true, message: "Deleted" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkGradingTemplates = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    let saved = 0;
+    const errors = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      try {
+        const payload = templatePayload({ ...rows[index], colid, user: req.body.user || rows[index].user });
+        if (!payload.academicyear) throw new Error("Academic year is required");
+        await GradingTemplate.create(payload);
+        saved += 1;
+      } catch (error) {
+        errors.push({ row: index + 2, message: error.message });
+      }
+    }
+    res.json({ success: true, saved, errors });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.gradingTemplateDetails = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const filter = { colid };
+    gradingTemplateDetailFields.forEach((field) => {
+      if (["frommarks", "tomarks", "gradepoint"].includes(field)) return;
+      if (text(req.query[field])) filter[field] = text(req.query[field]);
+    });
+    const data = await GradingTemplateDetail.find(filter).sort({ academicyear: -1, templateid: 1, frommarks: -1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.saveGradingTemplateDetail = async (req, res) => {
+  try {
+    const payload = templateDetailPayload(req.body);
+    if (!payload.colid || !payload.academicyear || !payload.templateid) {
+      return res.status(400).json({ success: false, message: "Academic year and template are required" });
+    }
+    const id = req.body.id || req.body._id;
+    const data = id
+      ? await GradingTemplateDetail.findOneAndUpdate({ _id: id, colid: payload.colid }, payload, { new: true, runValidators: true })
+      : await GradingTemplateDetail.create(payload);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteGradingTemplateDetail = async (req, res) => {
+  try {
+    const data = await GradingTemplateDetail.findOneAndDelete({ _id: req.body.id || req.body._id, colid: number(req.body.colid) });
+    if (!data) return res.status(404).json({ success: false, message: "Template detail not found" });
+    res.json({ success: true, message: "Deleted" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkGradingTemplateDetails = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    let saved = 0;
+    const errors = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      try {
+        const payload = templateDetailPayload({ ...rows[index], colid, user: req.body.user || rows[index].user });
+        if (!payload.academicyear || !payload.templateid) throw new Error("Academic year and template id are required");
+        await GradingTemplateDetail.create(payload);
+        saved += 1;
+      } catch (error) {
+        errors.push({ row: index + 2, message: error.message });
+      }
+    }
+    res.json({ success: true, saved, errors });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const toArray = (value) => {
+  if (Array.isArray(value)) return value.map(text).filter(Boolean);
+  if (!text(value)) return [];
+  return text(value).split(",").map(text).filter(Boolean);
+};
+
+exports.processGrades = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const academicyear = text(req.body.academicyear);
+    const exam = text(req.body.exam);
+    const examcode = text(req.body.examcode);
+    const templateid = text(req.body.templateid);
+    const component = text(req.body.component);
+    const programcodes = toArray(req.body.programcodes);
+    const coursecodes = toArray(req.body.coursecodes);
+    if (!colid || !academicyear || !examcode || !templateid || !component) {
+      return res.status(400).json({ success: false, message: "Academic year, exam code, template and component are required" });
+    }
+    const details = await GradingTemplateDetail.find({ colid, templateid }).sort({ frommarks: -1 }).lean();
+    if (!details.length) return res.status(404).json({ success: false, message: "No grade ranges found for selected template" });
+    const filter = { colid, academicyear, examcode };
+    if (exam) filter.exam = exam;
+    if (programcodes.length) filter.programcode = { $in: programcodes };
+    if (coursecodes.length) filter.coursecode = { $in: coursecodes };
+    const rows = await ExamMarks.find(filter).sort({ programcode: 1, coursecode: 1, regno: 1 });
+    let updated = 0;
+    const skipped = [];
+    const preview = [];
+    for (const row of rows) {
+      const sourceValue = component === "Theory"
+        ? number(row.theoryobtained)
+        : component === "Practical"
+          ? number(row.practicalmarks)
+          : number(row.overalltotalmarks || (number(row.theoryobtained) + number(row.practicalmarks)));
+      const gradeRule = details.find((item) => sourceValue >= number(item.frommarks) && sourceValue <= number(item.tomarks));
+      if (!gradeRule) {
+        skipped.push({ id: row._id, regno: row.regno, coursecode: row.coursecode, marks: sourceValue });
+        continue;
+      }
+      if (component === "Theory") {
+        row.theorygradepoint = number(gradeRule.gradepoint);
+        row.theorygrade = text(gradeRule.grade);
+      } else if (component === "Practical") {
+        row.practicalgradepoint = number(gradeRule.gradepoint);
+        row.practicalgrade = text(gradeRule.grade);
+      } else {
+        row.overallgradepoint = number(gradeRule.gradepoint);
+        row.overallgrade = text(gradeRule.grade);
+        row.gpa = Number((number(row.credit) * number(gradeRule.gradepoint)).toFixed(2));
+      }
+      await row.save();
+      updated += 1;
+      preview.push(row.toObject());
+    }
+    res.json({ success: true, updated, skipped, data: preview.slice(0, 500) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.processPercentages = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const academicyear = text(req.body.academicyear);
+    const exam = text(req.body.exam);
+    const examcode = text(req.body.examcode);
+    const component = text(req.body.component);
+    const programcodes = toArray(req.body.programcodes);
+    const coursecodes = toArray(req.body.coursecodes);
+    if (!colid || !academicyear || !examcode || !component) {
+      return res.status(400).json({ success: false, message: "Academic year, exam code and component are required" });
+    }
+    const filter = { colid, academicyear, examcode };
+    if (exam) filter.exam = exam;
+    if (programcodes.length) filter.programcode = { $in: programcodes };
+    if (coursecodes.length) filter.coursecode = { $in: coursecodes };
+    const rows = await ExamMarks.find(filter).sort({ programcode: 1, coursecode: 1, regno: 1 });
+    let updated = 0;
+    const preview = [];
+    for (const row of rows) {
+      if (component === "Theory") {
+        row.theorypercentage = percent(row.theoryobtained, row.theorymarks);
+      } else if (component === "Practical") {
+        row.practicalpercentage = percent(row.practicalmarks, row.practicaltotal);
+      } else {
+        const totalMarks = number(row.theorymarks) + number(row.practicaltotal);
+        const obtained = number(row.overalltotalmarks || (number(row.theoryobtained) + number(row.practicalmarks)));
+        row.overallpercentage = percent(obtained, totalMarks);
+      }
+      await row.save();
+      updated += 1;
+      preview.push(row.toObject());
+    }
+    res.json({ success: true, updated, data: preview.slice(0, 500) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

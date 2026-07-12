@@ -219,8 +219,12 @@ exports.handleIciciPaymentCallback = async (req, res) => {
     payment.gatewayresponse = { ...(payment.gatewayresponse || {}), callbackResponse: params };
     await payment.save();
     await updateAdmissionPayment(payment, params);
-    if (payment.status === "SUCCESS" && (payment.source === "StudentFeesOnline" || payment.studentonlinepaymentid)) {
-      await studentOnlinePaymentController.settleSuccessfulStudentOnlinePayment(payment, params);
+    if (payment.source === "StudentFeesOnline" || payment.studentonlinepaymentid) {
+      if (payment.status === "SUCCESS") {
+        await studentOnlinePaymentController.settleSuccessfulStudentOnlinePayment(payment, params);
+      } else {
+        await studentOnlinePaymentController.markFailedStudentOnlinePayment(payment, params);
+      }
     }
 
     const redirectBase = callbackRedirectUrl(payment);

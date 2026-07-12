@@ -266,8 +266,12 @@ exports.handleEasebuzzPaymentCallback = async (req, res) => {
       );
     }
 
-    if (isSuccess && (payment.source === "StudentFeesOnline" || payment.studentonlinepaymentid)) {
-      await studentOnlinePaymentController.settleSuccessfulStudentOnlinePayment(payment, params);
+    if (payment.source === "StudentFeesOnline" || payment.studentonlinepaymentid) {
+      if (isSuccess) {
+        await studentOnlinePaymentController.settleSuccessfulStudentOnlinePayment(payment, params);
+      } else {
+        await studentOnlinePaymentController.markFailedStudentOnlinePayment(payment, params);
+      }
     }
 
     if (payment.type === "Admission" && payment.applicationid) {

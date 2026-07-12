@@ -37,6 +37,11 @@ function feeItemSnapshot(row, payingAmount) {
   };
 }
 
+function isSuccessfulGatewayPayment(payment = {}) {
+  const status = text(payment.status).toUpperCase();
+  return ["SUCCESS", "SUCCESSFUL", "PAID", "CAPTURED"].includes(status);
+}
+
 function reportQuery(source = {}) {
   const query = { colid: Number(source.colid) };
   ["regno", "paymentstatus", "gateway", "academicyear", "programcode", "semester"].forEach((field) => {
@@ -140,6 +145,7 @@ exports.createStudentPaymentSession = async (req, res) => {
 };
 
 exports.settleSuccessfulStudentOnlinePayment = async (payment, gatewayParams = {}) => {
+  if (!isSuccessfulGatewayPayment(payment)) return null;
   const sourceId = text(payment?.studentonlinepaymentid || payment?.sourceid);
   if (!sourceId && text(payment?.source) !== "StudentFeesOnline") return null;
   const onlinePayment = await StudentOnlinePayment.findOne({
@@ -181,6 +187,23 @@ exports.settleSuccessfulStudentOnlinePayment = async (payment, gatewayParams = {
   onlinePayment.paidamount = number(payment.paidamount || onlinePayment.totalamount);
   onlinePayment.gatewayrefno = text(payment.refno || payment.txnid || payment.merchantTxnNo);
   onlinePayment.ledgeritems = updatedItems;
+  onlinePayment.gatewayresponse = gatewayParams || {};
+  await onlinePayment.save();
+  return onlinePayment;
+};
+
+exports.markFailedStudentOnlinePayment = async (payment, gatewayParams = {}) => {
+  const sourceId = text(payment?.studentonlinepaymentid || payment?.sourceid);
+  if (!sourceId && text(payment?.source) !== "StudentFeesOnline") return null;
+  const onlinePayment = await StudentOnlinePayment.findOne({
+    _id: sourceId,
+    colid: Number(payment.colid)
+  });
+  if (!onlinePayment || onlinePayment.paymentstatus === "Success") return onlinePayment;
+
+  onlinePayment.paymentstatus = "Failed";
+  onlinePayment.paidamount = 0;
+  onlinePayment.gatewayrefno = text(payment.refno || payment.txnid || payment.merchantTxnNo);
   onlinePayment.gatewayresponse = gatewayParams || {};
   await onlinePayment.save();
   return onlinePayment;
