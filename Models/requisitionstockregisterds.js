@@ -17,6 +17,8 @@ const requisitionStockRegisterSchema = new mongoose.Schema({
   details: { type: String, trim: true },
   issuedto: { type: String, trim: true },
   issuedtoemail: { type: String, trim: true },
+  assetids: [{ type: String, trim: true }],
+  assetidlist: { type: String, trim: true },
   user: { type: String, trim: true }
 }, { timestamps: true });
 

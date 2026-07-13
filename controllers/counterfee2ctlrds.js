@@ -2,6 +2,7 @@ const Ledgerstud = require("../Models/ledgerstud");
 const User = require("../Models/user");
 const Institution = require("../Models/insdetails");
 const CounterFee2Transaction = require("../Models/counterfee2transactionds");
+const ChequeFeesPayment = require("../Models/chequefeespaymentds");
 
 const allowedFilters = [
   "academicyear", "admissionyear", "student", "regno", "regulation", "major", "minor",
@@ -101,6 +102,9 @@ exports.postPayment = async (req, res) => {
     const txid = transactionId(colid);
     const updatedLedgers = [];
     const txItems = [];
+    const pendingCheques = [];
+    const mode = text(req.body.paymode) || "Cash";
+    const isCheque = mode.toLowerCase() === "cheque";
 
     for (const item of items) {
       const amountReceived = toNumber(item.amountreceived, 0);
@@ -115,7 +119,6 @@ exports.postPayment = async (req, res) => {
       const info = await studentInfo(colid, ledger.regno, ledger.user);
       const newPaid = previousPaid + paidAmount;
       const newBalance = Math.max(0, previousBalance - paidAmount);
-      const mode = text(req.body.paymode) || "Cash";
       const modeField = mode.toLowerCase();
 
       const history = Array.isArray(ledger.approvalhistory) ? ledger.approvalhistory : [];
@@ -132,17 +135,6 @@ exports.postPayment = async (req, res) => {
         oldbalance: previousBalance,
         newbalance: newBalance
       });
-
-      ledger.paid = newPaid;
-      ledger.balance = newBalance;
-      ledger.paiddate = paiddate;
-      ledger.paymode = mode;
-      ledger.paydetails = text(req.body.paydetails) || text(req.body.referenceNumber) || ledger.paydetails;
-      ledger.feecounter = text(req.body.feecounter) || text(req.body.user) || ledger.feecounter;
-      ledger.status = newBalance <= 0 ? "paid" : ledger.status;
-      if (["cash", "upi", "cheque", "card", "pg", "neft"].includes(modeField)) ledger[modeField] = toNumber(ledger[modeField], 0) + paidAmount;
-      ledger.approvalhistory = history;
-      await ledger.save();
 
       const row = {
         ledgerid: String(ledger._id),
@@ -173,11 +165,54 @@ exports.postPayment = async (req, res) => {
         newpaid: newPaid,
         newbalance: newBalance
       };
+
+      if (isCheque) {
+        const pending = await ChequeFeesPayment.create({
+          colid,
+          source: "Counter Fee 2",
+          ledgerid: String(ledger._id),
+          transactionid: txid,
+          originaldate: paiddate,
+          referenceNumber: text(req.body.referenceNumber) || text(req.body.paydetails),
+          paydetails: text(req.body.paydetails),
+          remarks: text(req.body.remarks),
+          status: "Pending",
+          ...row,
+          chequeamount: paidAmount,
+          collectedby: text(req.body.user),
+          collectedbyname: text(req.body.name)
+        });
+        pendingCheques.push(pending);
+        txItems.push(row);
+        continue;
+      }
+
+      ledger.paid = newPaid;
+      ledger.balance = newBalance;
+      ledger.paiddate = paiddate;
+      ledger.paymode = mode;
+      ledger.paydetails = text(req.body.paydetails) || text(req.body.referenceNumber) || ledger.paydetails;
+      ledger.feecounter = text(req.body.feecounter) || text(req.body.user) || ledger.feecounter;
+      ledger.status = newBalance <= 0 ? "paid" : ledger.status;
+      if (["cash", "upi", "cheque", "card", "pg", "neft"].includes(modeField)) ledger[modeField] = toNumber(ledger[modeField], 0) + paidAmount;
+      ledger.approvalhistory = history;
+      await ledger.save();
+
       txItems.push(row);
       updatedLedgers.push(ledger);
     }
 
     if (!txItems.length) return res.status(400).json({ success: false, message: "No valid payment item was updated" });
+    if (isCheque) {
+      return res.json({
+        success: true,
+        cheque: true,
+        pending: pendingCheques.length,
+        transactionid: txid,
+        message: "Cheque payment recorded as pending. Ledger will update after cheque realization.",
+        data: pendingCheques
+      });
+    }
     const first = txItems[0];
     const totalpaid = txItems.reduce((sum, item) => sum + toNumber(item.paidamount, 0), 0);
     const transaction = await CounterFee2Transaction.create({

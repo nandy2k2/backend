@@ -8,6 +8,8 @@ const PurchaseNewStore = require("../Models/purchasenewstoreds");
 const PurchaseNewItemMaster = require("../Models/purchasenewitemmasterds");
 const PurchaseNewStoreUser = require("../Models/purchasenewstoreuserds");
 const User = require("../Models/user");
+const AssetItem = require("../Models/assetnewitemds");
+const AssetTracking = require("../Models/assetnewtrackingds");
 
 const num = (value, fallback = undefined) => {
   const parsed = Number(value);
@@ -536,6 +538,18 @@ exports.assignRequisition = async (req, res) => {
     const master = await PurchaseNewItemMaster.findOne({ _id: item.itemmasterid, colid: item.colid });
     if (!master) return res.status(404).json({ success: false, message: "Item master not found" });
     if (quantity > num(master.quantityavailable, 0)) return res.status(400).json({ success: false, message: `Only ${master.quantityavailable || 0} items available in stock` });
+    const selectedAssetIds = Array.isArray(req.body.assetids) ? req.body.assetids.map(clean).filter(Boolean) : [];
+    const availableAssetCount = await AssetItem.countDocuments({ colid: item.colid, itemmasterid: item.itemmasterid, status: "Available" });
+    if (availableAssetCount > 0 && selectedAssetIds.length !== quantity) {
+      return res.status(400).json({ success: false, message: `Select exactly ${quantity} available asset id(s) for this issue` });
+    }
+    const selectedAssets = selectedAssetIds.length
+      ? await AssetItem.find({ colid: item.colid, itemmasterid: item.itemmasterid, status: "Available", _id: { $in: selectedAssetIds } })
+      : [];
+    if (selectedAssetIds.length && selectedAssets.length !== selectedAssetIds.length) {
+      return res.status(400).json({ success: false, message: "One or more selected assets are not available for this item" });
+    }
+    const selectedAssetCodes = selectedAssets.map((asset) => asset.assetid);
     const olddata = item.toObject();
     item.assignedquantity = num(item.assignedquantity, 0) + quantity;
     item.assignmentstatus = item.assignedquantity >= item.requestedquantity ? "Assigned" : "Partially Assigned";
@@ -559,13 +573,46 @@ exports.assignRequisition = async (req, res) => {
       quantityout: quantity,
       balanceafter: num(master.quantityavailable, 0),
       transactiondate: item.assignmentdate || new Date(),
-      details: req.body.assignmentdetails || `Issued against requisition ${item._id}`,
+      details: `${req.body.assignmentdetails || `Issued against requisition ${item._id}`}${selectedAssetCodes.length ? ` | Asset IDs: ${selectedAssetCodes.join(", ")}` : ""}`,
       issuedto: item.submittedbyname,
       issuedtoemail: item.submittedby,
+      assetids: selectedAssetCodes,
+      assetidlist: selectedAssetCodes.join(", "),
       user: req.body.user || req.body.useremail || ""
     });
+    const trackingDocs = [];
+    for (const asset of selectedAssets) {
+      const tracking = await AssetTracking.create({
+        colid: item.colid,
+        asset: asset._id,
+        assetid: asset.assetid,
+        itemmasterid: item.itemmasterid,
+        requisitionid: item._id,
+        store: item.store,
+        category: item.category,
+        item: item.item,
+        description: item.description,
+        action: "Issue",
+        assignmentdate: item.assignmentdate || new Date(),
+        toname: item.submittedbyname,
+        toemail: item.submittedby,
+        department: item.department,
+        remarks: req.body.assignmentdetails || `Issued against requisition ${item._id}`,
+        createdby: req.body.user || req.body.useremail || "",
+        createdbyname: req.body.username || ""
+      });
+      asset.status = "Assigned";
+      asset.assignedto = item.submittedbyname;
+      asset.assignedtoemail = item.submittedby;
+      asset.department = item.department;
+      asset.assigneddate = item.assignmentdate || new Date();
+      asset.requisitionid = item._id;
+      asset.lasttrackingid = tracking._id;
+      await asset.save();
+      trackingDocs.push(tracking);
+    }
     await logAudit("Assign Requisition Items", item, req, olddata, item.toObject(), req.body.assignmentdetails || "");
-    res.json({ success: true, data: item });
+    res.json({ success: true, data: item, assets: selectedAssets, tracking: trackingDocs });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }

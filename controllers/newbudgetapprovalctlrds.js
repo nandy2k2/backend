@@ -3,6 +3,7 @@ const InstitutionWorkflow = require("../Models/newbudgetinstitutionworkflowds");
 const BudgetCategory = require("../Models/newbudgetcategoryds");
 const BudgetItem = require("../Models/newbudgetitemds");
 const BudgetAuditLog = require("../Models/newbudgetauditlogds");
+const BudgetSubmissionActivation = require("../Models/newbudgetsubmissionactivationds");
 const BlockchainLedger = require("../Models/blockchainledgerds");
 const { appendBlock } = require("./blockchainledgerctlrds");
 const User = require("../Models/user");
@@ -13,6 +14,7 @@ const num = (value, fallback = undefined) => {
 };
 
 const clean = (value) => String(value || "").trim();
+const escapeRegex = (value) => clean(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const byLevelAsc = (a, b) => num(a.level, 0) - num(b.level, 0);
 const byLevelDesc = (a, b) => num(b.level, 0) - num(a.level, 0);
 const approverMatches = (level, useremail) => {
@@ -220,6 +222,29 @@ const itemFilter = (query) => {
   return filter;
 };
 
+const getSubmissionState = async ({ colid, academicyear, useremail }) => {
+  const email = clean(useremail).toLowerCase();
+  const base = { colid: num(colid), academicyear, submittedby: new RegExp(`^${escapeRegex(email)}$`, "i") };
+  const [submittedCount, rejectedCount, activation] = await Promise.all([
+    BudgetItem.countDocuments({ ...base, status: { $ne: "Draft" } }),
+    BudgetItem.countDocuments({ ...base, status: "Rejected", stage: "Rejected" }),
+    BudgetSubmissionActivation.findOne({
+      colid: num(colid),
+      academicyear,
+      useremail: email,
+      active: "Yes",
+      used: { $ne: "Yes" }
+    }).sort({ createdAt: 1 })
+  ]);
+  return {
+    submittedCount,
+    rejectedCount,
+    activation,
+    canCreateNew: submittedCount === 0 || !!activation,
+    canResubmitRejected: rejectedCount > 0
+  };
+};
+
 exports.getUsers = async (req, res) => {
   try {
     const colid = num(req.query.colid);
@@ -395,6 +420,104 @@ exports.getBudgetItems = async (req, res) => {
   }
 };
 
+exports.getSubmissionStatus = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const academicyear = clean(req.query.academicyear);
+    const useremail = clean(req.query.useremail || req.query.user);
+    if (!colid || !academicyear || !useremail) {
+      return res.status(400).json({ status: "fail", message: "colid, academic year and user are required" });
+    }
+    const state = await getSubmissionState({ colid, academicyear, useremail });
+    res.json({
+      status: "success",
+      data: {
+        submittedCount: state.submittedCount,
+        rejectedCount: state.rejectedCount,
+        hasUnusedActivation: !!state.activation,
+        activation: state.activation,
+        canCreateNew: state.canCreateNew,
+        canResubmitRejected: state.canResubmitRejected
+      }
+    });
+  } catch (err) {
+    res.status(400).json({ status: "fail", message: err.message });
+  }
+};
+
+exports.getSubmissionActivations = async (req, res) => {
+  try {
+    const filter = {};
+    if (req.query.colid) filter.colid = num(req.query.colid);
+    ["academicyear", "useremail", "department", "active", "used"].forEach((field) => {
+      if (req.query[field]) filter[field] = field === "useremail" ? clean(req.query[field]).toLowerCase() : req.query[field];
+    });
+    const data = await BudgetSubmissionActivation.find(filter).sort({ createdAt: -1 }).limit(2000);
+    res.json({ status: "success", data });
+  } catch (err) {
+    res.status(400).json({ status: "fail", message: err.message });
+  }
+};
+
+exports.saveSubmissionActivation = async (req, res) => {
+  try {
+    const payload = {
+      colid: num(req.body.colid),
+      academicyear: clean(req.body.academicyear),
+      useremail: clean(req.body.useremail).toLowerCase(),
+      username: clean(req.body.username),
+      department: clean(req.body.department),
+      active: clean(req.body.active) || "Yes",
+      used: clean(req.body.used) || "No",
+      activatedby: clean(req.body.activatedby || req.body.useremailadmin || req.body.user),
+      activatedbyname: clean(req.body.activatedbyname || req.body.usernameadmin || req.body.name),
+      remarks: clean(req.body.remarks)
+    };
+    if (!payload.colid || !payload.academicyear || !payload.useremail) {
+      return res.status(400).json({ status: "fail", message: "Academic year and user email are required" });
+    }
+    const data = req.body.id
+      ? await BudgetSubmissionActivation.findByIdAndUpdate(req.body.id, payload, { new: true, runValidators: true })
+      : await BudgetSubmissionActivation.create(payload);
+    await BudgetAuditLog.create({
+      colid: payload.colid,
+      academicyear: payload.academicyear,
+      department: payload.department,
+      action: req.body.id ? "Update Submission Activation" : "Create Submission Activation",
+      newdata: data.toObject(),
+      comments: payload.remarks,
+      username: payload.activatedbyname,
+      useremail: payload.activatedby,
+      role: req.body.role || ""
+    });
+    res.json({ status: "success", data });
+  } catch (err) {
+    res.status(400).json({ status: "fail", message: err.message });
+  }
+};
+
+exports.deleteSubmissionActivation = async (req, res) => {
+  try {
+    const data = await BudgetSubmissionActivation.findById(req.body.id);
+    if (!data) return res.status(404).json({ status: "fail", message: "Activation not found" });
+    await BudgetAuditLog.create({
+      colid: data.colid,
+      academicyear: data.academicyear,
+      department: data.department,
+      action: "Delete Submission Activation",
+      olddata: data.toObject(),
+      comments: req.body.comments || "",
+      username: req.body.username || "",
+      useremail: req.body.useremail || req.body.user || "",
+      role: req.body.role || ""
+    });
+    await data.deleteOne();
+    res.json({ status: "success" });
+  } catch (err) {
+    res.status(400).json({ status: "fail", message: err.message });
+  }
+};
+
 exports.saveBudgetItem = async (req, res) => {
   try {
     const payload = {
@@ -412,8 +535,9 @@ exports.saveBudgetItem = async (req, res) => {
       const allowInstitutionEdit = req.body.allowInstitutionEdit === true
         && existing.stage === "Institution"
         && matchingLevel?.accesslevel === "Edit and Add Items";
-      if (existing.status !== "Draft" && !allowInstitutionEdit) {
-        return res.status(400).json({ status: "fail", message: "Submitted budget items cannot be edited." });
+      const allowRejectedEdit = existing.status === "Rejected" && existing.stage === "Rejected";
+      if (existing.status !== "Draft" && !allowInstitutionEdit && !allowRejectedEdit) {
+        return res.status(400).json({ status: "fail", message: "Submitted budget items cannot be edited. Rejected items can be edited and resubmitted." });
       }
       const olddata = existing.toObject();
       ["academicyear", "department", "category", "categorytype", "item", "remarks"].forEach((field) => {
@@ -423,8 +547,19 @@ exports.saveBudgetItem = async (req, res) => {
       if (payload.utilized !== undefined) existing.utilized = payload.utilized;
       existing.remaining = num(existing.amount, 0) - num(existing.utilized, 0);
       data = await existing.save();
-      await logAudit(allowInstitutionEdit ? "Institution Edit Item" : "Update Draft Item", data, req, olddata, data.toObject(), req.body.comments || "");
+      await logAudit(allowInstitutionEdit ? "Institution Edit Item" : allowRejectedEdit ? "Update Rejected Item" : "Update Draft Item", data, req, olddata, data.toObject(), req.body.comments || "");
     } else {
+      const state = await getSubmissionState({
+        colid: payload.colid,
+        academicyear: clean(payload.academicyear),
+        useremail: req.body.submittedby || req.body.useremail || req.body.user
+      });
+      if (!state.canCreateNew) {
+        return res.status(400).json({
+          status: "fail",
+          message: "Budget already submitted for this academic year. Edit rejected items, or ask admin to activate one more submission."
+        });
+      }
       data = await BudgetItem.create({ ...payload, status: "Draft", stage: "Draft", currentlevel: 0 });
       await logAudit("Create Draft Item", data, req, null, data.toObject(), req.body.comments || "");
     }
@@ -453,18 +588,53 @@ exports.submitBudgetItems = async (req, res) => {
   try {
     const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
     const items = await BudgetItem.find({ _id: { $in: ids }, colid: num(req.body.colid) });
+    const actionable = items.filter((item) => ["Draft", "Rejected"].includes(item.status));
+    if (!actionable.length) return res.status(400).json({ status: "fail", message: "Select draft or rejected item(s) to submit." });
+    const years = [...new Set(actionable.map((item) => clean(item.academicyear)).filter(Boolean))];
+    const useremail = clean(req.body.useremail || req.body.user).toLowerCase();
+    const yearsNeedingActivationUse = new Set();
+    for (const academicyear of years) {
+      const yearItems = actionable.filter((item) => clean(item.academicyear) === academicyear);
+      const hasNewDraft = yearItems.some((item) => item.status === "Draft");
+      const state = await getSubmissionState({ colid: req.body.colid, academicyear, useremail });
+      if (hasNewDraft && state.submittedCount > 0 && !state.activation) {
+        return res.status(400).json({
+          status: "fail",
+          message: `Budget already submitted for ${academicyear}. New items require one-time activation.`
+        });
+      }
+      if (hasNewDraft && state.submittedCount > 0 && state.activation) yearsNeedingActivationUse.add(academicyear);
+    }
     for (const item of items) {
-      if (item.status !== "Draft") continue;
+      if (!["Draft", "Rejected"].includes(item.status)) continue;
       const olddata = item.toObject();
       item.submittedby = req.body.useremail || req.body.user || item.submittedby;
       item.submittedbyname = req.body.username || item.submittedbyname;
       item.submittedrole = req.body.role || item.submittedrole;
+      item.rejectedreason = "";
       await nextDepartmentState(item);
       addHistory(item, "Submit", req, req.body.comments || "");
       await item.save();
       await logAudit("Submit Budget Item", item, req, olddata, item.toObject(), req.body.comments || "");
     }
-    res.json({ status: "success", updated: items.length });
+    for (const academicyear of yearsNeedingActivationUse) {
+      const state = await getSubmissionState({ colid: req.body.colid, academicyear, useremail });
+      if (state.activation) {
+        state.activation.used = "Yes";
+        state.activation.usedat = new Date();
+        await state.activation.save();
+        await BudgetAuditLog.create({
+          colid: num(req.body.colid),
+          academicyear,
+          action: "Use One Time Submission Activation",
+          comments: `Activation used by ${useremail}`,
+          username: req.body.username || "",
+          useremail,
+          role: req.body.role || ""
+        });
+      }
+    }
+    res.json({ status: "success", updated: actionable.length });
   } catch (err) {
     res.status(400).json({ status: "fail", message: err.message });
   }
