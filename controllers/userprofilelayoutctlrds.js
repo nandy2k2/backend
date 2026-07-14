@@ -156,15 +156,18 @@ exports.getProfile = async (req, res) => {
   try {
     const colid = Number(req.query.colid);
     const email = clean(req.query.email || req.query.user);
+    const regno = clean(req.query.regno);
     const requestedRole = clean(req.query.role);
-    const user = await User.findOne({
-      colid,
-      $or: [
-        { email },
-        { user: email },
-        { regno: email }
-      ]
-    }).lean();
+    if (!email && !regno) return res.status(400).json({ msg: 'Email or registration number is required' });
+    const identifierFilter = email && regno
+      ? { $and: [{ $or: [{ email }, { user: email }] }, { regno }] }
+      : {
+        $or: [
+          ...(email ? [{ email }, { user: email }, { regno: email }] : []),
+          ...(regno ? [{ regno }] : [])
+        ]
+      };
+    const user = await User.findOne({ colid, ...identifierFilter }).lean();
     if (!user) return res.status(404).json({ msg: 'User not found' });
     const role = requestedRole || user.role || 'User';
     let layout = await UserProfileLayout.find({ colid, role, visible: { $ne: 'No' } }).sort({ taborder: 1, tab: 1, order: 1, label: 1 }).lean();

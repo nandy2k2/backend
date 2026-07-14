@@ -120,6 +120,7 @@ const transcriptMeetingController = require('./controllers/transcriptmeetingctlr
 const userCustomFieldController = require('./controllers/usercustomfielddsctlr');
 const userDataManagementController = require('./controllers/userdatamanagementdsctlr');
 const userProfileLayoutController = require('./controllers/userprofilelayoutctlrds');
+const userProfileDisplayLayoutController = require('./controllers/userprofiledisplaylayoutctlrds');
 const userDocumentController = require('./controllers/userdocumentdsctlr');
 const userProfileDetailsController = require('./controllers/userprofiledetailsctlrds');
 const userProfileApprovalController = require('./controllers/userprofileapprovalctlrds');
@@ -408,6 +409,11 @@ app.post('/api/v2/user-profile-layouts-delete', userProfileLayoutController.dele
 app.get('/api/v2/user-profile', userProfileLayoutController.getProfile);
 app.post('/api/v2/user-profile-update', userProfileLayoutController.updateProfile);
 app.post('/api/v2/user-profile-photo-update', userProfileLayoutController.updateProfilePhoto);
+app.get('/api/v2/user-profile-display-layout-fields', userProfileDisplayLayoutController.getFields);
+app.get('/api/v2/user-profile-display-layouts', userProfileDisplayLayoutController.getLayouts);
+app.post('/api/v2/user-profile-display-layouts', userProfileDisplayLayoutController.saveLayout);
+app.post('/api/v2/user-profile-display-layouts-delete', userProfileDisplayLayoutController.deleteLayout);
+app.get('/api/v2/user-profile-display-profile', userProfileDisplayLayoutController.getProfile);
 app.get('/api/v2/user-data/meta', userDataManagementController.getMeta);
 app.get('/api/v2/user-data/options', userDataManagementController.getOptions);
 app.post('/api/v2/user-data/search', userDataManagementController.search);
