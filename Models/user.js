@@ -228,6 +228,12 @@ const userschema = new mongoose.Schema({
     specialization2:{
         type: String
     },
+    profileapprovalstatus:{
+        type: String
+    },
+    profileapprovalcomments:{
+        type: String
+    },
     customFields: {
         type: Map,
         of: mongoose.Schema.Types.Mixed,

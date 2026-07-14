@@ -414,6 +414,7 @@ app.get('/api/v2/user-profile-display-layouts', userProfileDisplayLayoutControll
 app.post('/api/v2/user-profile-display-layouts', userProfileDisplayLayoutController.saveLayout);
 app.post('/api/v2/user-profile-display-layouts-delete', userProfileDisplayLayoutController.deleteLayout);
 app.get('/api/v2/user-profile-display-profile', userProfileDisplayLayoutController.getProfile);
+app.post('/api/v2/user-profile-approval-status', userProfileApprovalController.updateUserApprovalStatus);
 app.get('/api/v2/user-data/meta', userDataManagementController.getMeta);
 app.get('/api/v2/user-data/options', userDataManagementController.getOptions);
 app.post('/api/v2/user-data/search', userDataManagementController.search);

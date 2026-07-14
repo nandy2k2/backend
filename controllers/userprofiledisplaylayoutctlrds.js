@@ -1,6 +1,7 @@
 const User = require('../Models/user');
 const UserCustomField = require('../Models/usercustomfieldds');
 const UserProfileDisplayLayout = require('../Models/userprofiledisplaylayoutds');
+const UserProfileEditRequest = require('../Models/userprofileeditrequestds');
 
 const hiddenFields = new Set(['_id', '__v', 'colid', 'user', 'customFields']);
 const clean = (value) => String(value || '').trim();
@@ -138,7 +139,31 @@ exports.getProfile = async (req, res) => {
       role,
       visible: { $ne: 'No' }
     }).sort({ sectionorder: 1, section: 1, order: 1, label: 1 }).lean();
-    res.json({ user: serializeUser(user), role, layout });
+    const data = serializeUser(user);
+    const ownerKeys = [email, user.email, user.user, user.regno].map(clean).filter(Boolean);
+    const pendingRequests = await UserProfileEditRequest.find({
+      colid,
+      owneruser: { $in: [...new Set(ownerKeys)] },
+      status: 'Pending'
+    }).sort({ createdAt: 1 }).lean();
+    const configuredFields = new Set(layout.map((item) => item.field));
+    const pendingValues = {};
+    pendingRequests.forEach((request) => {
+      (request.fields || [])
+        .filter((field) => field.status === 'Pending' && (!configuredFields.size || configuredFields.has(field.field)))
+        .forEach((field) => {
+          pendingValues[field.field] = {
+            requestid: request._id,
+            label: field.label || field.field,
+            oldvalue: field.oldvalue,
+            newvalue: field.newvalue,
+            level: field.level,
+            status: field.status,
+            submittedAt: request.createdAt
+          };
+        });
+    });
+    res.json({ user: data, role, layout, pendingValues });
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }

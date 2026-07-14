@@ -290,6 +290,58 @@ exports.actOnDocument = async (req, res) => {
   }
 };
 
+exports.updateUserApprovalStatus = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const identifier = clean(req.body.email || req.body.owneruser || req.body.user || req.body.regno);
+    const status = clean(req.body.profileapprovalstatus || req.body.status);
+    const comments = clean(req.body.profileapprovalcomments || req.body.comments);
+    if (!colid || !identifier) return res.status(400).json({ msg: 'colid and student identifier are required' });
+    if (!['Approved', 'Pending', 'Rejected'].includes(status)) return res.status(400).json({ msg: 'Approval status must be Approved, Pending or Rejected' });
+
+    const user = await User.findOneAndUpdate(
+      {
+        colid,
+        role: 'Student',
+        $or: [
+          { email: identifier },
+          { user: identifier },
+          { regno: identifier }
+        ]
+      },
+      {
+        $set: {
+          profileapprovalstatus: status,
+          profileapprovalcomments: comments
+        }
+      },
+      { new: true, runValidators: false }
+    ).lean();
+    if (!user) return res.status(404).json({ msg: 'Student not found' });
+
+    await userProfileAuditLogController.createAuditLog(req, {
+      colid,
+      action: 'Profile Status Updated',
+      requesttype: 'Profile',
+      role: 'Student',
+      owneruser: user.email || user.user || user.regno,
+      ownername: user.name,
+      actorname: clean(req.body.approvername),
+      actoremail: clean(req.body.approveremail || req.body.user),
+      actorrole: clean(req.body.approverrole || req.body.role),
+      field: 'profileapprovalstatus',
+      label: 'Profile Approval Status',
+      newvalue: status,
+      status,
+      comments,
+      details: { profileapprovalcomments: comments }
+    });
+    res.json({ msg: 'Student profile approval status saved', user });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
 exports.getReport = async (req, res) => {
   try {
     const colid = number(req.query.colid);
