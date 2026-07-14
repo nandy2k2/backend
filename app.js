@@ -449,6 +449,7 @@ app.post('/api/v2/examination-model2/grading-template-details-delete', examinati
 app.post('/api/v2/examination-model2/grading-template-details-bulk', examinationModel2Controller.bulkGradingTemplateDetails);
 app.post('/api/v2/examination-model2/process-grades', examinationModel2Controller.processGrades);
 app.post('/api/v2/examination-model2/process-percentages', examinationModel2Controller.processPercentages);
+app.post('/api/v2/examination-model2/process-component-fail-rule', examinationModel2Controller.processComponentFailRule);
 app.get('/api/v2/examination-model2/marksheet', examinationModel2Controller.marksheet);
 app.post('/api/v2/examination-model2/marksheet-blockchain-store', examinationModel2Controller.storeMarksheetBlockchain);
 app.get('/api/v2/public/examination-model2/marksheet-blockchain-verify', examinationModel2Controller.verifyMarksheetBlockchain);

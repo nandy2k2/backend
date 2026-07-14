@@ -472,6 +472,48 @@ exports.processPercentages = async (req, res) => {
   }
 };
 
+exports.processComponentFailRule = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const academicyear = text(req.body.academicyear);
+    const exam = text(req.body.exam);
+    const examcode = text(req.body.examcode);
+    const regulation = text(req.body.regulation);
+    const semester = text(req.body.semester);
+    const programcodes = toArray(req.body.programcodes);
+    const coursecodes = toArray(req.body.coursecodes);
+    const components = toArray(req.body.components).length ? toArray(req.body.components) : ["Theory", "Practical"];
+    if (!colid || !academicyear || !examcode) {
+      return res.status(400).json({ success: false, message: "Academic year and exam code are required" });
+    }
+    const filter = { colid, academicyear, examcode };
+    if (exam) filter.exam = exam;
+    if (regulation) filter.regulation = regulation;
+    if (semester) filter.semester = semester;
+    if (programcodes.length) filter.programcode = { $in: programcodes };
+    if (coursecodes.length) filter.coursecode = { $in: coursecodes };
+
+    const rows = await ExamMarks.find(filter).sort({ programcode: 1, semester: 1, coursecode: 1, regno: 1 });
+    let updated = 0;
+    const preview = [];
+    for (const row of rows) {
+      const theoryFail = components.includes("Theory") && /^f$/i.test(text(row.theorygrade));
+      const practicalFail = components.includes("Practical") && /^f$/i.test(text(row.practicalgrade));
+      if (!theoryFail && !practicalFail) continue;
+      row.overallgrade = "F";
+      row.overallgradepoint = 0;
+      row.gpa = 0;
+      row.status = "Fail";
+      await row.save();
+      updated += 1;
+      preview.push(row.toObject());
+    }
+    res.json({ success: true, updated, checked: rows.length, data: preview.slice(0, 1000) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.marksheet = async (req, res) => {
   try {
     const colid = number(req.query.colid);
