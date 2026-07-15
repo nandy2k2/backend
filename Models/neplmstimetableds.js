@@ -15,6 +15,8 @@ const nepLmsTimetableSchema = new mongoose.Schema(
     roomno: { type: String, trim: true },
     major: { type: String, trim: true },
     semester: { type: String, trim: true },
+    section: { type: String, trim: true },
+    classgroup: { type: String, trim: true },
     course: { type: String, trim: true },
     coursecode: { type: String, trim: true },
     classdate: { type: String, trim: true },

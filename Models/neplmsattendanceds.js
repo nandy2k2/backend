@@ -11,6 +11,8 @@ const nepLmsAttendanceSchema = new mongoose.Schema({
   programcode: { type: String },
   academicyear: { type: String },
   semester: { type: String },
+  section: { type: String },
+  classgroup: { type: String },
   major: { type: String },
   faculty: { type: String },
   facultyemail: { type: String },

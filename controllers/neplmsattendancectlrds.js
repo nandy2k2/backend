@@ -21,6 +21,8 @@ const classFields = [
   "type",
   "major",
   "semester",
+  "section",
+  "classgroup",
   "course",
   "coursecode",
   "faculty",
@@ -79,6 +81,7 @@ exports.getStudentsForAttendance = async (req, res) => {
     if (req.query.semester) query.semester = text(req.query.semester);
     if (req.query.major) query.Major = text(req.query.major);
     if (req.query.programcode) query.programcode = text(req.query.programcode);
+    if (req.query.section) query.section = text(req.query.section);
     if (req.query.name) query.name = new RegExp(text(req.query.name), "i");
     if (req.query.email) query.email = new RegExp(text(req.query.email), "i");
     if (req.query.phone) query.phone = new RegExp(text(req.query.phone), "i");
@@ -187,6 +190,8 @@ exports.saveAttendance = async (req, res) => {
         programcode: text(classInfo.programcode || item.programcode),
         academicyear: text(classInfo.academicyear),
         semester: text(classInfo.semester || item.semester),
+        section: text(classInfo.section || item.section),
+        classgroup: text(classInfo.classgroup || item.groupname),
         major: text(classInfo.major || item.Major),
         faculty: text(classInfo.faculty),
         facultyemail: text(classInfo.facultyemail),
@@ -225,6 +230,8 @@ const attendancePayloadFrom = ({ colid, classInfo, item, attendanceType, attenda
   programcode: text(classInfo.programcode || item.programcode),
   academicyear: text(classInfo.academicyear || item.academicyear),
   semester: text(classInfo.semester || item.semester),
+  section: text(classInfo.section || item.section),
+  classgroup: text(classInfo.classgroup || item.groupname),
   major: text(classInfo.major || item.Major),
   faculty: text(classInfo.faculty),
   facultyemail: text(classInfo.facultyemail),
