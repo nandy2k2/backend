@@ -58,6 +58,10 @@ const resourcePayload = (body = {}) => ({
   description: text(body.description),
   duedate: text(body.duedate),
   fullmarks: optionalNumber(body.fullmarks),
+  filename: text(body.filename),
+  originalname: text(body.originalname || body.filename || body.title),
+  mimetype: text(body.mimetype),
+  url: text(body.url || body.filelink || body.link),
   status: text(body.status) || "Active"
 });
 
