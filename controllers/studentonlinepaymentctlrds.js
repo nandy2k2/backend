@@ -224,13 +224,15 @@ exports.getStudentOnlinePaymentOptions = async (req, res) => {
   try {
     const colid = Number(req.query.colid);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const baseQuery = { colid };
+    if (text(req.query.regno)) baseQuery.regno = text(req.query.regno);
     const fields = ["academicyear", "programcode", "semester", "gateway", "paymentstatus", "regno", "student"];
     const options = {};
     await Promise.all(fields.map(async (field) => {
-      options[field] = (await StudentOnlinePayment.distinct(field, { colid })).filter(Boolean).sort();
+      options[field] = (await StudentOnlinePayment.distinct(field, baseQuery)).filter(Boolean).sort();
     }));
-    options.feegroup = (await StudentOnlinePayment.distinct("ledgeritems.feegroup", { colid })).filter(Boolean).sort();
-    options.feeitem = (await StudentOnlinePayment.distinct("ledgeritems.feeitem", { colid })).filter(Boolean).sort();
+    options.feegroup = (await StudentOnlinePayment.distinct("ledgeritems.feegroup", baseQuery)).filter(Boolean).sort();
+    options.feeitem = (await StudentOnlinePayment.distinct("ledgeritems.feeitem", baseQuery)).filter(Boolean).sort();
     res.json({ success: true, data: options });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

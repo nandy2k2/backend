@@ -448,6 +448,10 @@ app.get('/api/v2/examination-model2/grading-template-details', examinationModel2
 app.post('/api/v2/examination-model2/grading-template-details', examinationModel2Controller.saveGradingTemplateDetail);
 app.post('/api/v2/examination-model2/grading-template-details-delete', examinationModel2Controller.deleteGradingTemplateDetail);
 app.post('/api/v2/examination-model2/grading-template-details-bulk', examinationModel2Controller.bulkGradingTemplateDetails);
+app.get('/api/v2/examination-model2/class-configurations', examinationModel2Controller.classConfigurations);
+app.post('/api/v2/examination-model2/class-configurations', examinationModel2Controller.saveClassConfiguration);
+app.post('/api/v2/examination-model2/class-configurations-delete', examinationModel2Controller.deleteClassConfiguration);
+app.post('/api/v2/examination-model2/class-configurations-bulk', examinationModel2Controller.bulkClassConfigurations);
 app.post('/api/v2/examination-model2/process-grades', examinationModel2Controller.processGrades);
 app.post('/api/v2/examination-model2/process-percentages', examinationModel2Controller.processPercentages);
 app.post('/api/v2/examination-model2/process-component-fail-rule', examinationModel2Controller.processComponentFailRule);

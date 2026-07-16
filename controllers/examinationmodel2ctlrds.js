@@ -1,6 +1,7 @@
 const ExamMarks = require("../Models/examinationmodel2marksds");
 const GradingTemplate = require("../Models/exammodel2gradingtemplateds");
 const GradingTemplateDetail = require("../Models/exammodel2gradingtemplatedetailds");
+const ClassConfiguration = require("../Models/exammodel2classconfigurationds");
 const User = require("../Models/user");
 const MPrograms = require("../Models/mprograms");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
@@ -29,6 +30,7 @@ const markFields = [
 ];
 const gradingTemplateFields = ["academicyear", "templatedescription", "status"];
 const gradingTemplateDetailFields = ["academicyear", "templatename", "templateid", "frommarks", "tomarks", "gradepoint", "grade"];
+const classConfigurationFields = ["academicyear", "program", "programcode", "fromsgpa", "tosgpa", "classassigned"];
 
 const buildFilter = (source = {}) => {
   const filter = { colid: number(source.colid) };
@@ -247,6 +249,17 @@ const templateDetailPayload = (body = {}) => ({
   user: text(body.user)
 });
 
+const classConfigurationPayload = (body = {}) => ({
+  colid: number(body.colid),
+  academicyear: text(body.academicyear),
+  program: text(body.program),
+  programcode: text(body.programcode),
+  fromsgpa: number(body.fromsgpa),
+  tosgpa: number(body.tosgpa),
+  classassigned: text(body.classassigned),
+  user: text(body.user)
+});
+
 exports.gradingTemplates = async (req, res) => {
   try {
     const colid = number(req.query.colid);
@@ -361,6 +374,70 @@ exports.bulkGradingTemplateDetails = async (req, res) => {
         const payload = templateDetailPayload({ ...rows[index], colid, user: req.body.user || rows[index].user });
         if (!payload.academicyear || !payload.templateid) throw new Error("Academic year and template id are required");
         await GradingTemplateDetail.create(payload);
+        saved += 1;
+      } catch (error) {
+        errors.push({ row: index + 2, message: error.message });
+      }
+    }
+    res.json({ success: true, saved, errors });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.classConfigurations = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const filter = { colid };
+    classConfigurationFields.forEach((field) => {
+      if (["fromsgpa", "tosgpa"].includes(field)) return;
+      if (text(req.query[field])) filter[field] = text(req.query[field]);
+    });
+    const data = await ClassConfiguration.find(filter).sort({ academicyear: -1, programcode: 1, fromsgpa: -1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.saveClassConfiguration = async (req, res) => {
+  try {
+    const payload = classConfigurationPayload(req.body);
+    if (!payload.colid || !payload.academicyear || !payload.programcode || !payload.classassigned) {
+      return res.status(400).json({ success: false, message: "Academic year, program code and class assigned are required" });
+    }
+    const id = req.body.id || req.body._id;
+    const data = id
+      ? await ClassConfiguration.findOneAndUpdate({ _id: id, colid: payload.colid }, payload, { new: true, runValidators: true })
+      : await ClassConfiguration.create(payload);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteClassConfiguration = async (req, res) => {
+  try {
+    const data = await ClassConfiguration.findOneAndDelete({ _id: req.body.id || req.body._id, colid: number(req.body.colid) });
+    if (!data) return res.status(404).json({ success: false, message: "Class configuration not found" });
+    res.json({ success: true, message: "Deleted" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkClassConfigurations = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    let saved = 0;
+    const errors = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      try {
+        const payload = classConfigurationPayload({ ...rows[index], colid, user: req.body.user || rows[index].user });
+        if (!payload.academicyear || !payload.programcode || !payload.classassigned) throw new Error("Academic year, program code and class assigned are required");
+        await ClassConfiguration.create(payload);
         saved += 1;
       } catch (error) {
         errors.push({ row: index + 2, message: error.message });
@@ -541,6 +618,13 @@ exports.marksheet = async (req, res) => {
     const allCredits = allStudentMarks.reduce((sum, row) => sum + number(row.credit), 0);
     const allGpa = allStudentMarks.reduce((sum, row) => sum + number(row.gpa), 0);
     const cgpa = allCredits ? Number((allGpa / allCredits).toFixed(2)) : sgpa;
+    const classRule = await ClassConfiguration.findOne({
+      colid,
+      academicyear: first.academicyear,
+      programcode: first.programcode,
+      fromsgpa: { $lte: sgpa },
+      tosgpa: { $gte: sgpa }
+    }).sort({ fromsgpa: -1 }).lean();
     res.json({
       success: true,
       student: {
@@ -563,6 +647,7 @@ exports.marksheet = async (req, res) => {
         creditsattempted: creditsAttempted,
         sgpa,
         cgpa,
+        classassigned: classRule?.classassigned || "",
         resultprocessdate: first.resultprocessdate || marks.find((row) => row.resultprocessdate)?.resultprocessdate || "",
         result: marks.some((row) => /^Fail$/i.test(text(row.status))) ? "Fail" : "Pass"
       },

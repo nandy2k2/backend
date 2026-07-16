@@ -83,6 +83,8 @@ exports.getFeeApplicationOptions = async (req, res) => {
       majors,
       minors,
       idcs,
+      studentGenders,
+      studentSemesters,
       feeAcademicYears,
       feeRegulations,
       feePrograms,
@@ -107,6 +109,8 @@ exports.getFeeApplicationOptions = async (req, res) => {
       distinctSorted(User, "Major", studentQuery),
       distinctSorted(User, "Minor", studentQuery),
       distinctSorted(User, "IDC", studentQuery),
+      distinctSorted(User, "gender", studentQuery),
+      distinctSorted(User, "semester", studentQuery),
       distinctSorted(Fees, "academicyear", feeQuery),
       distinctSorted(Fees, "regulation", feeQuery),
       distinctSorted(Fees, "program", feeQuery),
@@ -133,7 +137,9 @@ exports.getFeeApplicationOptions = async (req, res) => {
         department: departments,
         major: majors,
         minor: minors,
-        IDC: idcs
+        IDC: idcs,
+        gender: studentGenders,
+        semester: studentSemesters
       },
       feeOptions: {
         academicyear: feeAcademicYears,
