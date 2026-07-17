@@ -29,7 +29,7 @@ const dayRange = (from, to) => {
 const filterFields = [
   "academicyear", "admissionyear", "regulation", "program", "programcode", "semester", "section",
   "major", "minor", "student", "regno", "feegroup", "feeitem", "feecategory", "feetype",
-  "feebook", "cashbook", "status", "source", "referenceNumber", "transactionid"
+  "feebook", "cashbook", "status", "source", "referenceNumber", "chequenumber", "transactionid"
 ];
 
 exports.list = async (req, res) => {
@@ -39,7 +39,7 @@ exports.list = async (req, res) => {
     const query = { colid };
     filterFields.forEach((field) => {
       if (!req.query[field]) return;
-      query[field] = ["student", "regno", "feeitem", "referenceNumber", "transactionid"].includes(field)
+      query[field] = ["student", "regno", "feeitem", "referenceNumber", "chequenumber", "transactionid"].includes(field)
         ? regex(req.query[field])
         : req.query[field];
     });
@@ -99,7 +99,7 @@ exports.realize = async (req, res) => {
       ledger.balance = newBalance;
       ledger.paiddate = realizedDate;
       ledger.paymode = "Cheque";
-      ledger.paydetails = cheque.paydetails || cheque.referenceNumber || ledger.paydetails;
+      ledger.paydetails = cheque.paydetails || cheque.chequenumber || cheque.referenceNumber || ledger.paydetails;
       ledger.feecounter = cheque.collectedby || text(req.body.user) || ledger.feecounter;
       ledger.cheque = number(ledger.cheque) + paidAmount;
       ledger.status = newBalance <= 0 ? "paid" : ledger.status;

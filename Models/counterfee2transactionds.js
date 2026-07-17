@@ -35,6 +35,7 @@ const CounterFee2TransactionSchema = new mongoose.Schema({
   transactionid: { type: String, required: true, unique: true },
   paiddate: Date,
   referenceNumber: String,
+  chequenumber: String,
   paymode: String,
   paydetails: String,
   remarks: String,

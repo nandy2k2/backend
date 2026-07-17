@@ -39,6 +39,7 @@ const conductExamQuestionPaperSchema = new mongoose.Schema({
   papersettername: { type: String, required: true, trim: true },
   papersetteremail: { type: String, required: true, trim: true, lowercase: true },
   status: { type: String, trim: true, default: "Draft" },
+  paperstatus: { type: String, trim: true, default: "Default" },
   paperattachmenturl: { type: String, trim: true },
   paperattachmentfilename: { type: String, trim: true },
   sections: [sectionSchema],

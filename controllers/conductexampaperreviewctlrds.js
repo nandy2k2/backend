@@ -134,7 +134,16 @@ exports.acceptPaper = async (req, res) => {
   try {
     const colid = number(req.body.colid);
     const paperid = text(req.body.paperid);
-    if (colid === undefined || !paperid) return res.status(400).json({ success: false, message: "colid and paperid are required" });
+    const paperids = Array.isArray(req.body.paperids) ? req.body.paperids.map(text).filter(Boolean) : [];
+    if (colid === undefined || (!paperid && !paperids.length)) return res.status(400).json({ success: false, message: "colid and paperid are required" });
+    if (paperids.length) {
+      await QuestionPaper.updateMany(
+        { _id: { $in: paperids }, colid },
+        { status: "Accepted", acceptedby: text(req.body.user), accepteddate: new Date(), user: text(req.body.user) }
+      );
+      const data = await QuestionPaper.find({ _id: { $in: paperids }, colid }).lean();
+      return res.json({ success: true, data, message: `${data.length} question paper(s) accepted` });
+    }
     const paper = await QuestionPaper.findOneAndUpdate(
       { _id: paperid, colid },
       { status: "Accepted", acceptedby: text(req.body.user), accepteddate: new Date(), user: text(req.body.user) },
@@ -147,11 +156,78 @@ exports.acceptPaper = async (req, res) => {
   }
 };
 
+exports.updatePaperStatus = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const paperids = Array.isArray(req.body.paperids) ? req.body.paperids.map(text).filter(Boolean) : [];
+    const paperstatus = text(req.body.paperstatus);
+    const allowed = ["Default", "Backup", "Emergency", "Reserve"];
+    if (colid === undefined || !paperids.length || !paperstatus) return res.status(400).json({ success: false, message: "colid, paperids and paperstatus are required" });
+    if (!allowed.includes(paperstatus)) return res.status(400).json({ success: false, message: "Invalid paper status" });
+    await QuestionPaper.updateMany({ _id: { $in: paperids }, colid }, { paperstatus, user: text(req.body.user) });
+    const data = await QuestionPaper.find({ _id: { $in: paperids }, colid }).lean();
+    res.json({ success: true, data, message: `${data.length} question paper(s) updated to ${paperstatus}` });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.storeBlockchain = async (req, res) => {
   try {
     const colid = number(req.body.colid);
     const paperid = text(req.body.paperid);
-    if (colid === undefined || !paperid) return res.status(400).json({ success: false, message: "colid and paperid are required" });
+    const paperids = Array.isArray(req.body.paperids) ? req.body.paperids.map(text).filter(Boolean) : [];
+    if (colid === undefined || (!paperid && !paperids.length)) return res.status(400).json({ success: false, message: "colid and paperid are required" });
+    if (paperids.length) {
+      const results = [];
+      for (const selectedPaperId of paperids) {
+        const paper = await QuestionPaper.findOne({ _id: selectedPaperId, colid }).lean();
+        if (!paper) {
+          results.push({ paperid: selectedPaperId, success: false, message: "Question paper not found" });
+          continue;
+        }
+        if (!/^Accepted$/i.test(paper.status)) {
+          results.push({ paperid: selectedPaperId, success: false, message: "Only accepted question papers can be stored in blockchain" });
+          continue;
+        }
+        const payload = {
+          paperid: String(paper._id),
+          academicyear: paper.academicyear,
+          regulation: paper.regulation,
+          exam: paper.exam,
+          examcode: paper.examcode,
+          program: paper.program,
+          programcode: paper.programcode,
+          course: paper.course,
+          coursecode: paper.coursecode,
+          papersettername: paper.papersettername,
+          papersetteremail: paper.papersetteremail,
+          status: paper.status,
+          paperstatus: paper.paperstatus,
+          acceptedby: paper.acceptedby,
+          accepteddate: paper.accepteddate,
+          sections: paper.sections || []
+        };
+        const block = await blockchainledgerctlrds.appendBlock({
+          colid,
+          modelname: "conductexamquestionpaperds",
+          collectionname: "conductexamquestionpaperds",
+          recordid: String(paper._id),
+          action: "ACCEPTED_QUESTION_PAPER",
+          payload,
+          metadata: { examcode: paper.examcode, coursecode: paper.coursecode },
+          user: text(req.body.user)
+        });
+        const url = verificationUrl(req, paper._id, block.hash);
+        const updated = await QuestionPaper.findOneAndUpdate(
+          { _id: selectedPaperId, colid },
+          { blockchainhash: block.hash, blockchainverificationurl: url },
+          { new: true }
+        ).lean();
+        results.push({ paperid: selectedPaperId, success: true, data: block, paper: updated, verificationUrl: url });
+      }
+      return res.json({ success: true, results, message: `${results.filter((item) => item.success).length} question paper(s) stored in blockchain` });
+    }
     const paper = await QuestionPaper.findOne({ _id: paperid, colid }).lean();
     if (!paper) return res.status(404).json({ success: false, message: "Question paper not found" });
     if (!/^Accepted$/i.test(paper.status)) return res.status(400).json({ success: false, message: "Only accepted question papers can be stored in blockchain" });
@@ -168,6 +244,7 @@ exports.storeBlockchain = async (req, res) => {
       papersettername: paper.papersettername,
       papersetteremail: paper.papersetteremail,
       status: paper.status,
+      paperstatus: paper.paperstatus,
       acceptedby: paper.acceptedby,
       accepteddate: paper.accepteddate,
       sections: paper.sections || []

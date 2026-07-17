@@ -3,6 +3,7 @@ const User = require("../Models/user");
 const Institution = require("../Models/insdetails");
 const CounterFee2Transaction = require("../Models/counterfee2transactionds");
 const ChequeFeesPayment = require("../Models/chequefeespaymentds");
+const FeesReceiptNote = require("../Models/feesreceiptnoteds");
 
 const allowedFilters = [
   "academicyear", "admissionyear", "student", "regno", "regulation", "major", "minor",
@@ -35,6 +36,12 @@ function dayRange(value) {
   const end = new Date(date);
   end.setHours(23, 59, 59, 999);
   return { $gte: start, $lte: end };
+}
+
+function startOfTomorrow() {
+  const date = new Date();
+  date.setHours(24, 0, 0, 0);
+  return date;
 }
 
 function transactionId(colid) {
@@ -98,6 +105,7 @@ exports.postPayment = async (req, res) => {
     const paiddate = req.body.paiddate ? new Date(req.body.paiddate) : new Date();
     if (colid === undefined || !items.length) return res.status(400).json({ success: false, message: "colid and payment items are required" });
     if (Number.isNaN(paiddate.getTime())) return res.status(400).json({ success: false, message: "Valid paid date is required" });
+    if (paiddate >= startOfTomorrow()) return res.status(400).json({ success: false, message: "Future receipt date is not allowed" });
 
     const txid = transactionId(colid);
     const updatedLedgers = [];
@@ -174,6 +182,7 @@ exports.postPayment = async (req, res) => {
           transactionid: txid,
           originaldate: paiddate,
           referenceNumber: text(req.body.referenceNumber) || text(req.body.paydetails),
+          chequenumber: text(req.body.chequenumber),
           paydetails: text(req.body.paydetails),
           remarks: text(req.body.remarks),
           status: "Pending",
@@ -220,6 +229,7 @@ exports.postPayment = async (req, res) => {
       transactionid: txid,
       paiddate,
       referenceNumber: text(req.body.referenceNumber) || text(req.body.paydetails),
+      chequenumber: text(req.body.chequenumber),
       paymode: text(req.body.paymode) || "Cash",
       paydetails: text(req.body.paydetails),
       remarks: text(req.body.remarks),
@@ -274,12 +284,13 @@ exports.getReceipt = async (req, res) => {
     const colid = toNumber(req.query.colid);
     const transactionid = text(req.query.transactionid);
     if (colid === undefined || !transactionid) return res.status(400).json({ success: false, message: "colid and transaction id are required" });
-    const [transaction, institution] = await Promise.all([
+    const [transaction, institution, note] = await Promise.all([
       CounterFee2Transaction.findOne({ colid, transactionid }).lean(),
-      Institution.findOne({ colid }).lean()
+      Institution.findOne({ colid }).lean(),
+      FeesReceiptNote.findOne({ colid, isactive: "Yes", note: { $ne: "" } }).sort({ updatedAt: -1 }).lean()
     ]);
     if (!transaction) return res.status(404).json({ success: false, message: "Transaction not found" });
-    res.json({ success: true, data: transaction, institution: institution || null });
+    res.json({ success: true, data: transaction, institution: institution || null, note: note || null });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

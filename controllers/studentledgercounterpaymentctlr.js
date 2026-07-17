@@ -15,6 +15,12 @@ function regex(value) {
   return new RegExp(text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
 }
 
+function startOfTomorrow() {
+  const date = new Date();
+  date.setHours(24, 0, 0, 0);
+  return date;
+}
+
 const allowedFilters = [
   "academicyear",
   "student",
@@ -78,6 +84,9 @@ exports.postCounterPayment = async (req, res) => {
     }
     if (Number.isNaN(paiddate.getTime())) {
       return res.status(400).json({ success: false, message: "Valid paid date is required" });
+    }
+    if (paiddate >= startOfTomorrow()) {
+      return res.status(400).json({ success: false, message: "Future receipt date is not allowed" });
     }
 
     const mode = text(req.body.paymode) || "Cash";

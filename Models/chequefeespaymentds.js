@@ -8,6 +8,7 @@ const ChequeFeesPaymentSchema = new mongoose.Schema({
   originaldate: { type: Date },
   chequerealizeddate: { type: Date },
   referenceNumber: { type: String, trim: true },
+  chequenumber: { type: String, trim: true },
   paydetails: { type: String, trim: true },
   remarks: { type: String, trim: true },
   status: { type: String, trim: true, default: "Pending" },
