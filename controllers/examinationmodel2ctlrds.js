@@ -734,15 +734,62 @@ exports.processComponentFailRule = async (req, res) => {
       const theoryFail = components.includes("Theory") && /^f$/i.test(text(row.theorygrade));
       const practicalFail = components.includes("Practical") && /^f$/i.test(text(row.practicalgrade));
       if (!theoryFail && !practicalFail) continue;
-      row.overallgrade = "F";
-      row.overallgradepoint = 0;
-      row.gpa = 0;
-      row.status = "Fail";
-      await row.save();
+      const failUpdate = {
+        overallgrade: "F",
+        overallgradepoint: 0,
+        gpa: 0,
+        status: "Fail",
+        user: text(req.body.user) || row.user
+      };
+      await ExamMarks.updateOne({ _id: row._id, colid }, { $set: failUpdate });
+      Object.assign(row, failUpdate);
       updated += 1;
       preview.push(row.toObject());
     }
     res.json({ success: true, updated, checked: rows.length, data: preview.slice(0, 1000) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.processFinalGradeStatus = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const academicyear = text(req.body.academicyear);
+    const exam = text(req.body.exam);
+    const examcode = text(req.body.examcode);
+    const regulation = text(req.body.regulation);
+    const semester = text(req.body.semester);
+    const programcodes = toArray(req.body.programcodes);
+    const coursecodes = toArray(req.body.coursecodes);
+    if (!colid || !academicyear || !examcode) {
+      return res.status(400).json({ success: false, message: "Academic year and exam code are required" });
+    }
+
+    const filter = { colid, academicyear, examcode };
+    if (exam) filter.exam = exam;
+    if (regulation) filter.regulation = regulation;
+    if (semester) filter.semester = semester;
+    if (programcodes.length) filter.programcode = { $in: programcodes };
+    if (coursecodes.length) filter.coursecode = { $in: coursecodes };
+
+    const rows = await ExamMarks.find(filter).sort({ programcode: 1, semester: 1, coursecode: 1, regno: 1 });
+    let updated = 0;
+    let passCount = 0;
+    let failCount = 0;
+    const preview = [];
+    for (const row of rows) {
+      const nextStatus = /^f$/i.test(text(row.overallgrade)) ? "Fail" : "Pass";
+      if (nextStatus === "Fail") failCount += 1;
+      else passCount += 1;
+      const update = { status: nextStatus, user: text(req.body.user) || row.user };
+      await ExamMarks.updateOne({ _id: row._id, colid }, { $set: update });
+      Object.assign(row, update);
+      updated += 1;
+      preview.push(row.toObject());
+    }
+
+    res.json({ success: true, checked: rows.length, updated, passCount, failCount, data: preview.slice(0, 1000) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -878,11 +925,15 @@ exports.vivaProcessComponentFailRule = async (req, res) => {
       const practicalFail = components.includes("Practical") && /^f$/i.test(text(row.practicalgrade));
       const vivaFail = components.includes("Viva") && /^f$/i.test(text(row.vivagrade));
       if (!theoryFail && !practicalFail && !vivaFail) continue;
-      row.overallgrade = "F";
-      row.overallgradepoint = 0;
-      row.gpa = 0;
-      row.status = "Fail";
-      await row.save();
+      const failUpdate = {
+        overallgrade: "F",
+        overallgradepoint: 0,
+        gpa: 0,
+        status: "Fail",
+        user: text(req.body.user) || row.user
+      };
+      await ExamVivaMarks.updateOne({ _id: row._id, colid }, { $set: failUpdate });
+      Object.assign(row, failUpdate);
       updated += 1;
       preview.push(row.toObject());
     }

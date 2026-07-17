@@ -76,7 +76,14 @@ exports.updateMenuAccessRule = async (req, res) => {
 
 exports.deleteMenuAccessRule = async (req, res) => {
   try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
     const { id } = req.body;
+
+    if (ids.length) {
+      const data = await menuaccessds.deleteMany({ _id: { $in: ids } });
+      return res.json({ status: 'Success', deletedCount: data.deletedCount });
+    }
+
     const data = await menuaccessds.findByIdAndDelete(id);
 
     if (!data) {

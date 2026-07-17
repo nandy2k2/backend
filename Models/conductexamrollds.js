@@ -33,8 +33,14 @@ const conductExamRollSchema = new mongoose.Schema({
   building: { type: String, trim: true },
   examroom: { type: String, trim: true },
   seatno: { type: String, trim: true },
+  examseatno: { type: String, trim: true },
   user: { type: String, trim: true }
 }, { timestamps: true });
+
+conductExamRollSchema.pre("save", function setExamSeatNo(next) {
+  if (!this.examseatno && this._id) this.examseatno = String(this._id);
+  next();
+});
 
 conductExamRollSchema.index({
   colid: 1,

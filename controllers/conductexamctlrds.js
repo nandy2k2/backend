@@ -4,6 +4,7 @@ const ConductExamRoll = require("../Models/conductexamrollds");
 const ConductExamRoom = require("../Models/conductexamroomds");
 const ConductExamInvigilatorAllocation = require("../Models/conductexaminvigilatorallocationds");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
+const RoomResource = require("../Models/roomresourceds");
 const User = require("../Models/user");
 const AcademicCalendar = require("../Models/macadcal");
 const AiConfiguration = require("../Models/aiconfigurationds");
@@ -226,6 +227,7 @@ const rollPayload = (body = {}) => ({
   building: text(body.building),
   examroom: text(body.examroom),
   seatno: text(body.seatno),
+  examseatno: text(body.examseatno),
   user: text(body.user)
 });
 
@@ -233,8 +235,14 @@ const roomPayload = (body = {}) => ({
   colid: number(body.colid),
   campus: text(body.campus),
   building: text(body.building),
+  floor: text(body.floor),
   room: text(body.room),
   noofseats: number(body.noofseats || body.noOfSeats || body["No of seats"]),
+  roomresourceid: text(body.roomresourceid || body.roomResourceId),
+  status: ["Pending", "Approved", "Rejected"].includes(text(body.status)) ? text(body.status) : "Pending",
+  approvalcomments: text(body.approvalcomments),
+  approvedby: text(body.approvedby),
+  approveddate: text(body.approveddate),
   user: text(body.user)
 });
 
@@ -370,7 +378,7 @@ exports.bulkExams = async (req, res) => {
 
 exports.getRooms = async (req, res) => {
   try {
-    const filter = buildFilter(req.query, ["campus", "building", "room"]);
+    const filter = buildFilter(req.query, ["campus", "building", "floor", "room", "status"]);
     if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const data = await ConductExamRoom.find(filter).sort({ campus: 1, building: 1, room: 1 }).lean();
     res.json({ success: true, data });
@@ -381,15 +389,50 @@ exports.getRooms = async (req, res) => {
 
 exports.saveRoom = async (req, res) => {
   try {
-    const payload = roomPayload(req.body);
+    let payload = roomPayload(req.body);
+    if (payload.roomresourceid) {
+      const resource = await RoomResource.findOne({ _id: payload.roomresourceid, colid: payload.colid }).lean();
+      if (!resource) return res.status(404).json({ success: false, message: "Selected room resource not found" });
+      payload = {
+        ...payload,
+        campus: resource.campus,
+        building: resource.building,
+        floor: resource.floor,
+        room: resource.roomno,
+        noofseats: Number(resource.examcapacity) || Number(resource.capacity) || 0
+      };
+    }
     const error = validateRoom(payload);
     if (error) return res.status(400).json({ success: false, message: error });
     const data = req.body.id
-      ? await ConductExamRoom.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true, runValidators: true })
+      ? await ConductExamRoom.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, { ...payload, status: payload.status || "Pending" }, { new: true, runValidators: true })
       : await ConductExamRoom.create(payload);
     res.json({ success: true, data });
   } catch (err) {
     if (err.code === 11000) return res.status(400).json({ success: false, message: "Room already exists for this campus and building" });
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.approveRoom = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const status = text(req.body.status);
+    if (colid === undefined || !req.body.id) return res.status(400).json({ success: false, message: "id and colid are required" });
+    if (!["Approved", "Rejected", "Pending"].includes(status)) return res.status(400).json({ success: false, message: "Valid status is required" });
+    const data = await ConductExamRoom.findOneAndUpdate(
+      { _id: req.body.id, colid },
+      {
+        status,
+        approvalcomments: text(req.body.approvalcomments),
+        approvedby: text(req.body.user),
+        approveddate: new Date().toISOString()
+      },
+      { new: true, runValidators: true }
+    );
+    if (!data) return res.status(404).json({ success: false, message: "Room usage request not found" });
+    res.json({ success: true, data });
+  } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -409,7 +452,7 @@ exports.bulkRooms = async (req, res) => {
     const errors = [];
     let saved = 0;
     for (let index = 0; index < items.length; index += 1) {
-      const payload = roomPayload({ ...items[index], colid: req.body.colid || items[index].colid, user: req.body.user || items[index].user });
+      const payload = roomPayload({ ...items[index], colid: req.body.colid || items[index].colid, user: req.body.user || items[index].user, status: items[index].status || "Pending" });
       const error = validateRoom(payload);
       if (error) {
         errors.push({ rowNumber: items[index].rowNumber || index + 2, message: error });
@@ -591,10 +634,10 @@ exports.getCourseMapOptions = async (req, res) => {
 
 exports.getExamRolls = async (req, res) => {
   try {
-    const filter = buildFilter(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "student", "regno", "email", "phone", "section", "applied", "admitcardeligible", "attended", "attendance", "fees", "disciplinary", "noofbacklogs", "atkt", "remarks", "examdate", "examslot", "campus", "building", "examroom", "seatno"]);
+    const filter = buildFilter(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "student", "regno", "email", "phone", "section", "applied", "admitcardeligible", "attended", "attendance", "fees", "disciplinary", "noofbacklogs", "atkt", "remarks", "examdate", "examslot", "campus", "building", "examroom", "seatno", "examseatno"]);
     if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const data = await ConductExamRoll.find(filter).sort({ program: 1, semester: 1, course: 1, regno: 1 }).lean();
-    res.json({ success: true, data });
+    res.json({ success: true, data: data.map((row) => ({ ...row, examseatno: row.examseatno || String(row._id) })) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -655,11 +698,14 @@ exports.generateExamRolls = async (req, res) => {
           errors.push({ regno: student.regno, coursecode: course.coursecode, message: error });
           continue;
         }
-        await ConductExamRoll.findOneAndUpdate(
+        const data = await ConductExamRoll.findOneAndUpdate(
           { colid: payload.colid, academicyear: payload.academicyear, regulation: payload.regulation, examcode: payload.examcode, programcode: payload.programcode, semester: payload.semester, coursecode: payload.coursecode, regno: payload.regno },
           payload,
           { upsert: true, new: true, setDefaultsOnInsert: true }
         );
+        if (data && !data.examseatno) {
+          await ConductExamRoll.updateOne({ _id: data._id }, { $set: { examseatno: String(data._id) } });
+        }
         saved += 1;
       }
     }
@@ -677,6 +723,10 @@ exports.saveExamRoll = async (req, res) => {
     const data = req.body.id
       ? await ConductExamRoll.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true, runValidators: true })
       : await ConductExamRoll.create(payload);
+    if (data && !data.examseatno) {
+      data.examseatno = String(data._id);
+      await data.save();
+    }
     res.json({ success: true, data });
   } catch (err) {
     if (err.code === 11000) return res.status(400).json({ success: false, message: "This student is already added for the selected course" });
@@ -718,11 +768,14 @@ exports.bulkExamRolls = async (req, res) => {
         errors.push({ rowNumber: items[index].rowNumber || index + 2, message: error });
         continue;
       }
-      await ConductExamRoll.findOneAndUpdate(
+      const data = await ConductExamRoll.findOneAndUpdate(
         { colid: payload.colid, academicyear: payload.academicyear, regulation: payload.regulation, examcode: payload.examcode, programcode: payload.programcode, semester: payload.semester, coursecode: payload.coursecode, regno: payload.regno },
         payload,
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
+      if (data && !data.examseatno) {
+        await ConductExamRoll.updateOne({ _id: data._id }, { $set: { examseatno: String(data._id) } });
+      }
       saved += 1;
     }
     res.json({ success: true, saved, errors });
@@ -895,7 +948,7 @@ exports.allocateExamSeats = async (req, res) => {
     if (!examcode || !examdate || !examslot) return res.status(400).json({ success: false, message: "Exam, exam date and slot are required" });
     if (!roomIds.length) return res.status(400).json({ success: false, message: "Select at least one room" });
 
-    const rooms = await ConductExamRoom.find({ _id: { $in: roomIds }, colid }).sort({ campus: 1, building: 1, room: 1 }).lean();
+    const rooms = await ConductExamRoom.find({ _id: { $in: roomIds }, colid, status: "Approved" }).sort({ campus: 1, building: 1, room: 1 }).lean();
     if (!rooms.length) return res.status(400).json({ success: false, message: "No valid rooms found" });
 
     const rolls = await ConductExamRoll.find({
