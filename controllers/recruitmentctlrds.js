@@ -14,10 +14,14 @@ const RecruitmentInterviewPanel = require('../Models/recruitmentinterviewpanelds
 const RecruitmentPanelMember = require('../Models/recruitmentpanelmemberds');
 const RecruitmentPanelJob = require('../Models/recruitmentpaneljobds');
 const RecruitmentInterviewSchedule = require('../Models/recruitmentinterviewscheduleds');
+const RecruitmentOfferTemplate = require('../Models/recruitmentoffertemplateds');
+const RecruitmentOnboardingStep = require('../Models/recruitmentonboardingstepds');
+const RecruitmentOnboardingRecord = require('../Models/recruitmentonboardingrecordds');
 const NepLmsTimetable = require('../Models/neplmstimetableds');
 const Awsconfig = require('../Models/awsconfig');
 const AiConfiguration = require('../Models/aiconfigurationds');
 const EmailConfiguration = require('../Models/emailconfigurationds');
+const Institution = require('../Models/insdetails');
 const User = require('../Models/user');
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -853,5 +857,323 @@ exports.getPanelClassCalendar = async (req, res) => {
     }).sort({ classtime: 1, faculty: 1 }).lean();
 
     res.json({ members, classes });
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+const sampleOfferTemplates = [
+  ['PERM_FAC_ASSISTANT', 'Permanent Faculty - Assistant Professor', 'Assistant Professor'],
+  ['PERM_FAC_ASSOCIATE', 'Permanent Faculty - Associate Professor', 'Associate Professor'],
+  ['PERM_FAC_PROFESSOR', 'Permanent Faculty - Professor', 'Professor'],
+  ['CONTRACT_FAC_LECTURE', 'Contractual Faculty - Lecture Wise', 'Contractual Faculty'],
+  ['CONTRACT_FAC_MONTHLY', 'Contractual Faculty - Monthly', 'Contractual Faculty'],
+  ['VISITING_FACULTY', 'Visiting Faculty', 'Visiting Faculty'],
+  ['ADMIN_STAFF', 'Administrative Staff', 'Administrative Officer'],
+  ['LAB_TECHNICIAN', 'Laboratory Technician', 'Lab Technician'],
+  ['COUNSELOR', 'Admission Counselor', 'Counselor'],
+  ['LIBRARIAN', 'Librarian', 'Librarian']
+].map(([templateid, templatename, jobrole]) => ({
+  templateid,
+  templatename,
+  jobrole,
+  description: `Sample offer letter template for ${jobrole}`,
+  status: 'Active',
+  issample: 'Yes',
+  htmlcontent: `
+<div style="font-family:Arial,sans-serif;color:#111;line-height:1.55;font-size:14px">
+  <div style="text-align:center;border-bottom:1px solid #111;padding-bottom:10px;margin-bottom:18px">
+    <img src="{{institutionlogo}}" style="max-height:70px;max-width:140px;object-fit:contain" />
+    <h2 style="margin:8px 0 4px 0">{{institutionname}}</h2>
+    <div>{{institutionaddress}}</div>
+  </div>
+  <div style="display:flex;justify-content:space-between;margin-bottom:18px">
+    <div><b>Offer No:</b> {{offerid}}</div>
+    <div><b>Date:</b> {{today}}</div>
+  </div>
+  <p>Dear {{name}},</p>
+  <p>We are pleased to offer you the position of <b>{{designation}}</b> for the role/category <b>${jobrole}</b> at {{institutionname}}.</p>
+  <p>Your registered email is <b>{{email}}</b> and contact number is <b>{{phone}}</b>. The proposed salary/contract value is <b>{{salary}}</b>, subject to institutional policy, verification of documents, and completion of onboarding requirements.</p>
+  <p>You will report as per the joining instructions issued by the institution. This offer is governed by institutional service rules, statutory compliance, confidentiality obligations, and satisfactory document verification.</p>
+  <p>Kindly sign and return a copy of this offer as acceptance.</p>
+  <br/>
+  <table style="width:100%;margin-top:30px">
+    <tr><td style="width:50%"><b>Candidate Signature</b></td><td style="text-align:right"><b>Authorized Signatory</b></td></tr>
+  </table>
+</div>`
+}));
+
+const seedOfferTemplates = async (colid) => {
+  const count = await RecruitmentOfferTemplate.countDocuments({ colid });
+  if (count > 0) return;
+  await RecruitmentOfferTemplate.insertMany(sampleOfferTemplates.map((template) => ({ ...template, colid })));
+};
+
+const replaceOfferPlaceholders = (html, data = {}) => String(html || '').replace(/\{\{\s*([a-zA-Z0-9_.$-]+)\s*\}\}/g, (_, key) => {
+  const normalized = String(key || '').toLowerCase();
+  if (data[normalized] !== undefined && data[normalized] !== null) return String(data[normalized]);
+  return '';
+});
+
+const finalCandidateQuery = (colid, jobid) => ({
+  colid,
+  ...(jobid ? { jobid } : {}),
+  $or: [
+    { approvalstatus: /^approved$/i },
+    { status: /^approved$/i },
+    { status: /^confirmed$/i },
+    { status: /^selected$/i },
+    { status: /^final approved$/i }
+  ]
+});
+
+exports.getOfferTemplates = async (req, res) => {
+  try {
+    const colid = getColid(req);
+    await seedOfferTemplates(colid);
+    const query = { colid };
+    if (req.query.status) query.status = clean(req.query.status);
+    res.json(await RecruitmentOfferTemplate.find(query).sort({ issample: -1, templatename: 1 }).lean());
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.saveOfferTemplate = async (req, res) => {
+  try {
+    const colid = getColid(req);
+    const templateid = cleanKey(req.body.templateid || req.body.templatename || `offer_${Date.now()}`);
+    const payload = {
+      colid,
+      templateid,
+      templatename: clean(req.body.templatename),
+      jobrole: clean(req.body.jobrole),
+      description: clean(req.body.description),
+      htmlcontent: String(req.body.htmlcontent || ''),
+      status: clean(req.body.status || 'Active'),
+      issample: clean(req.body.issample || 'No'),
+      user: clean(req.body.user)
+    };
+    if (!payload.templatename) return res.status(400).json({ msg: 'Template name is required' });
+    const data = req.body.id
+      ? await RecruitmentOfferTemplate.findOneAndUpdate({ _id: req.body.id, colid }, payload, { new: true, runValidators: true })
+      : await RecruitmentOfferTemplate.findOneAndUpdate({ colid, templateid }, payload, { upsert: true, new: true, runValidators: true });
+    res.json(data);
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.deleteOfferTemplate = async (req, res) => {
+  try { await RecruitmentOfferTemplate.deleteOne({ _id: req.body.id, colid: getColid(req) }); res.json({ success: true }); }
+  catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.getFinalCandidates = async (req, res) => {
+  try {
+    const colid = getColid(req);
+    const jobid = clean(req.query.jobid);
+    res.json(await RecruitmentApplication.find(finalCandidateQuery(colid, jobid)).sort({ applicantname: 1 }).lean());
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.generateOfferLetter = async (req, res) => {
+  try {
+    const colid = getColid(req);
+    const [candidate, template, job, institution] = await Promise.all([
+      RecruitmentApplication.findOne({ _id: req.body.applicationid, colid }).lean(),
+      RecruitmentOfferTemplate.findOne({ _id: req.body.templateid, colid }).lean(),
+      RecruitmentJobPost.findOne({ colid, jobid: clean(req.body.jobid) }).lean(),
+      Institution.findOne({ colid }).lean()
+    ]);
+    if (!candidate) return res.status(404).json({ msg: 'Candidate not found' });
+    if (!template) return res.status(404).json({ msg: 'Offer template not found' });
+    const values = {
+      institutionname: institution?.institutionname || '',
+      institutionlogo: institution?.logolink || '',
+      institutionaddress: institution?.address || '',
+      offerid: `OFFER-${candidate.applicationno || candidate._id}`,
+      today: new Date().toISOString().slice(0, 10),
+      name: candidate.applicantname,
+      email: candidate.email,
+      phone: candidate.phone,
+      designation: clean(req.body.designation || job?.title || template.jobrole),
+      salary: clean(req.body.salary || job?.salaryrange),
+      jobtitle: job?.title || '',
+      jobid: job?.jobid || candidate.jobid,
+      department: job?.department || '',
+      ...Object.fromEntries(Object.entries(candidate.customfields || {}).map(([key, value]) => [String(key).toLowerCase(), value]))
+    };
+    const html = replaceOfferPlaceholders(template.htmlcontent, values);
+    res.json({ html, candidate, template, job, institution });
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.getOnboardingSteps = async (req, res) => {
+  try {
+    const query = { colid: getColid(req) };
+    if (req.query.role) query.role = clean(req.query.role);
+    if (req.query.status) query.status = clean(req.query.status);
+    res.json(await RecruitmentOnboardingStep.find(query).sort({ role: 1, order: 1, stepname: 1 }).lean());
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.saveOnboardingStep = async (req, res) => {
+  try {
+    const colid = getColid(req);
+    const role = clean(req.body.role);
+    const stepid = cleanKey(req.body.stepid || req.body.stepname || `step_${Date.now()}`);
+    const payload = {
+      colid,
+      role,
+      stepid,
+      stepname: clean(req.body.stepname),
+      description: clean(req.body.description),
+      order: numberOrZero(req.body.order),
+      documentrequired: clean(req.body.documentrequired || 'No'),
+      status: clean(req.body.status || 'Active'),
+      user: clean(req.body.user)
+    };
+    if (!payload.role || !payload.stepname) return res.status(400).json({ msg: 'Role and step name are required' });
+    const data = req.body.id
+      ? await RecruitmentOnboardingStep.findOneAndUpdate({ _id: req.body.id, colid }, payload, { new: true, runValidators: true })
+      : await RecruitmentOnboardingStep.findOneAndUpdate({ colid, role, stepid }, payload, { upsert: true, new: true, runValidators: true });
+    res.json(data);
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.deleteOnboardingStep = async (req, res) => {
+  try { await RecruitmentOnboardingStep.deleteOne({ _id: req.body.id, colid: getColid(req) }); res.json({ success: true }); }
+  catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.addCandidatesToUsers = async (req, res) => {
+  try {
+    const colid = getColid(req);
+    const role = clean(req.body.role);
+    if (!role) return res.status(400).json({ msg: 'Role is required' });
+    const ids = Array.isArray(req.body.applicationids) ? req.body.applicationids : [];
+    const mappedUsers = Array.isArray(req.body.mappedUsers) ? req.body.mappedUsers : [];
+    const mappedByApplication = new Map(mappedUsers.map((item) => [clean(item.applicationid), item]));
+    const applications = await RecruitmentApplication.find({ colid, _id: { $in: ids } }).lean();
+    const saved = [];
+    for (const app of applications) {
+      const reviewed = mappedByApplication.get(String(app._id)) || {};
+      const reviewedCustomFields = reviewed.customFields && typeof reviewed.customFields === 'object' ? reviewed.customFields : {};
+      const email = clean(reviewed.email || app.email).toLowerCase();
+      if (!email) continue;
+      const payload = {
+        email,
+        name: clean(reviewed.name || app.applicantname) || 'NA',
+        phone: clean(reviewed.phone || app.phone) || 'NA',
+        password: clean(reviewed.password || app.password) || Math.random().toString(36).slice(2, 10),
+        role: clean(reviewed.role || role),
+        regno: clean(reviewed.regno) || email,
+        scholarnumber: clean(reviewed.scholarnumber),
+        abcid: clean(reviewed.abcid),
+        program: clean(reviewed.program) || 'NA',
+        programcode: clean(reviewed.programcode) || 'NA',
+        admissionyear: clean(reviewed.admissionyear) || 'NA',
+        academicyear: clean(reviewed.academicyear) || 'NA',
+        rollno: clean(reviewed.rollno),
+        semester: clean(reviewed.semester) || 'NA',
+        section: clean(reviewed.section) || 'NA',
+        gender: clean(reviewed.gender),
+        state: clean(reviewed.state),
+        city: clean(reviewed.city),
+        district: clean(reviewed.district),
+        pincode: clean(reviewed.pincode),
+        department: clean(reviewed.department || req.body.department || app.customfields?.department) || 'NA',
+        designation: clean(reviewed.designation || req.body.designation || app.customfields?.designation) || 'NA',
+        address: clean(reviewed.address || app.customfields?.address) || 'NA',
+        category: clean(reviewed.category),
+        institution: clean(reviewed.institution),
+        Mediumofinstruction: clean(reviewed.Mediumofinstruction || reviewed.mediumofinstruction),
+        regulation: clean(reviewed.regulation),
+        Major: clean(reviewed.Major || reviewed.major),
+        Minor: clean(reviewed.Minor || reviewed.minor),
+        AEC: clean(reviewed.AEC || reviewed.aec),
+        SEC: clean(reviewed.SEC || reviewed.sec),
+        VAC: clean(reviewed.VAC || reviewed.vac),
+        IDC: clean(reviewed.IDC || reviewed.idc),
+        MDC: clean(reviewed.MDC || reviewed.mdc),
+        specialization1: clean(reviewed.specialization1),
+        specialization2: clean(reviewed.specialization2),
+        colid,
+        status: Number(reviewed.status || 1),
+        user: clean(req.body.user),
+        addedby: clean(req.body.user),
+        joiningdate: reviewed.joiningdate || req.body.joiningdate || new Date(),
+        lastlogin: reviewed.lastlogin || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+        photo: clean(reviewed.photo || app.photourl),
+        customFields: { ...(app.customfields || {}), ...reviewedCustomFields }
+      };
+      const user = await User.findOneAndUpdate({ email }, payload, { upsert: true, new: true, runValidators: true });
+      await RecruitmentApplication.updateOne({ _id: app._id, colid }, { status: 'Onboarding', approvalstatus: app.approvalstatus || 'Approved' });
+      saved.push(user);
+    }
+    res.json({ success: true, count: saved.length, saved });
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.saveOnboardingRecord = async (req, res) => {
+  try {
+    const colid = getColid(req);
+    const candidate = await RecruitmentApplication.findOne({ _id: req.body.applicationid, colid }).lean();
+    if (!candidate) return res.status(404).json({ msg: 'Candidate not found' });
+    const steps = Array.isArray(req.body.steps) ? req.body.steps : [];
+    const completed = steps.length && steps.every((step) => /^complete$/i.test(clean(step.status)));
+    const payload = {
+      colid,
+      jobid: clean(req.body.jobid || candidate.jobid),
+      jobtitle: clean(req.body.jobtitle),
+      applicationid: clean(req.body.applicationid),
+      applicationno: candidate.applicationno,
+      candidate: candidate.applicantname,
+      candidateemail: candidate.email,
+      candidatephone: candidate.phone,
+      role: clean(req.body.role),
+      overallstatus: completed ? 'Complete' : clean(req.body.overallstatus || 'Pending'),
+      steps,
+      remarks: clean(req.body.remarks),
+      completedat: completed ? new Date() : null,
+      user: clean(req.body.user)
+    };
+    const data = await RecruitmentOnboardingRecord.findOneAndUpdate(
+      { colid, jobid: payload.jobid, applicationid: payload.applicationid },
+      payload,
+      { upsert: true, new: true, runValidators: true }
+    );
+    res.json(data);
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.getOnboardingRecords = async (req, res) => {
+  try {
+    const query = { colid: getColid(req) };
+    if (req.query.jobid) query.jobid = clean(req.query.jobid);
+    if (req.query.applicationid) query.applicationid = clean(req.query.applicationid);
+    if (req.query.role) query.role = clean(req.query.role);
+    if (req.query.overallstatus) query.overallstatus = clean(req.query.overallstatus);
+    res.json(await RecruitmentOnboardingRecord.find(query).sort({ updatedAt: -1 }).lean());
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.getOnboardingReport = async (req, res) => {
+  try {
+    const colid = getColid(req);
+    const jobid = clean(req.query.jobid);
+    const records = await RecruitmentOnboardingRecord.find({ colid, ...(jobid ? { jobid } : {}) }).sort({ candidate: 1 }).lean();
+    const stageMap = new Map();
+    for (const record of records) {
+      for (const step of record.steps || []) {
+        const key = clean(step.stepname || step.stepid || 'Unknown');
+        const current = stageMap.get(key) || { stage: key, complete: 0, pending: 0, total: 0 };
+        current.total += 1;
+        if (/^complete$/i.test(clean(step.status))) current.complete += 1;
+        else current.pending += 1;
+        stageMap.set(key, current);
+      }
+    }
+    const summary = records.reduce((acc, row) => {
+      const key = clean(row.overallstatus || 'Pending');
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    res.json({ records, stagewise: Array.from(stageMap.values()), summary });
   } catch (err) { res.status(500).json({ msg: err.message }); }
 };

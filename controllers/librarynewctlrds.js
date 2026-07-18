@@ -13,12 +13,13 @@ const CounterFee2Transaction = require("../Models/counterfee2transactionds");
 
 const libraryFields = ["libraryname", "description", "type", "status"];
 const bookFields = [
-  "libraryid", "libraryname", "accessionno", "title", "author", "publisher", "isbn", "category", "subject", "edition",
-  "publicationyear", "language", "rackno", "shelfno", "location", "supplier", "purchasedate",
+  "libraryid", "libraryname", "accessionno", "title", "author", "classification", "publisher", "publisheraddress",
+  "isbn", "category", "subject", "edition", "publicationyear", "language", "rackno", "shelfno", "location",
+  "supplier", "invoiceno", "invoicedate", "keywords", "purchasedate",
   "price", "pages", "status", "remarks"
 ];
 const studentFields = ["academicyear", "program", "programcode", "semester", "section", "name", "email", "phone", "regno", "major", "minor"];
-const issueFields = ["libraryid", "libraryname", "accessionno", "title", "category", "student", "regno", "email", "programcode", "academicyear", "semester", "issuetype", "status"];
+const issueFields = ["libraryid", "libraryname", "accessionno", "title", "classification", "publisher", "publisheraddress", "category", "keywords", "invoiceno", "student", "regno", "email", "programcode", "academicyear", "semester", "issuetype", "status"];
 const ledgerFields = ["academicyear", "program", "programcode", "regulation", "semester", "student", "regno", "feegroup", "feeitem", "status"];
 const userFields = ["name", "email", "user", "role", "department", "phone"];
 
@@ -60,7 +61,7 @@ function applyFilters(query, source, fields) {
   fields.forEach((field) => {
     const value = source[field];
     if (!text(value)) return;
-    if (["title", "author", "student", "name", "email", "phone", "regno", "feeitem", "feegroup", "accessionno", "libraryname", "description"].includes(field)) query[field] = regex(value);
+    if (["title", "author", "classification", "publisher", "publisheraddress", "keywords", "invoiceno", "student", "name", "email", "phone", "regno", "feeitem", "feegroup", "accessionno", "libraryname", "description"].includes(field)) query[field] = regex(value);
     else query[field] = value;
   });
 }
@@ -102,7 +103,7 @@ async function bookPayload(body, colid) {
   bookFields.forEach((field) => {
     if (["libraryname", "libraryid"].includes(field)) return;
     if (["price", "pages"].includes(field)) payload[field] = number(body[field], 0);
-    else if (field === "purchasedate") payload[field] = date(body[field]);
+    else if (field === "purchasedate" || field === "invoicedate") payload[field] = date(body[field]);
     else payload[field] = text(body[field]);
   });
   const library = await getLibrary(colid, body.libraryid);
@@ -446,6 +447,12 @@ exports.issueBook = async (req, res) => {
       bookid: String(book._id),
       title: book.title,
       author: book.author,
+      classification: book.classification,
+      publisher: book.publisher,
+      publisheraddress: book.publisheraddress,
+      invoiceno: book.invoiceno,
+      invoicedate: book.invoicedate,
+      keywords: book.keywords,
       category: book.category,
       ...studentPayload(student),
       issuetype: text(req.body.issuetype) || "Regular",
@@ -574,6 +581,12 @@ exports.requestBook = async (req, res) => {
       bookid: String(book._id),
       title: book.title,
       author: book.author,
+      classification: book.classification,
+      publisher: book.publisher,
+      publisheraddress: book.publisheraddress,
+      invoiceno: book.invoiceno,
+      invoicedate: book.invoicedate,
+      keywords: book.keywords,
       category: book.category,
       ...studentPayload(student),
       status: "Requested",
@@ -698,6 +711,12 @@ async function movementPayload(body, colid) {
     bookid: String(book._id),
     title: book.title,
     author: book.author,
+    classification: book.classification,
+    publisher: book.publisher,
+    publisheraddress: book.publisheraddress,
+    invoiceno: book.invoiceno,
+    invoicedate: book.invoicedate,
+    keywords: book.keywords,
     category: book.category,
     fromlibraryid: book.libraryid || "",
     fromlibraryname: book.libraryname || "",
@@ -726,9 +745,10 @@ exports.transfers = async (req, res) => {
   try {
     const colid = number(req.query.colid, undefined);
     const query = { colid };
-    applyFilters(query, req.query, ["accessionno", "title", "fromlibraryname", "tolibraryname", "status"]);
+    const movementFields = ["accessionno", "title", "classification", "publisher", "publisheraddress", "keywords", "invoiceno", "fromlibraryname", "tolibraryname", "status"];
+    applyFilters(query, req.query, movementFields);
     const data = await LibraryTransfer.find(query).sort({ createdAt: -1 }).limit(3000).lean();
-    res.json({ success: true, data, options: await distinctOptions(LibraryTransfer, colid, ["accessionno", "title", "fromlibraryname", "tolibraryname", "status"]) });
+    res.json({ success: true, data, options: await distinctOptions(LibraryTransfer, colid, movementFields) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -772,9 +792,10 @@ exports.loans = async (req, res) => {
   try {
     const colid = number(req.query.colid, undefined);
     const query = { colid };
-    applyFilters(query, req.query, ["accessionno", "title", "fromlibraryname", "tolibraryname", "status"]);
+    const movementFields = ["accessionno", "title", "classification", "publisher", "publisheraddress", "keywords", "invoiceno", "fromlibraryname", "tolibraryname", "status"];
+    applyFilters(query, req.query, movementFields);
     const data = await LibraryLoan.find(query).sort({ createdAt: -1 }).limit(3000).lean();
-    res.json({ success: true, data, options: await distinctOptions(LibraryLoan, colid, ["accessionno", "title", "fromlibraryname", "tolibraryname", "status"]) });
+    res.json({ success: true, data, options: await distinctOptions(LibraryLoan, colid, movementFields) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
