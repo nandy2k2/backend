@@ -1,6 +1,7 @@
 const User = require('../Models/user');
 
 const clean = (value) => String(value || '').trim();
+const dateAfterDays = (days) => new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 
 exports.createPublicAccount = async (req, res) => {
   try {
@@ -62,6 +63,7 @@ exports.createPublicAccount = async (req, res) => {
       comments: 'Self signup',
       colid,
       status: 1,
+      lastlogin: dateAfterDays(3),
       fathername: 'NA',
       mothername: 'NA',
       dob: 'NA',

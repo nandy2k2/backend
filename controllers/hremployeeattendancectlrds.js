@@ -4,6 +4,12 @@ const User = require("../Models/user");
 const HrEmployeeAttendance = require("../Models/hremployeeattendanceds");
 const HrEmployeeAttendanceApprovalMatrix = require("../Models/hremployeeattendanceapprovalmatrixds");
 const LeaveApplication = require("../Models/hrleaveapplicationds");
+const LeaveBalance = require("../Models/hrleavebalanceds");
+const LeaveType = require("../Models/hrleavetypeds");
+const LeaveCycle = require("../Models/hrleavecycleds");
+const CompensatoryRule = require("../Models/hrleavecompensatoryruleds");
+const WeeklyOff = require("../Models/hrleaveweeklyoffds");
+const AcademicCalendar = require("../Models/macadcal");
 const HrSalStructure = require("../Models/hrsalstructure");
 const HrSalary = require("../Models/hrsalary");
 
@@ -37,6 +43,19 @@ const splitLevels = (row) => {
 };
 const attendanceStatus = (value) => (number(value) === 1 ? "Present" : "Absent");
 const isDeduction = (value) => text(value).toLowerCase() === "deduction";
+const dayName = (dateValue) => {
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return "";
+  return ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][date.getDay()];
+};
+const dateRangeFor = (dateValue) => {
+  const start = new Date(dateValue);
+  if (Number.isNaN(start.getTime())) return null;
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+};
 
 const hasApprovedLeaveForDate = async (attendanceRow) => {
   if (!attendanceRow?.date) return false;
@@ -50,10 +69,111 @@ const hasApprovedLeaveForDate = async (attendanceRow) => {
   return Boolean(leave);
 };
 
+const isWeeklyOff = async (attendanceRow) => {
+  const dayofweek = dayName(attendanceRow.date);
+  if (!dayofweek) return false;
+  const row = await WeeklyOff.findOne({
+    colid: Number(attendanceRow.colid),
+    employeeemail: text(attendanceRow.employeeemail),
+    dayofweek,
+    status: /^Active$/i
+  }).lean();
+  return Boolean(row);
+};
+
+const isHoliday = async (attendanceRow) => {
+  const range = dateRangeFor(attendanceRow.date);
+  if (!range) return false;
+  const row = await AcademicCalendar.findOne({
+    colid: Number(attendanceRow.colid),
+    type: /^Holiday$/i,
+    activitydate: { $gte: range.start, $lte: range.end }
+  }).lean();
+  return Boolean(row);
+};
+
+const getLatestCycleName = async (colid) => {
+  const cycle = await LeaveCycle.findOne({ colid, status: /^Active$/i }).sort({ updatedAt: -1 }).lean();
+  return text(cycle?.cyclename);
+};
+
+const findBalance = async (colid, employeeemail, leavetype, cyclename = "") => {
+  const exact = cyclename ? await LeaveBalance.findOne({ colid, employeeemail, leavetype, cyclename }) : null;
+  if (exact) return exact;
+  return LeaveBalance.findOne({ colid, employeeemail, leavetype }).sort({ updatedAt: -1 });
+};
+
+const ensureCompBalance = async (attendanceRow, employee = null) => {
+  const colid = Number(attendanceRow.colid);
+  const cyclename = await getLatestCycleName(colid);
+  return LeaveBalance.findOneAndUpdate(
+    { colid, employeeemail: text(attendanceRow.employeeemail), leavetype: "Compensatory Leave", cyclename },
+    {
+      colid,
+      cyclename,
+      employeename: text(attendanceRow.employeename || employee?.name),
+      employeeemail: text(attendanceRow.employeeemail),
+      department: text(employee?.department),
+      leavetype: "Compensatory Leave",
+      status: "Active",
+      user: text(attendanceRow.user)
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+};
+
+const addCompensatoryLeaveIfRequired = async (attendanceRow) => {
+  if (number(attendanceRow.attendance) !== 1 || attendanceRow.approvalstatus !== "Approved") return null;
+  const offDay = await isWeeklyOff(attendanceRow);
+  const holiday = await isHoliday(attendanceRow);
+  if (!offDay && !holiday) return null;
+  const comments = `Compensatory Leave for attendance ${attendanceRow._id} on ${attendanceRow.date}`;
+  if (text(attendanceRow.finalcomment).includes(comments)) return null;
+  const employee = await User.findOne({ colid: Number(attendanceRow.colid), $or: [{ email: text(attendanceRow.employeeemail) }, { user: text(attendanceRow.employeeemail) }] }).select("name email user department role").lean();
+  const rule = await CompensatoryRule.findOne({
+    colid: Number(attendanceRow.colid),
+    status: /^Active$/i,
+    $or: [{ role: text(employee?.role) }, { role: /^All$/i }]
+  }).sort({ role: -1, updatedAt: -1 }).lean();
+  const addDays = number(rule?.leavestoadd || 1);
+  const balance = await ensureCompBalance(attendanceRow, employee);
+  balance.earned = number(balance.earned) + addDays;
+  balance.balance = number(balance.balance) + addDays;
+  await balance.save();
+  attendanceRow.finalcomment = [text(attendanceRow.finalcomment), comments].filter(Boolean).join(" | ");
+  await attendanceRow.save();
+  return balance;
+};
+
+const deductCasualLeaveIfPossible = async (attendanceRow) => {
+  const colid = Number(attendanceRow.colid);
+  const clType = await LeaveType.findOne({
+    colid,
+    status: /^Active$/i,
+    $or: [{ code: /^CL$/i }, { leavetype: /casual/i }, { leavetype: /^CL$/i }]
+  }).sort({ code: -1, updatedAt: -1 }).lean();
+  if (!clType?.leavetype) return false;
+  const balance = await findBalance(colid, text(attendanceRow.employeeemail), clType.leavetype);
+  if (!balance || number(balance.balance) < 1) return false;
+  const marker = `CL deducted for attendance ${attendanceRow._id} on ${attendanceRow.date}`;
+  if (text(attendanceRow.finalcomment).includes(marker)) return true;
+  balance.used = number(balance.used) + 1;
+  balance.balance = number(balance.balance) - 1;
+  await balance.save();
+  attendanceRow.finalcomment = [text(attendanceRow.finalcomment), marker].filter(Boolean).join(" | ");
+  await attendanceRow.save();
+  return true;
+};
+
 const createLopDeductionIfRequired = async (attendanceRow, approvedByUser) => {
   if (number(attendanceRow.attendance) !== 0 || attendanceRow.approvalstatus !== "Approved") return null;
   const approvedLeaveExists = await hasApprovedLeaveForDate(attendanceRow);
   if (approvedLeaveExists) return null;
+  const offDay = await isWeeklyOff(attendanceRow);
+  const holiday = await isHoliday(attendanceRow);
+  if (offDay || holiday) return null;
+  const clDeducted = await deductCasualLeaveIfPossible(attendanceRow);
+  if (clDeducted) return null;
 
   const comments = `LOP Deduction for attendance ${attendanceRow._id} on ${attendanceRow.date}`;
   const existingLop = await HrSalary.findOne({
@@ -321,6 +441,7 @@ exports.approveAttendance = async (req, res) => {
         }
       }
       const savedItem = await item.save();
+      await addCompensatoryLeaveIfRequired(savedItem);
       await createLopDeductionIfRequired(savedItem, req.body.user);
       updated.push(savedItem);
     }

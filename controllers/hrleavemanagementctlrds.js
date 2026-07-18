@@ -11,6 +11,8 @@ const LeaveCycle = require("../Models/hrleavecycleds");
 const LeaveBalance = require("../Models/hrleavebalanceds");
 const LeaveApplication = require("../Models/hrleaveapplicationds");
 const LeaveClassPlan = require("../Models/hrleaveclassplands");
+const CompensatoryRule = require("../Models/hrleavecompensatoryruleds");
+const WeeklyOff = require("../Models/hrleaveweeklyoffds");
 
 const upload = multer({ storage: multer.memoryStorage() });
 exports.uploadMiddleware = upload.single("file");
@@ -158,9 +160,11 @@ const crud = (Model, fields, required = []) => ({
 });
 
 const hierarchyCrud = crud(LeaveHierarchy, ["employeename", "employeeemail", "department", "levels", "status"], ["employeeemail"]);
-const typeCrud = crud(LeaveType, ["leavetype", "leavetypecategory", "code", "description", "annualquota", "documentrequired", "carryforwardcriteria", "carryforwardmaxdays", "carryforwardpercentage", "status"], ["leavetype"]);
+const typeCrud = crud(LeaveType, ["leavetype", "leavetypecategory", "code", "description", "roles", "annualquota", "documentrequired", "carryforwardcriteria", "carryforwardmaxdays", "carryforwardpercentage", "status"], ["leavetype"]);
 const cycleCrud = crud(LeaveCycle, ["cyclename", "resetmonth", "resetday", "status"], ["cyclename"]);
 const balanceCrud = crud(LeaveBalance, ["cyclename", "employeename", "employeeemail", "department", "leavetype", "openingbalance", "carryforward", "earned", "used", "balance", "status"], ["employeeemail", "leavetype"]);
+const compRuleCrud = crud(CompensatoryRule, ["role", "leavestoadd", "description", "status"], ["role"]);
+const weeklyOffCrud = crud(WeeklyOff, ["employeename", "employeeemail", "role", "department", "dayofweek", "status"], ["employeeemail", "dayofweek"]);
 
 exports.createHierarchy = hierarchyCrud.create;
 exports.getHierarchies = hierarchyCrud.get;
@@ -182,10 +186,42 @@ exports.getBalances = balanceCrud.get;
 exports.updateBalance = balanceCrud.update;
 exports.deleteBalance = balanceCrud.delete;
 exports.bulkBalance = balanceCrud.bulk;
+exports.createCompRule = compRuleCrud.create;
+exports.getCompRules = compRuleCrud.get;
+exports.updateCompRule = compRuleCrud.update;
+exports.deleteCompRule = compRuleCrud.delete;
+exports.bulkCompRule = compRuleCrud.bulk;
+exports.createWeeklyOff = weeklyOffCrud.create;
+exports.getWeeklyOff = weeklyOffCrud.get;
+exports.updateWeeklyOff = weeklyOffCrud.update;
+exports.deleteWeeklyOff = weeklyOffCrud.delete;
+exports.bulkWeeklyOff = weeklyOffCrud.bulk;
+
+const ensureCompensatoryLeaveType = async (colid, user = "") => {
+  if (!colid) return null;
+  return LeaveType.findOneAndUpdate(
+    { colid, leavetype: "Compensatory Leave" },
+    {
+      colid,
+      leavetype: "Compensatory Leave",
+      leavetypecategory: "Non EL",
+      code: "COMP",
+      description: "Auto earned for working on weekly off days or holidays.",
+      roles: "All",
+      annualquota: 0,
+      documentrequired: "No",
+      carryforwardcriteria: "None",
+      status: "Active",
+      user
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+};
 
 exports.options = async (req, res) => {
   try {
     const colid = Number(req.query.colid);
+    await ensureCompensatoryLeaveType(colid, req.query.user);
     const users = await User.find({
       colid,
       $or: [
@@ -196,6 +232,42 @@ exports.options = async (req, res) => {
     const types = await LeaveType.find({ colid, status: "Active" }).sort({ leavetype: 1 }).lean();
     const cycles = await LeaveCycle.find({ colid, status: "Active" }).sort({ cyclename: -1 }).lean();
     res.json({ success: true, users, types, cycles });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.saveWeeklyOffMany = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const dayofweek = text(req.body.dayofweek);
+    const user = text(req.body.user);
+    const employeeemails = Array.isArray(req.body.employeeemails) ? req.body.employeeemails.map(text).filter(Boolean) : [];
+    if (!colid || !dayofweek || !employeeemails.length) {
+      return res.status(400).json({ success: false, message: "Select day of week and at least one employee" });
+    }
+    const users = await User.find({ colid, $or: [{ email: { $in: employeeemails } }, { user: { $in: employeeemails } }] }).select("name email user department role").lean();
+    let saved = 0;
+    for (const employee of users) {
+      const employeeemail = text(employee.email || employee.user);
+      if (!employeeemail) continue;
+      await WeeklyOff.findOneAndUpdate(
+        { colid, employeeemail, dayofweek },
+        {
+          colid,
+          employeeemail,
+          employeename: text(employee.name),
+          role: text(employee.role),
+          department: text(employee.department),
+          dayofweek,
+          status: "Active",
+          user
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      saved += 1;
+    }
+    res.json({ success: true, saved });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

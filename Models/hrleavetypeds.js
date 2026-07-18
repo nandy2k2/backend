@@ -6,6 +6,7 @@ const hrLeaveTypeSchema = new mongoose.Schema(
     leavetypecategory: { type: String, trim: true, enum: ["EL", "Non EL"], default: "Non EL" },
     code: { type: String, trim: true },
     description: { type: String, trim: true },
+    roles: { type: String, trim: true, default: "All" },
     annualquota: { type: Number, default: 0 },
     documentrequired: { type: String, trim: true, default: "No" },
     carryforwardcriteria: { type: String, trim: true, default: "None" },

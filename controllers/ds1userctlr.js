@@ -1,9 +1,9 @@
 const User = require("../Models/user");
 
-// Helper function to calculate lastlogin (90 days from now)
+// Helper function to calculate lastlogin (3 days from now)
 const calculateLastLogin = () => {
   const date = new Date();
-  date.setDate(date.getDate() + 90);
+  date.setDate(date.getDate() + 3);
   return date;
 };
 
@@ -67,7 +67,7 @@ exports.ds1createuser = async (req, res) => {
       return res.status(400).json({ message: "User with this email already exists" });
     }
 
-    // Set lastlogin to 90 days from now if not provided
+    // Set lastlogin to 3 days from now if not provided
     if (!userData.lastlogin) {
       userData.lastlogin = calculateLastLogin();
     }
@@ -104,7 +104,7 @@ exports.ds1bulkcreateuser = async (req, res) => {
       return res.status(400).json({ message: "Users array is required" });
     }
 
-    // Add lastlogin to each user (90 days from now)
+    // Add lastlogin to each user (3 days from now)
     const usersWithLastLogin = users.map(user => ({
       ...user,
       lastlogin: user.lastlogin || calculateLastLogin(),
