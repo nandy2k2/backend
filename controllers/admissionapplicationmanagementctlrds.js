@@ -58,6 +58,8 @@ const baseFields = [
   'programapplied',
   'programcode',
   'applicationstatus',
+  'enrollmentstatus',
+  'applicationcomments',
   'validationstatus',
   'validationcomments',
   'applicationfeeamount',
@@ -91,6 +93,8 @@ const labels = {
   programapplied: 'Program',
   programcode: 'Program Code',
   applicationstatus: 'Application Status',
+  enrollmentstatus: 'Enrollment Status',
+  applicationcomments: 'Application Comments',
   validationstatus: 'Validation Status',
   paymentstatus: 'Application Fee Status',
   provisionalpaymentstatus: 'Provisional Fee Status'
@@ -535,6 +539,57 @@ exports.bulkUpdateApplicationStatus = async (req, res) => {
       modified: result.modifiedCount || result.nModified || 0,
       fromStatus,
       applicationstatus
+    });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+exports.bulkUpdateApplicationCommentsStatus = async (req, res) => {
+  try {
+    const colid = toNumber(req.body.colid);
+    const allowedStatuses = ['Enrolled', 'Partially Enrolled', 'Hold'];
+    const requestedItems = Array.isArray(req.body.items) ? req.body.items : [];
+    const fallbackIds = Array.isArray(req.body.ids) ? req.body.ids : [];
+    const items = requestedItems.length
+      ? requestedItems
+      : fallbackIds.map((id) => ({
+        id,
+        enrollmentstatus: req.body.enrollmentstatus,
+        applicationcomments: req.body.applicationcomments
+      }));
+
+    if (colid === undefined) return res.status(400).json({ msg: 'colid is required' });
+    if (!items.length) return res.status(400).json({ msg: 'Select at least one application' });
+
+    const operations = items
+      .map((item) => ({
+        id: clean(item.id || item._id),
+        enrollmentstatus: clean(item.enrollmentstatus || item.applicationstatus),
+        applicationcomments: clean(item.applicationcomments)
+      }))
+      .filter((item) => mongoose.Types.ObjectId.isValid(item.id) && allowedStatuses.includes(item.enrollmentstatus))
+      .map((item) => ({
+        updateOne: {
+          filter: { colid, _id: item.id },
+          update: {
+            $set: {
+              enrollmentstatus: item.enrollmentstatus,
+              applicationcomments: item.applicationcomments
+            }
+          }
+        }
+      }));
+
+    if (!operations.length) {
+      return res.status(400).json({ msg: 'Select applications and a valid status' });
+    }
+
+    const result = await AdmissionApplication.bulkWrite(operations);
+    res.json({
+      msg: 'Enrollment status and application comments updated',
+      matched: result.matchedCount || 0,
+      modified: result.modifiedCount || 0
     });
   } catch (err) {
     res.status(500).json({ msg: err.message });

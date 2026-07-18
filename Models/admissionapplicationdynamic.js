@@ -92,6 +92,8 @@ const AdmissionApplicationDynamicSchema = new mongoose.Schema({
     type: String,
     default: 'Applied'
   },
+  enrollmentstatus: String,
+  applicationcomments: String,
   validationstatus: {
     type: String,
     default: ''

@@ -321,6 +321,7 @@ app.get('/api/v2/admission-application-management/general-options', admissionApp
 app.post('/api/v2/admission-application-management/search', admissionApplicationManagementController.searchApplications);
 app.post('/api/v2/admission-application-management/bulk-delete', admissionApplicationManagementController.bulkDeleteApplications);
 app.post('/api/v2/admission-application-management/bulk-status', admissionApplicationManagementController.bulkUpdateApplicationStatus);
+app.post('/api/v2/admission-application-management/bulk-comments-status', admissionApplicationManagementController.bulkUpdateApplicationCommentsStatus);
 app.post('/api/v2/admission-application-management/general-admit', admissionApplicationManagementController.generalAdmissionBulkAdmit);
 app.post('/api/v2/admission-application-management/send-email', admissionApplicationManagementController.sendEmail);
 app.post('/admission-dynamic/application-document-upload', admissionDynamicController.uploadDocumentMiddleware, admissionDynamicController.uploadApplicationDocument);
