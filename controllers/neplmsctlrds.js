@@ -3,6 +3,7 @@ const multer = require("multer");
 const AWS = require("aws-sdk");
 const Awsconfig = require("../Models/awsconfig");
 const AiConfiguration = require("../Models/aiconfigurationds");
+const OllamaConfiguration = require("../Models/ollamaconfigurationds");
 const NepLmsResource = require("../Models/neplmsresourceds");
 const NepLmsTimetable = require("../Models/neplmstimetableds");
 const NepLmsAssignmentSubmission = require("../Models/neplmsassignmentsubmissionds");
@@ -134,6 +135,16 @@ const getAiConfig = async (colid, provider = "Gemini") => {
     || AiConfiguration.findOne({ colid: Number(colid), type: providerRegex, active: /^yes$/i }).sort({ _id: -1 }).lean();
 };
 
+const getOllamaConfig = async (colid, configId) => {
+  const query = { colid: Number(colid), active: /^yes$/i };
+  if (text(configId)) {
+    const selected = await OllamaConfiguration.findOne({ ...query, _id: configId }).lean();
+    if (selected) return selected;
+  }
+  return OllamaConfiguration.findOne({ ...query, default: /^yes$/i }).sort({ _id: -1 }).lean()
+    || OllamaConfiguration.findOne(query).sort({ _id: -1 }).lean();
+};
+
 const callGemini = async (apikey, prompt, preferredModel = "gemini-2.5-flash") => {
   const fallbackModels = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"];
   const models = [...new Set([text(preferredModel), ...fallbackModels].filter(Boolean))];
@@ -152,6 +163,20 @@ const callGemini = async (apikey, prompt, preferredModel = "gemini-2.5-flash") =
     lastError = data.error?.message || `Gemini API request failed for ${model}`;
   }
   throw new Error(lastError || "Gemini API request failed");
+};
+
+const callOllama = async (config, prompt) => {
+  const server = text(config.serveraddress || "http://localhost:11434").replace(/\/+$/, "");
+  const model = text(config.modelname);
+  if (!model) throw new Error("Ollama model name is missing");
+  const response = await fetch(`${server}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, prompt, stream: false, options: { temperature: 0.45 } })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Ollama request failed");
+  return data.response || "";
 };
 
 const selectedSyllabusRows = async (body = {}) => {
@@ -369,18 +394,23 @@ exports.generateAiResource = async (req, res) => {
     const rows = await selectedSyllabusRows({ ...req.body, ...payload });
     if (!rows.length) return res.status(400).json({ success: false, message: "Select at least one module/topic from syllabus" });
 
-    const provider = text(req.body.provider || "Gemini");
-    if (provider.toLowerCase() !== "gemini") return res.status(400).json({ success: false, message: "Only Gemini is supported here" });
-    const aiConfig = await getAiConfig(payload.colid, provider);
-    if (!aiConfig?.apikey) return res.status(400).json({ success: false, message: "Active/default Gemini AI configuration is missing" });
-
     const awsConfig = await getDefaultAwsConfig(payload.colid);
     if (!awsConfig?.username || !awsConfig?.password || !awsConfig?.bucket || !awsConfig?.region) {
       return res.status(400).json({ success: false, message: "Default AWS configuration is incomplete" });
     }
 
     const prompt = buildAiResourcePrompt({ body: { ...req.body, ...payload }, rows });
-    const generated = await callGemini(aiConfig.apikey, prompt, req.body.model);
+    const provider = text(req.body.provider || "Gemini");
+    let generated = "";
+    if (provider.toLowerCase() === "ollama") {
+      const ollamaConfig = await getOllamaConfig(payload.colid, req.body.ollamaConfigId);
+      if (!ollamaConfig) return res.status(400).json({ success: false, message: "Active Ollama configuration is missing" });
+      generated = await callOllama(ollamaConfig, prompt);
+    } else {
+      const aiConfig = await getAiConfig(payload.colid, "Gemini");
+      if (!aiConfig?.apikey) return res.status(400).json({ success: false, message: "Active/default Gemini AI configuration is missing" });
+      generated = await callGemini(aiConfig.apikey, prompt, req.body.model);
+    }
     const html = wrapAiHtml({ ...req.body, ...payload }, generated);
     const buffer = Buffer.from(html, "utf8");
     const cleanCourse = path.basename(payload.coursecode || "course").replace(/[^\w.\-() ]/g, "_");
@@ -405,7 +435,7 @@ exports.generateAiResource = async (req, res) => {
       title: payload.title || `AI ${payload.resourcetype} - ${payload.course}`,
       module: rows.map((row) => row.module).filter(Boolean).join(", "),
       topic: rows.map((row) => row.syllabus).filter(Boolean).join(", "),
-      description: payload.description || `AI generated ${payload.resourcetype} using Gemini in ${text(req.body.language || "English")} (${text(req.body.difficulty || "Medium")}).`,
+      description: payload.description || `AI generated ${payload.resourcetype} using ${provider} in ${text(req.body.language || "English")} (${text(req.body.difficulty || "Medium")}).`,
       filename: fileName,
       originalname: fileName,
       mimetype: "text/html",
