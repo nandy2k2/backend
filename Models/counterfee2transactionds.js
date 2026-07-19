@@ -39,6 +39,7 @@ const CounterFee2TransactionSchema = new mongoose.Schema({
   paymode: String,
   paydetails: String,
   remarks: String,
+  transactionremarks: String,
   collectedby: String,
   collectedbyname: String,
   totalpaid: Number,

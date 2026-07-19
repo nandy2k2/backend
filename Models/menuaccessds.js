@@ -9,6 +9,9 @@ const menuaccessdsschema = new mongoose.Schema({
     type: String,
     required: [true, 'Please enter menu group']
   },
+  groupname: {
+    type: String
+  },
   title: {
     type: String,
     required: [true, 'Please enter title']

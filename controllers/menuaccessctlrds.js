@@ -19,7 +19,7 @@ exports.getMenuAccessRules = async (req, res) => {
 
 exports.createMenuAccessRule = async (req, res) => {
   try {
-    const { colid, menugroup, title, path, role, access, user } = req.body;
+    const { colid, menugroup, groupname, title, path, role, access, user } = req.body;
 
     if (!colid || !menugroup || !title || !path || !role || !access) {
       return res.status(400).json({ status: 'Failed', message: 'All fields are required' });
@@ -28,6 +28,7 @@ exports.createMenuAccessRule = async (req, res) => {
     const data = await menuaccessds.create({
       colid: Number(colid),
       menugroup,
+      groupname: groupname || menugroup,
       title,
       path,
       role,
@@ -46,13 +47,14 @@ exports.createMenuAccessRule = async (req, res) => {
 exports.updateMenuAccessRule = async (req, res) => {
   try {
     const { id } = req.body;
-    const { colid, menugroup, title, path, role, access, user } = req.body;
+    const { colid, menugroup, groupname, title, path, role, access, user } = req.body;
 
     const data = await menuaccessds.findByIdAndUpdate(
       id,
       {
         colid: Number(colid),
         menugroup,
+        groupname: groupname || menugroup,
         title,
         path,
         role,

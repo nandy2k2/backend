@@ -6,7 +6,7 @@ const ChequeFeesPayment = require("../Models/chequefeespaymentds");
 const FeesReceiptNote = require("../Models/feesreceiptnoteds");
 
 const allowedFilters = [
-  "academicyear", "admissionyear", "student", "regno", "regulation", "major", "minor",
+  "academicyear", "admissionyear", "student", "regno", "user", "regulation", "major", "minor",
   "program", "programcode", "semester", "section", "feegroup", "feeitem", "feebook",
   "cashbook", "feecategory", "feetype", "paymode", "transactionid", "referenceNumber"
 ];
@@ -83,6 +83,9 @@ exports.getPendingLedger = async (req, res) => {
 
     const query = { colid, balance: { $gt: 0 } };
     applyQueryFilters(query, req.query, ledgerFilters);
+    if (/^(true|yes|1)$/i.test(text(req.query.pastdue))) {
+      query.duedate = { $lt: new Date() };
+    }
     const data = await Ledgerstud.find(query)
       .sort({ academicyear: -1, student: 1, regno: 1, feegroup: 1, feeitem: 1 })
       .limit(3000)
@@ -233,6 +236,7 @@ exports.postPayment = async (req, res) => {
       paymode: text(req.body.paymode) || "Cash",
       paydetails: text(req.body.paydetails),
       remarks: text(req.body.remarks),
+      transactionremarks: text(req.body.transactionremarks) || text(req.body.remarks),
       collectedby: text(req.body.user),
       collectedbyname: text(req.body.name),
       totalpaid,
