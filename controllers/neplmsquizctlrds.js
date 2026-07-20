@@ -1,8 +1,15 @@
+const path = require("path");
+const multer = require("multer");
+const AWS = require("aws-sdk");
 const User = require("../Models/user");
 const WorkloadAssignment = require("../Models/workloadassignmentds");
 const AiConfiguration = require("../Models/aiconfigurationds");
+const Awsconfig = require("../Models/awsconfig");
 const NepLmsQuiz = require("../Models/neplmsquizds");
 const NepLmsQuizAttempt = require("../Models/neplmsquizattemptds");
+
+const upload = multer({ storage: multer.memoryStorage() });
+exports.uploadMiddleware = upload.single("file");
 
 const text = (value) => String(value || "").trim();
 const number = (value) => {
@@ -15,6 +22,14 @@ const stripCodeFence = (content) => text(content)
   .replace(/^```\s*/i, "")
   .replace(/```$/i, "")
   .trim();
+const encodeS3Key = (key) => String(key || "").split("/").map(encodeURIComponent).join("/");
+const s3Url = (bucket, region, key) => {
+  const encodedKey = encodeS3Key(key);
+  if (region === "us-east-1") return `https://${bucket}.s3.amazonaws.com/${encodedKey}`;
+  return `https://${bucket}.s3.${region}.amazonaws.com/${encodedKey}`;
+};
+
+const getDefaultAwsConfig = async (colid) => Awsconfig.findOne({ colid: Number(colid), type: /^aws$/i, default: /^yes$/i }).sort({ _id: -1 }).lean();
 
 const getAiConfig = async (colid, provider) => {
   const providerRegex = new RegExp(`^${escRegex(provider)}$`, "i");
@@ -136,6 +151,17 @@ const cleanOptions = (options = []) => options
   .map((option) => ({ text: text(option.text), iscorrect: Boolean(option.iscorrect) }))
   .filter((option) => option.text);
 
+const questionPayload = (body = {}) => ({
+  question: text(body.question),
+  imageLink: text(body.imageLink || body.imagelink || body.imageurl),
+  imageName: text(body.imageName || body.imagename || body.imagefilename),
+  fileLink: text(body.fileLink || body.filelink || body.fileurl),
+  fileName: text(body.fileName || body.filename),
+  videoLink: text(body.videoLink || body.videolink || body.videourl),
+  options: cleanOptions(body.options || []),
+  score: number(body.score) || 1
+});
+
 const totalQuizMarks = (quiz) => (quiz.sections || []).reduce((sum, section) => (
   sum + (section.questions || []).reduce((sectionSum, question) => sectionSum + number(question.score), 0)
 ), 0);
@@ -248,6 +274,47 @@ exports.updateQuiz = async (req, res) => {
   }
 };
 
+exports.uploadQuizFile = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!req.file) return res.status(400).json({ success: false, message: "File is required" });
+    const config = await getDefaultAwsConfig(colid);
+    if (!config?.username || !config?.password || !config?.bucket || !config?.region) {
+      return res.status(400).json({ success: false, message: "Default AWS configuration is incomplete" });
+    }
+    const cleanName = path.basename(req.file.originalname || "file").replace(/[^\w.\-() ]/g, "_");
+    const folder = `nep-lms/quiz-files/${text(req.body.context) || "question"}`;
+    const key = `${colid}/${folder}/${Date.now()}-${cleanName}`;
+    const s3 = new AWS.S3({
+      accessKeyId: config.username,
+      secretAccessKey: config.password,
+      region: config.region
+    });
+    await s3.putObject({
+      Bucket: config.bucket,
+      Key: key,
+      Body: req.file.buffer,
+      ContentType: req.file.mimetype || "application/octet-stream"
+    }).promise();
+    res.json({
+      success: true,
+      data: {
+        filename: cleanName,
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        bucket: config.bucket,
+        region: config.region,
+        key,
+        url: s3Url(config.bucket, config.region, key)
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.deleteQuiz = async (req, res) => {
   try {
     await NepLmsQuiz.findOneAndDelete({ _id: req.body.id, colid: Number(req.body.colid) });
@@ -290,12 +357,31 @@ exports.addQuestion = async (req, res) => {
     if (!quiz) return res.status(404).json({ success: false, message: "Quiz not found" });
     const section = quiz.sections.id(req.body.sectionid);
     if (!section) return res.status(404).json({ success: false, message: "Section not found" });
-    const question = text(req.body.question);
-    const options = cleanOptions(req.body.options || []);
-    if (!question) return res.status(400).json({ success: false, message: "Question is required" });
-    if (options.length < 2) return res.status(400).json({ success: false, message: "At least two options are required" });
-    if (!options.some((option) => option.iscorrect)) return res.status(400).json({ success: false, message: "Select at least one correct option" });
-    section.questions.push({ question, options, score: number(req.body.score) || 1 });
+    const payload = questionPayload(req.body);
+    if (!payload.question) return res.status(400).json({ success: false, message: "Question is required" });
+    if (payload.options.length < 2) return res.status(400).json({ success: false, message: "At least two options are required" });
+    if (!payload.options.some((option) => option.iscorrect)) return res.status(400).json({ success: false, message: "Select at least one correct option" });
+    section.questions.push(payload);
+    const data = await quiz.save();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateQuestion = async (req, res) => {
+  try {
+    const quiz = await NepLmsQuiz.findOne({ _id: req.body.quizid, colid: Number(req.body.colid) });
+    if (!quiz) return res.status(404).json({ success: false, message: "Quiz not found" });
+    const section = quiz.sections.id(req.body.sectionid);
+    if (!section) return res.status(404).json({ success: false, message: "Section not found" });
+    const question = section.questions.id(req.body.questionid);
+    if (!question) return res.status(404).json({ success: false, message: "Question not found" });
+    const payload = questionPayload(req.body);
+    if (!payload.question) return res.status(400).json({ success: false, message: "Question is required" });
+    if (payload.options.length < 2) return res.status(400).json({ success: false, message: "At least two options are required" });
+    if (!payload.options.some((option) => option.iscorrect)) return res.status(400).json({ success: false, message: "Select at least one correct option" });
+    question.set(payload);
     const data = await quiz.save();
     res.json({ success: true, data });
   } catch (error) {
@@ -314,6 +400,7 @@ exports.generateQuestions = async (req, res) => {
     const provider = text(req.body.provider);
     const language = text(req.body.language) || "English";
     const difficulty = text(req.body.difficulty) || "Medium";
+    const additionalPrompt = text(req.body.additionalprompt || req.body.additionalPrompt || req.body.prompt);
     const questionCount = Math.max(1, Math.min(number(req.body.questioncount) || 5, 50));
     if (!provider) return res.status(400).json({ success: false, message: "AI provider is required" });
 
@@ -351,7 +438,7 @@ Rules:
 2. One or more options may be correct.
 3. Use the key exactly as "iscorrect".
 4. Do not reveal answers in the question text.
-5. Keep questions suitable for the selected difficulty.`;
+5. Keep questions suitable for the selected difficulty.${additionalPrompt ? `\n6. Additional user instructions: ${additionalPrompt}` : ""}`;
 
     const generated = await callAi(provider, aiConfig.apikey, prompt);
     const questions = parseGeneratedQuestions(generated);

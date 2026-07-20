@@ -11,6 +11,11 @@ const optionSchema = new mongoose.Schema(
 const questionSchema = new mongoose.Schema(
   {
     question: { type: String, trim: true },
+    imageLink: { type: String, trim: true },
+    imageName: { type: String, trim: true },
+    fileLink: { type: String, trim: true },
+    fileName: { type: String, trim: true },
+    videoLink: { type: String, trim: true },
     options: [optionSchema],
     score: { type: Number, default: 1 }
   },

@@ -143,6 +143,9 @@ const questionPayload = (body = {}) => ({
   marks: number(body.marks) || 1,
   imageurl: text(body.imageurl),
   imagefilename: text(body.imagefilename),
+  fileurl: text(body.fileurl),
+  filename: text(body.filename),
+  videourl: text(body.videourl),
   conumber: text(body.conumber),
   co: text(body.co),
   bloomlevel: text(body.bloomlevel)
@@ -248,8 +251,8 @@ exports.uploadAssessmentImage = async (req, res) => {
   try {
     const colid = Number(req.body.colid);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
-    if (!req.file) return res.status(400).json({ success: false, message: "Image file is required" });
-    if (!String(req.file.mimetype || "").startsWith("image/")) {
+    if (!req.file) return res.status(400).json({ success: false, message: "File is required" });
+    if (text(req.body.filetype).toLowerCase() === "image" && !String(req.file.mimetype || "").startsWith("image/")) {
       return res.status(400).json({ success: false, message: "Only image files are allowed" });
     }
 
@@ -259,7 +262,7 @@ exports.uploadAssessmentImage = async (req, res) => {
     }
 
     const cleanName = path.basename(req.file.originalname).replace(/[^\w.\-() ]/g, "_");
-    const folder = `nep-lms/assessment-images/${text(req.body.context) || "images"}`;
+    const folder = `nep-lms/assessment-files/${text(req.body.context) || "files"}`;
     const key = `${colid}/${folder}/${Date.now()}-${cleanName}`;
     const s3 = new AWS.S3({
       accessKeyId: config.username,
@@ -558,6 +561,9 @@ exports.submitAssessment = async (req, res) => {
           questionid: String(question._id),
           question: question.question,
           questionimageurl: question.imageurl,
+          questionfileurl: question.fileurl,
+          questionfilename: question.filename,
+          questionvideourl: question.videourl,
           conumber: question.conumber,
           co: question.co,
           bloomlevel: question.bloomlevel,
@@ -636,6 +642,8 @@ exports.evaluateAttemptWithAi = async (req, res) => {
       const prompt = `Evaluate this student answer in ${text(req.body.language) || "English"}.
 Question: ${answer.question}
 Question image URL: ${answer.questionimageurl || "None"}
+Question file URL: ${answer.questionfileurl || "None"}
+Question video URL: ${answer.questionvideourl || "None"}
 Maximum marks: ${answer.maxmarks}
 Student answer: ${answer.answer}
 Student uploaded answer image URL: ${answer.answerimageurl || "None"}

@@ -206,6 +206,7 @@ const buildAiResourcePrompt = ({ body, rows }) => {
   const resourceType = text(body.resourcetype);
   const kind = resourceType === "Assignment" ? "assignment" : resourceType === "Lesson Plan" ? "lesson plan" : "course material";
   const selectedText = rows.map((row, index) => `${index + 1}. Module: ${row.module}\nTopic/Syllabus: ${row.syllabus}`).join("\n\n");
+  const additionalPrompt = text(body.additionalprompt || body.additionalPrompt || body.prompt);
   const extraInstructions = {
     assignment: `Create a student-ready assignment with clear instructions, expected output, evaluation rubric, submission guidelines, practical/application-oriented tasks, and difficulty level ${text(body.difficulty) || "Medium"}. If full marks are provided, align the rubric to ${text(body.fullmarks)} marks.`,
     "course material": "Create detailed student-ready course material with explanation, examples, practical applications, employability links, exercises, recap questions, and useful YouTube search links in the selected language.",
@@ -230,7 +231,7 @@ Requirements:
 2. Use a professional academic layout.
 3. ${extraInstructions[kind]}
 4. Keep the language strictly ${text(body.language) || "English"}.
-5. Include course title, module/topic title, and date generated.`;
+5. Include course title, module/topic title, and date generated.${additionalPrompt ? `\n6. Additional user instructions: ${additionalPrompt}` : ""}`;
 };
 
 const wrapAiHtml = (body, content) => {

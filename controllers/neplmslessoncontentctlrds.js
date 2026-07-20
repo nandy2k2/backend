@@ -189,6 +189,7 @@ const callOllama = async (config, prompt) => {
 
 const buildAiPrompt = (body) => {
   const contentType = text(body.contenttype) || "Text";
+  const additionalPrompt = text(body.additionalprompt || body.additionalPrompt || body.prompt);
   const contentInstruction = contentType === "Infographics"
     ? "Create a visual infographic-style HTML page. Use CSS cards, timelines, flow arrows, comparison blocks, color accents, concise labels, and visual hierarchy. It should feel like an educational infographic, not a plain article."
     : "Explain the topic clearly, then add examples, practice tasks, reflection prompts and short recap.";
@@ -208,10 +209,12 @@ Requirements:
 1. Return a complete HTML document only.
 2. ${contentInstruction}
 3. Make it visually readable for students.
-4. Do not include markdown fences.`;
+4. Do not include markdown fences.${additionalPrompt ? `\n5. Additional user instructions: ${additionalPrompt}` : ""}`;
 };
 
-const buildFlashcardPrompt = (body) => `Create flashcards for student revision.
+const buildFlashcardPrompt = (body) => {
+  const additionalPrompt = text(body.additionalprompt || body.additionalPrompt || body.prompt);
+  return `Create flashcards for student revision.
 
 Course: ${text(body.course)} (${text(body.coursecode)})
 Program: ${text(body.program)} (${text(body.programcode)})
@@ -232,7 +235,8 @@ Rules:
 1. No markdown fences.
 2. Keep each question short and suitable for a flash card.
 3. Answers should be accurate but compact.
-4. Use only ${text(body.language) || "English"}.`;
+4. Use only ${text(body.language) || "English"}.${additionalPrompt ? `\n5. Additional user instructions: ${additionalPrompt}` : ""}`;
+};
 
 const parseJsonArray = (content) => {
   const clean = stripCodeFence(content);
@@ -393,7 +397,7 @@ exports.generateFlashcards = async (req, res) => {
 exports.getProgress = async (req, res) => {
   try {
     const filter = { colid: Number(req.query.colid) };
-    ["lessonresourceid", "contentid", "academicyear", "semester", "coursecode", "regno"].forEach((field) => {
+    ["lessonresourceid", "contentid", "academicyear", "semester", "coursecode", "regno", "facultyemail"].forEach((field) => {
       if (text(req.query[field])) filter[field] = req.query[field];
     });
     const data = await NepLmsLessonContentProgress.find(filter).sort({ completedat: -1, student: 1 }).lean();
@@ -430,11 +434,16 @@ exports.getStudentLessonContent = async (req, res) => {
       const lessonKey = String(content.lessonresourceid || "general");
       const previousOk = priorCompleteByLesson[lessonKey] !== false;
       const isCompleted = completed.has(String(content._id));
+      const progress = progressRows.find((row) => String(row.contentid) === String(content._id));
       data.push({
         ...content,
         completed: isCompleted,
         locked: !previousOk,
-        completedat: progressRows.find((row) => String(row.contentid) === String(content._id))?.completedat || null
+        completedat: progress?.completedat || null,
+        completedsteps: progress?.completedsteps || 0,
+        totalsteps: progress?.totalsteps || 0,
+        progresspercentage: progress?.progresspercentage || 0,
+        stepstatus: progress?.stepstatus || ""
       });
       priorCompleteByLesson[lessonKey] = previousOk && isCompleted;
     });
@@ -473,13 +482,34 @@ exports.completeContent = async (req, res) => {
       if (!attempt) return res.status(400).json({ success: false, message: "Submit the linked quiz before marking it complete" });
     }
 
+    const lessonSteps = await NepLmsLessonContent.find({
+      colid,
+      lessonresourceid: content.lessonresourceid,
+      status: "Active"
+    }).sort({ sequence: 1 }).lean();
+    const currentProgress = await NepLmsLessonContentProgress.find({
+      colid,
+      regno: student.regno,
+      contentid: { $in: lessonSteps.map((item) => item._id) }
+    }).lean();
+    const completedStepIds = new Set(currentProgress.map((row) => String(row.contentid)));
+    completedStepIds.add(String(content._id));
+    const totalsteps = lessonSteps.length || 1;
+    const completedsteps = Math.min(completedStepIds.size, totalsteps);
+    const progresspercentage = Number(((completedsteps / totalsteps) * 100).toFixed(2));
+
     const data = await NepLmsLessonContentProgress.findOneAndUpdate(
       { colid, contentid: content._id, regno: student.regno },
       {
         lessonresourceid: content.lessonresourceid,
+        lessonplantitle: content.lessonplantitle,
         contenttitle: content.title,
         contenttype: content.contenttype,
         sequence: content.sequence,
+        totalsteps,
+        completedsteps,
+        progresspercentage,
+        stepstatus: "Completed",
         academicyear: content.academicyear,
         regulation: content.regulation,
         program: content.program,
@@ -489,6 +519,8 @@ exports.completeContent = async (req, res) => {
         semester: content.semester,
         course: content.course,
         coursecode: content.coursecode,
+        faculty: content.faculty,
+        facultyemail: content.facultyemail,
         student: student.name || "",
         regno: student.regno,
         email: student.email || "",
@@ -501,7 +533,7 @@ exports.completeContent = async (req, res) => {
       },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
-    res.json({ success: true, data });
+    res.json({ success: true, data, progress: { totalsteps, completedsteps, progresspercentage } });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
