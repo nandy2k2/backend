@@ -22,6 +22,8 @@ const nepLmsLessonContentSchema = new mongoose.Schema(
     videolink: { type: String, trim: true },
     quizid: { type: mongoose.Schema.Types.ObjectId, ref: "neplmsquizds" },
     quiztitle: { type: String, trim: true },
+    mindmapid: { type: mongoose.Schema.Types.ObjectId, ref: "neplmsmindmapds" },
+    mindmaptitle: { type: String, trim: true },
     flashcards: [flashCardSchema],
     academicyear: { type: String, trim: true },
     regulation: { type: String, trim: true },

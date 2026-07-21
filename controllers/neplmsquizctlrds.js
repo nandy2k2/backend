@@ -7,6 +7,7 @@ const AiConfiguration = require("../Models/aiconfigurationds");
 const Awsconfig = require("../Models/awsconfig");
 const NepLmsQuiz = require("../Models/neplmsquizds");
 const NepLmsQuizAttempt = require("../Models/neplmsquizattemptds");
+const NepLmsResource = require("../Models/neplmsresourceds");
 
 const upload = multer({ storage: multer.memoryStorage() });
 exports.uploadMiddleware = upload.single("file");
@@ -407,6 +408,29 @@ exports.generateQuestions = async (req, res) => {
     const aiConfig = await getAiConfig(colid, provider);
     if (!aiConfig?.apikey) return res.status(400).json({ success: false, message: `Active ${provider} AI configuration is missing` });
 
+    const courseMaterialId = text(req.body.courseMaterialId || req.body.coursematerialid);
+    let courseMaterialContext = "";
+    if (courseMaterialId) {
+      const material = await NepLmsResource.findOne({
+        _id: courseMaterialId,
+        colid,
+        resourcetype: "Course Material",
+        coursecode: quiz.coursecode,
+        academicyear: quiz.academicyear
+      }).lean();
+      if (!material) return res.status(404).json({ success: false, message: "Selected course material not found for this quiz course" });
+      courseMaterialContext = `
+
+Linked course material selected by user:
+Title: ${material.title || ""}
+Module: ${material.module || ""}
+Topic: ${material.topic || ""}
+Description: ${material.description || ""}
+File/link: ${material.url || ""}
+
+Use this linked course material as the primary source for the questions. If the link content cannot be accessed directly, use the title, module, topic and description as the source boundary.`;
+    }
+
     const prompt = `Create exactly ${questionCount} multiple choice questions in ${language}.
 Difficulty: ${difficulty}
 
@@ -420,6 +444,7 @@ Selected modules: ${quiz.module}
 Selected topics: ${quiz.topic}
 Quiz title: ${quiz.title}
 Section: ${section.title}
+${courseMaterialContext}
 
 Return only valid JSON, no markdown. The JSON must be an array. Each array item must have:
 {

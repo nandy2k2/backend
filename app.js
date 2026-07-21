@@ -4560,6 +4560,7 @@ const generatecodedsctlr = require("./controllers/generatecodedsctlr");
 app.post("/api/v2/generateinstitutecode", generatecodedsctlr.generateinstitutecode);
 
 const accountdsctlr = require("./controllers/accountdsctlr.js");
+const financenewctlrds = require("./controllers/financenewctlrds.js");
 const trialbalancedsctlr = require("./controllers/trialbalancedsctlr.js");
 
 // AccountGroup routes
@@ -4597,6 +4598,17 @@ app.get("/api/v2/dsgetaccountsmeta", accountdsctlr.dsgetaccountsmeta); // ?colid
 // Additional helper routes
 app.get("/api/v2/dsgetaccountsbygroup", accountdsctlr.dsgetaccountsbygroup); // ?colid=123&accountgroup=Assets
 app.get("/api/v2/dsgetaccountgroupswithtypes", accountdsctlr.dsgetaccountgroupswithtypes); 
+
+app.get("/api/v2/finance-new/voucher/options", financenewctlrds.voucherOptions);
+app.post("/api/v2/finance-new/voucher/load", financenewctlrds.voucherLoad);
+app.get("/api/v2/finance-new/:kind/options", financenewctlrds.options);
+app.post("/api/v2/finance-new/:kind/list", financenewctlrds.list);
+app.post("/api/v2/finance-new/:kind/save", financenewctlrds.save);
+app.post("/api/v2/finance-new/:kind/delete", financenewctlrds.deleteOne);
+app.post("/api/v2/finance-new/:kind/bulk-delete", financenewctlrds.bulkDelete);
+app.post("/api/v2/finance-new/:kind/bulk", financenewctlrds.bulk);
+app.get("/api/v2/finance-new/account-meta", financenewctlrds.accountMeta);
+app.post("/api/v2/finance-new/cheque-reconciliation/process", financenewctlrds.reconcileCheques);
 
 // Trial balance
 app.get("/api/v2/dsgeneratetrialbalance", trialbalancedsctlr.dsgeneratetrialbalance); // ?colid=123&year=2025-26
@@ -4834,6 +4846,7 @@ const neplmsconsecutiveabsencectlrds = require("./controllers/neplmsconsecutivea
 const neplmsmissingtimetablectlrds = require("./controllers/neplmsmissingtimetablectlrds");
 const neplmscourseprogressionctlrds = require("./controllers/neplmscourseprogressionctlrds");
 const neplmsfacultylogbookctlrds = require("./controllers/neplmsfacultylogbookctlrds");
+const neplmsmindmapctlrds = require("./controllers/neplmsmindmapctlrds");
 const exameligibilityctlrds = require("./controllers/exameligibilityctlrds");
 const neplmstimetablecreatorctlrds = require("./controllers/neplmstimetablecreatorctlrds");
 const neplmslearningprofilectlrds = require("./controllers/neplmslearningprofilectlrds");
@@ -5262,6 +5275,14 @@ app.get("/api/v2/neplms/faculty-logbook", neplmsfacultylogbookctlrds.getLogbook)
 app.post("/api/v2/neplms/faculty-logbook", neplmsfacultylogbookctlrds.saveLogbook);
 app.post("/api/v2/neplms/faculty-logbook/delete", neplmsfacultylogbookctlrds.deleteLogbook);
 app.post("/api/v2/neplms/faculty-logbook/bulk", neplmsfacultylogbookctlrds.bulkLogbook);
+app.get("/api/v2/neplms/mindmaps", neplmsmindmapctlrds.getMindMaps);
+app.get("/api/v2/neplms/mindmaps/student", neplmsmindmapctlrds.getStudentMindMaps);
+app.post("/api/v2/neplms/mindmaps", neplmsmindmapctlrds.saveMindMap);
+app.post("/api/v2/neplms/mindmaps/delete", neplmsmindmapctlrds.deleteMindMap);
+app.get("/api/v2/neplms/mind-maps", neplmsmindmapctlrds.getMindMaps);
+app.get("/api/v2/neplms/mind-maps/student", neplmsmindmapctlrds.getStudentMindMaps);
+app.post("/api/v2/neplms/mind-maps", neplmsmindmapctlrds.saveMindMap);
+app.post("/api/v2/neplms/mind-maps/delete", neplmsmindmapctlrds.deleteMindMap);
 app.get("/api/v2/neplms/room-resources/options", roomresourcectlrds.options);
 app.get("/api/v2/neplms/room-resources", roomresourcectlrds.getRooms);
 app.post("/api/v2/neplms/room-resources", roomresourcectlrds.saveRoom);
@@ -5776,6 +5797,7 @@ const ledgerstuddsctlr = require("./controllers/ledgerstuddsctlr");
 const studentfeeapplyctlrds = require("./controllers/studentfeeapplyctlrds");
 const feeapplicationctlrds = require("./controllers/feeapplicationctlrds");
 const studentledgercrudctlrds = require("./controllers/studentledgercrudctlrds");
+const studentledgermasterctlrds = require("./controllers/studentledgermasterctlrds");
 const studentledgerapprovalrolectlr = require("./controllers/studentledgerapprovalrolectlr");
 const studentledgerapprovalctlr = require("./controllers/studentledgerapprovalctlr");
 const studentledgeradjustctlr = require("./controllers/studentledgeradjustctlr");
@@ -5840,6 +5862,12 @@ app.post("/api/v2/studentledgercrud/list", studentledgercrudctlrds.list);
 app.post("/api/v2/studentledgercrud/save", studentledgercrudctlrds.save);
 app.post("/api/v2/studentledgercrud/delete", studentledgercrudctlrds.delete);
 app.post("/api/v2/studentledgercrud/bulk", studentledgercrudctlrds.bulk);
+app.get("/api/v2/studentledgermaster/options", studentledgermasterctlrds.getOptions);
+app.post("/api/v2/studentledgermaster/list", studentledgermasterctlrds.list);
+app.post("/api/v2/studentledgermaster/save", studentledgermasterctlrds.save);
+app.post("/api/v2/studentledgermaster/delete", studentledgermasterctlrds.deleteOne);
+app.post("/api/v2/studentledgermaster/bulk-delete", studentledgermasterctlrds.bulkDelete);
+app.post("/api/v2/studentledgermaster/bulk", studentledgermasterctlrds.bulk);
 app.get("/studentledgerapprovalroles", studentledgerapprovalrolectlr.getStudentLedgerApprovalRoles);
 app.post("/studentledgerapprovalroles", studentledgerapprovalrolectlr.createStudentLedgerApprovalRole);
 app.post("/studentledgerapprovalroles-update", studentledgerapprovalrolectlr.updateStudentLedgerApprovalRole);

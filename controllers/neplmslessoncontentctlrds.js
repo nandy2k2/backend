@@ -10,6 +10,7 @@ const NepLmsQuiz = require("../Models/neplmsquizds");
 const NepLmsQuizAttempt = require("../Models/neplmsquizattemptds");
 const NepLmsLessonContent = require("../Models/neplmslessoncontentds");
 const NepLmsLessonContentProgress = require("../Models/neplmslessoncontentprogressds");
+const NepLmsMindMap = require("../Models/neplmsmindmapds");
 
 const upload = multer({ storage: multer.memoryStorage() });
 exports.uploadMiddleware = upload.single("file");
@@ -114,6 +115,9 @@ const contentPayload = async (body = {}) => {
   const quiz = text(body.quizid)
     ? await NepLmsQuiz.findOne({ _id: body.quizid, colid: base.colid }).lean()
     : null;
+  const mindmap = text(body.mindmapid)
+    ? await NepLmsMindMap.findOne({ _id: body.mindmapid, colid: base.colid }).lean()
+    : null;
   return {
     ...base,
     lessonresourceid: text(body.lessonresourceid) || undefined,
@@ -127,6 +131,8 @@ const contentPayload = async (body = {}) => {
     videolink: text(body.videolink),
     quizid: text(body.quizid) || undefined,
     quiztitle: text(body.quiztitle || quiz?.title),
+    mindmapid: text(body.mindmapid) || undefined,
+    mindmaptitle: text(body.mindmaptitle || mindmap?.title),
     flashcards: parseFlashcards(body.flashcards),
     status: text(body.status) || "Active"
   };
