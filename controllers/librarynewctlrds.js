@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const LibraryBook = require("../Models/librarybookds");
 const LibraryFine = require("../Models/libraryfinecategoryds");
 const LibraryIssue = require("../Models/libraryissueds");
@@ -43,6 +44,10 @@ function regex(value) {
   return new RegExp(text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
 }
 
+function escRegex(value) {
+  return text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function dayStart(value) {
   const parsed = date(value);
   if (!parsed) return null;
@@ -67,8 +72,13 @@ function applyFilters(query, source, fields) {
 }
 
 async function getLibrary(colid, libraryid) {
-  if (!text(libraryid)) return null;
-  return await LibraryMaster.findOne({ _id: text(libraryid), colid }).lean();
+  const value = text(libraryid);
+  if (!value) return null;
+  if (mongoose.Types.ObjectId.isValid(value)) {
+    const byId = await LibraryMaster.findOne({ _id: value, colid }).lean();
+    if (byId) return byId;
+  }
+  return await LibraryMaster.findOne({ colid, libraryname: new RegExp(`^${escRegex(value)}$`, "i") }).lean();
 }
 
 function libraryPayload(library = {}) {
@@ -106,7 +116,7 @@ async function bookPayload(body, colid) {
     else if (field === "purchasedate" || field === "invoicedate") payload[field] = date(body[field]);
     else payload[field] = text(body[field]);
   });
-  const library = await getLibrary(colid, body.libraryid);
+  const library = await getLibrary(colid, body.libraryid || body.libraryname);
   Object.assign(payload, libraryPayload(library || body));
   payload.barcodevalue = text(body.barcodevalue) || payload.accessionno;
   payload.qrcodeurl = text(body.qrcodeurl);
