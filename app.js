@@ -303,6 +303,7 @@ app.post('/admission-dynamic/fields-update', admissionDynamicController.updateFi
 app.post('/admission-dynamic/fields-delete', admissionDynamicController.deleteField);
 app.get('/admission-dynamic/applications', admissionDynamicController.getApplications);
 app.get('/admission-dynamic/application', admissionDynamicController.getApplicationById);
+app.post('/admission-dynamic/application-email-check', admissionDynamicController.checkDuplicateEmail);
 app.get('/admission-dynamic/application-retrieve', admissionDynamicController.retrieveApplication);
 app.post('/admission-dynamic/application-credential-retrieve', admissionDynamicController.retrieveApplicationByCredential);
 app.post('/admission-dynamic/application-forgot-password', admissionDynamicController.forgotApplicationPassword);
@@ -4842,6 +4843,7 @@ const neplmsstudentworkspacectlrds = require("./controllers/neplmsstudentworkspa
 const neplmsstudentdashboardctlrds = require("./controllers/neplmsstudentdashboardctlrds");
 const neplmsfacultydashboardctlrds = require("./controllers/neplmsfacultydashboardctlrds");
 const neplmsattendancectlrds = require("./controllers/neplmsattendancectlrds");
+const neplmsloginattendancectlrds = require("./controllers/neplmsloginattendancectlrds");
 const neplmsconsecutiveabsencectlrds = require("./controllers/neplmsconsecutiveabsencectlrds");
 const neplmsmissingtimetablectlrds = require("./controllers/neplmsmissingtimetablectlrds");
 const neplmscourseprogressionctlrds = require("./controllers/neplmscourseprogressionctlrds");
@@ -5399,6 +5401,9 @@ app.get("/api/v2/neplms/attendance/studentwise-report", neplmsattendancectlrds.g
 app.get("/api/v2/neplms/attendance/my-summary", neplmsattendancectlrds.getMyStudentAttendanceSummary);
 app.get("/api/v2/neplms/attendance/student-coursewise-report", neplmsattendancectlrds.getStudentCoursewiseAttendanceReport);
 app.get("/api/v2/neplms/attendance/faculty-course-low-report", neplmsattendancectlrds.getFacultyCoursewiseLowAttendanceReport);
+app.post("/api/v2/neplms/login-attendance/record", neplmsloginattendancectlrds.record);
+app.get("/api/v2/neplms/login-attendance/options", neplmsloginattendancectlrds.options);
+app.get("/api/v2/neplms/login-attendance", neplmsloginattendancectlrds.list);
 app.get("/api/v2/neplms/consecutive-absence/options", neplmsconsecutiveabsencectlrds.options);
 app.get("/api/v2/neplms/consecutive-absence/report", neplmsconsecutiveabsencectlrds.report);
 app.get("/api/v2/neplms/missing-timetable/options", neplmsmissingtimetablectlrds.options);

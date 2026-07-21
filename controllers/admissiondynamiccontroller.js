@@ -1157,6 +1157,29 @@ exports.getApplicationById = async (req, res) => {
   }
 };
 
+exports.checkDuplicateEmail = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid || req.query.colid);
+    const email = String(req.body.email || req.query.email || '').trim().toLowerCase();
+    const excludeId = String(req.body.id || req.query.id || '').trim();
+
+    if (!colid) return res.status(400).json({ msg: 'College id is required' });
+    if (!email) return res.status(400).json({ msg: 'Email is required' });
+
+    const query = { colid, email };
+    if (excludeId && mongoose.Types.ObjectId.isValid(excludeId)) query._id = { $ne: excludeId };
+    const existing = await AdmissionApplication.findOne(query).select('_id applicationid applicationnumber applicationstatus email').lean();
+
+    res.json({
+      duplicate: !!existing,
+      applicationid: existing ? String(existing.applicationid || existing.applicationnumber || existing._id || '') : '',
+      applicationstatus: existing?.applicationstatus || ''
+    });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
 exports.retrieveApplication = async (req, res) => {
   try {
     const colid = Number(req.query.colid);
