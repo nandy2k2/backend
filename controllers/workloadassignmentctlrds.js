@@ -200,6 +200,11 @@ exports.updateWorkloadAssignment = async (req, res) => {
 
 exports.deleteWorkloadAssignment = async (req, res) => {
   try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (ids.length) {
+      const result = await WorkloadAssignment.deleteMany({ _id: { $in: ids } });
+      return res.json({ success: true, message: "Records deleted", deleted: result.deletedCount || 0 });
+    }
     const data = await WorkloadAssignment.findByIdAndDelete(req.body.id);
     if (!data) return res.status(404).json({ success: false, message: "Record not found" });
     res.json({ success: true, message: "Record deleted" });

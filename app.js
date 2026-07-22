@@ -5737,6 +5737,7 @@ app.get("/api/v2/filterscholarshipds", scholarshipdsctlr.filterscholarshipds);
 app.post("/api/v2/editscholarshipds", scholarshipdsctlr.editscholarshipds);
 app.get("/api/v2/deletescholarshipds", scholarshipdsctlr.deletescholarshipds);
 app.get("/api/v2/getallscholarshipds", scholarshipdsctlr.getallscholarshipds);
+app.get("/api/v2/scholarshipds/suggestions", scholarshipdsctlr.suggestScholarshipsForStudent);
 
 // ---- Scholarship Application Endpoints ----
 app.post("/api/v2/createscholarshipapplicationds", scholarshipapplicationdsctlr.createscholarshipapplicationds);

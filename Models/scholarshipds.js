@@ -48,6 +48,13 @@ const scholarshipdsschema = new mongoose.Schema({
     incomegroup: {
         type: String,
     },
+    applicationtype: {
+        type: String,
+        default: "Internal"
+    },
+    applicationwebsite: {
+        type: String,
+    },
     startdate: {
         type: String,
     },
