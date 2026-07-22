@@ -39,12 +39,14 @@ const buildCourseQuery = (source, student) => {
   const academicyear = text(source.academicyear || student.academicyear);
   const program = text(source.program || student.program);
   const programcode = text(source.programcode || student.programcode);
+  const regulation = text(source.regulation || student.regulation);
   const semester = text(source.semester || student.semester);
   const major = text(source.major || studentMajor(student));
 
   if (academicyear) query.academicyear = academicyear;
   if (program) query.program = program;
   if (programcode) query.programcode = programcode;
+  if (regulation) query.regulation = regulation;
   if (semester) query.semester = semester;
   if (major) query.subject = { $regex: `^${escRegex(major)}$`, $options: "i" };
   return query;

@@ -335,6 +335,7 @@ exports.generateQuestions = async (req, res) => {
     const provider = text(req.body.provider || "Gemini");
     const language = text(req.body.language) || "English";
     const difficulty = text(req.body.difficulty) || "Medium";
+    const additionalPrompt = text(req.body.additionalprompt || req.body.additionalPrompt);
     const questionCount = Math.max(1, Math.min(number(req.body.questioncount) || 5, 50));
     const syllabusReferences = Array.isArray(req.body.syllabusReferences)
       ? req.body.syllabusReferences.map((item) => ({
@@ -360,6 +361,7 @@ Selected syllabus reference:
 ${JSON.stringify(syllabusReferences, null, 2)}
 
 Use only the selected modules and topics above as the content reference. Do not create questions from unrelated course areas.
+${additionalPrompt ? `\nAdditional faculty instructions:\n${additionalPrompt}\n` : ""}
 
 Return only valid JSON, no markdown. The JSON must be an array. Each item must have:
 {
@@ -503,6 +505,28 @@ exports.getLeaderboard = async (req, res) => {
     const livequizid = text(req.query.livequizid);
     if (!colid || !livequizid) return res.status(400).json({ success: false, message: "colid and live quiz are required" });
     const data = await NepLmsLiveQuizAttempt.find({ colid, livequizid }).sort({ obtainedmarks: -1, lastactivitydate: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateAttemptScore = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const attempt = await NepLmsLiveQuizAttempt.findOne({ _id: req.body.id, colid });
+    if (!attempt) return res.status(404).json({ success: false, message: "Live quiz attempt not found" });
+    const totalmarks = number(req.body.totalmarks);
+    const obtainedmarks = number(req.body.obtainedmarks);
+    if (totalmarks < 0 || obtainedmarks < 0) return res.status(400).json({ success: false, message: "Marks cannot be negative" });
+    if (totalmarks && obtainedmarks > totalmarks) return res.status(400).json({ success: false, message: "Obtained marks cannot exceed total marks" });
+    attempt.totalmarks = totalmarks;
+    attempt.obtainedmarks = obtainedmarks;
+    attempt.scorecomments = text(req.body.scorecomments);
+    attempt.scoreeditedby = text(req.body.user);
+    attempt.scoreediteddate = new Date();
+    attempt.lastactivitydate = new Date();
+    const data = await attempt.save();
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

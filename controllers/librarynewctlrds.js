@@ -7,6 +7,8 @@ const LibraryMaster = require("../Models/librarymasterds");
 const LibraryAccess = require("../Models/libraryaccessds");
 const LibraryTransfer = require("../Models/librarytransferds");
 const LibraryLoan = require("../Models/libraryloands");
+const LibraryRoleMaxBooks = require("../Models/libraryrolemaxbooksds");
+const LibraryRoleMaxDays = require("../Models/libraryrolemaxdaysds");
 const Ledgerstud = require("../Models/ledgerstud");
 const User = require("../Models/user");
 const Institution = require("../Models/insdetails");
@@ -21,6 +23,8 @@ const bookFields = [
 ];
 const studentFields = ["academicyear", "program", "programcode", "semester", "section", "name", "email", "phone", "regno", "major", "minor"];
 const issueFields = ["libraryid", "libraryname", "accessionno", "title", "classification", "publisher", "publisheraddress", "category", "keywords", "invoiceno", "student", "regno", "email", "programcode", "academicyear", "semester", "issuetype", "status"];
+const roleMaxBooksFields = ["role", "bookcategory", "noofbooks", "default"];
+const roleMaxDaysFields = ["role", "bookcategory", "noofdays"];
 const ledgerFields = ["academicyear", "program", "programcode", "regulation", "semester", "student", "regno", "feegroup", "feeitem", "status"];
 const userFields = ["name", "email", "user", "role", "department", "phone"];
 
@@ -146,6 +150,7 @@ function studentPayload(student = {}) {
     student: student.name || student.student || "",
     regno: student.regno || "",
     email: student.email || student.user || "",
+    role: student.role || "",
     phone: student.phone || "",
     program: student.program || "",
     programcode: student.programcode || "",
@@ -153,6 +158,84 @@ function studentPayload(student = {}) {
     semester: student.semester || "",
     section: student.section || ""
   };
+}
+
+function userLookupQuery(colid, identifier) {
+  const value = text(identifier);
+  return {
+    colid,
+    $or: [
+      { regno: new RegExp(`^${escRegex(value)}$`, "i") },
+      { email: new RegExp(`^${escRegex(value)}$`, "i") },
+      { user: new RegExp(`^${escRegex(value)}$`, "i") }
+    ]
+  };
+}
+
+async function findRoleMaxBooks(colid, role, category) {
+  const exact = await LibraryRoleMaxBooks.findOne({ colid, role: new RegExp(`^${escRegex(role)}$`, "i"), bookcategory: new RegExp(`^${escRegex(category)}$`, "i") }).lean();
+  if (exact) return exact;
+  return await LibraryRoleMaxBooks.findOne({
+    colid,
+    default: /^Yes$/i,
+    $or: [
+      { role: new RegExp(`^${escRegex(role)}$`, "i"), bookcategory: new RegExp(`^${escRegex(category)}$`, "i") },
+      { role: new RegExp(`^${escRegex(role)}$`, "i") },
+      { bookcategory: new RegExp(`^${escRegex(category)}$`, "i") }
+    ]
+  }).lean();
+}
+
+async function findRoleMaxDays(colid, role, category) {
+  const exact = await LibraryRoleMaxDays.findOne({ colid, role: new RegExp(`^${escRegex(role)}$`, "i"), bookcategory: new RegExp(`^${escRegex(category)}$`, "i") }).lean();
+  if (exact) return exact;
+  return await LibraryRoleMaxDays.findOne({
+    colid,
+    $or: [
+      { role: new RegExp(`^${escRegex(role)}$`, "i") },
+      { bookcategory: new RegExp(`^${escRegex(category)}$`, "i") }
+    ]
+  }).lean();
+}
+
+async function issueEligibility(colid, profile, book) {
+  const role = text(profile.role) || "Student";
+  const category = text(book.category) || "General";
+  const maxRule = await findRoleMaxBooks(colid, role, category);
+  const maxBooks = number(maxRule?.noofbooks, 0);
+  const issueKey = text(profile.regno) || text(profile.email) || text(profile.user);
+  const activeQuery = { colid, status: /^Issued$/i, category: new RegExp(`^${escRegex(category)}$`, "i") };
+  if (text(profile.regno)) activeQuery.regno = text(profile.regno);
+  else activeQuery.email = text(profile.email || profile.user).toLowerCase();
+  const activeCount = await LibraryIssue.countDocuments(activeQuery);
+  const allowed = !maxBooks || activeCount < maxBooks;
+  const dayRule = await findRoleMaxDays(colid, role, category);
+  const noofdays = number(dayRule?.noofdays, 14);
+  const issuedate = new Date();
+  const duedate = new Date(issuedate);
+  duedate.setDate(duedate.getDate() + noofdays);
+  return {
+    allowed,
+    activeCount,
+    maxBooks,
+    noofdays,
+    issuedate,
+    duedate,
+    issueKey,
+    message: allowed ? "Book can be issued" : `Maximum ${maxBooks} ${category} book(s) already issued for this role`
+  };
+}
+
+async function fineForIssue(issue, returndate) {
+  const fineRule = await LibraryFine.findOne({ colid: issue.colid, category: issue.category, status: /^Active$/i }).lean();
+  const due = issue.duedate ? new Date(issue.duedate) : null;
+  let lateDays = 0;
+  if (due && returndate > due) lateDays = Math.ceil((returndate - due) / (1000 * 60 * 60 * 24));
+  const billableDays = Math.max(0, lateDays - number(fineRule?.graceperioddays, 0));
+  let fine = billableDays * number(fineRule?.fineperday, 0);
+  const maxFine = number(fineRule?.maxfine, 0);
+  if (maxFine > 0) fine = Math.min(fine, maxFine);
+  return { fine, lateDays };
 }
 
 function totals(rows) {
@@ -554,6 +637,289 @@ exports.returnBook = async (req, res) => {
     if (issue.libraryid) bookQuery.libraryid = issue.libraryid;
     await LibraryBook.findOneAndUpdate(bookQuery, { status: "Available" });
     res.json({ success: true, data: issue, fineamount: fine, latedays: lateDays });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.roleMaxBooks = async (req, res) => {
+  try {
+    const colid = number(req.query.colid, undefined);
+    const query = { colid };
+    applyFilters(query, req.query, roleMaxBooksFields);
+    const [data, roles, categories] = await Promise.all([
+      LibraryRoleMaxBooks.find(query).sort({ role: 1, bookcategory: 1 }).lean(),
+      User.distinct("role", { colid }),
+      LibraryBook.distinct("category", { colid })
+    ]);
+    res.json({
+      success: true,
+      data,
+      options: {
+        ...(await distinctOptions(LibraryRoleMaxBooks, colid, roleMaxBooksFields)),
+        role: [...new Set([...(roles || []), "Student", "Faculty", "All"].map(text).filter(Boolean))].sort(),
+        bookcategory: [...new Set([...(categories || []), "General"].map(text).filter(Boolean))].sort()
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.saveRoleMaxBooks = async (req, res) => {
+  try {
+    const colid = number(req.body.colid, undefined);
+    const payload = {
+      colid,
+      role: text(req.body.role),
+      bookcategory: text(req.body.bookcategory),
+      noofbooks: number(req.body.noofbooks, 0),
+      default: text(req.body.default) || "No",
+      user: text(req.body.user)
+    };
+    if (!payload.role || !payload.bookcategory) return res.status(400).json({ success: false, message: "Role and book category are required" });
+    const data = req.body.id
+      ? await LibraryRoleMaxBooks.findOneAndUpdate({ _id: req.body.id, colid }, payload, { new: true, runValidators: true })
+      : await LibraryRoleMaxBooks.findOneAndUpdate({ colid, role: payload.role, bookcategory: payload.bookcategory }, payload, { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteRoleMaxBooks = async (req, res) => {
+  try {
+    await LibraryRoleMaxBooks.findOneAndDelete({ _id: req.body.id, colid: number(req.body.colid, undefined) });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkRoleMaxBooks = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    let saved = 0;
+    for (const row of rows) {
+      if (!text(row.role) || !text(row.bookcategory)) continue;
+      const payload = {
+        colid: number(req.body.colid, undefined),
+        role: text(row.role),
+        bookcategory: text(row.bookcategory),
+        noofbooks: number(row.noofbooks, 0),
+        default: text(row.default) || "No",
+        user: text(req.body.user)
+      };
+      await LibraryRoleMaxBooks.findOneAndUpdate({ colid: payload.colid, role: payload.role, bookcategory: payload.bookcategory }, payload, { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true });
+      saved += 1;
+    }
+    res.json({ success: true, saved });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.counterFindUser = async (req, res) => {
+  try {
+    const colid = number(req.query.colid, undefined);
+    const identifier = text(req.query.identifier);
+    if (!identifier) return res.status(400).json({ success: false, message: "Reg no or email is required" });
+    const profile = await User.findOne(userLookupQuery(colid, identifier)).select("-password").lean();
+    if (!profile) return res.status(404).json({ success: false, message: "User not found" });
+    const issueKey = text(profile.regno) || text(profile.email) || text(profile.user);
+    const issueQuery = { colid, status: /^Issued$/i };
+    if (text(profile.regno)) issueQuery.regno = text(profile.regno);
+    else issueQuery.email = text(profile.email || profile.user).toLowerCase();
+    const active = await LibraryIssue.find(issueQuery).sort({ issuedate: -1 }).lean();
+    const historyQuery = { colid };
+    if (text(profile.regno)) historyQuery.regno = text(profile.regno);
+    else historyQuery.email = text(profile.email || profile.user).toLowerCase();
+    const history = await LibraryIssue.find(historyQuery).sort({ issuedate: -1, createdAt: -1 }).limit(500).lean();
+    res.json({ success: true, profile: { ...profile, issuekey: issueKey }, active, history });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.counterLoadBook = async (req, res) => {
+  try {
+    const colid = number(req.query.colid, undefined);
+    const accessionno = text(req.query.accessionno);
+    if (!accessionno) return res.status(400).json({ success: false, message: "Accession no is required" });
+    const book = await LibraryBook.findOne({ colid, accessionno }).lean();
+    if (!book) return res.status(404).json({ success: false, message: "Book not found" });
+    const issue = await LibraryIssue.findOne({ colid, accessionno, status: /^Issued$/i }).lean();
+    let eligibility = null;
+    if (text(req.query.identifier)) {
+      const profile = await User.findOne(userLookupQuery(colid, req.query.identifier)).lean();
+      if (profile) eligibility = await issueEligibility(colid, profile, book);
+    }
+    res.json({ success: true, book, issue, eligibility });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.counterIssueBook = async (req, res) => {
+  try {
+    const colid = number(req.body.colid, undefined);
+    const profile = await User.findOne(userLookupQuery(colid, req.body.identifier)).lean();
+    if (!profile) return res.status(404).json({ success: false, message: "User not found" });
+    const book = await LibraryBook.findOne({ colid, accessionno: text(req.body.accessionno) });
+    if (!book) return res.status(404).json({ success: false, message: "Book not found" });
+    if (!/^Available$/i.test(book.status || "")) return res.status(400).json({ success: false, message: "Book is not available" });
+    const eligibility = await issueEligibility(colid, profile, book);
+    if (!eligibility.allowed) return res.status(400).json({ success: false, message: eligibility.message, eligibility });
+    const issueKey = text(profile.regno) || text(profile.email) || text(profile.user);
+    const payload = {
+      colid,
+      ...libraryPayload(book),
+      accessionno: book.accessionno,
+      bookid: String(book._id),
+      title: book.title,
+      author: book.author,
+      classification: book.classification,
+      publisher: book.publisher,
+      publisheraddress: book.publisheraddress,
+      invoiceno: book.invoiceno,
+      invoicedate: book.invoicedate,
+      keywords: book.keywords,
+      category: book.category,
+      ...studentPayload(profile),
+      regno: issueKey,
+      issuetype: text(req.body.issuetype) || "Regular",
+      issuedate: eligibility.issuedate,
+      duedate: eligibility.duedate,
+      status: "Issued",
+      remarks: text(req.body.remarks),
+      issuedby: text(req.body.user),
+      user: text(req.body.user)
+    };
+    const data = await LibraryIssue.create(payload);
+    book.status = "Issued";
+    await book.save();
+    res.json({ success: true, data, eligibility });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.counterReturnBook = async (req, res) => {
+  try {
+    const colid = number(req.body.colid, undefined);
+    const issue = await LibraryIssue.findOne({ _id: req.body.id, colid });
+    if (!issue) return res.status(404).json({ success: false, message: "Issue record not found" });
+    if (/^Returned$/i.test(issue.status || "")) return res.status(400).json({ success: false, message: "Book already returned" });
+    const returndate = date(req.body.returndate) || new Date();
+    const { fine, lateDays } = await fineForIssue(issue, returndate);
+    issue.returndate = returndate;
+    issue.fineamount = fine;
+    issue.status = "Returned";
+    issue.returnedby = text(req.body.user);
+    issue.remarks = text(req.body.remarks) || issue.remarks;
+    if (fine > 0 && /^Student$/i.test(issue.role || "")) {
+      const ledger = await Ledgerstud.create({
+        name: issue.student,
+        user: issue.email || issue.regno,
+        feegroup: "Library Fine",
+        regno: issue.regno,
+        student: issue.student,
+        feeitem: `Library fine - ${issue.accessionno}`,
+        amount: fine,
+        paid: 0,
+        concession: 0,
+        balance: fine,
+        academicyear: issue.academicyear || "NA",
+        colid,
+        classdate: new Date(),
+        duedate: new Date(),
+        status: "Active",
+        programcode: issue.programcode,
+        semester: issue.semester,
+        comments: `Late return for ${issue.title}`
+      });
+      issue.ledgerid = String(ledger._id);
+    }
+    await issue.save();
+    const bookQuery = { colid, accessionno: issue.accessionno };
+    if (issue.libraryid) bookQuery.libraryid = issue.libraryid;
+    await LibraryBook.findOneAndUpdate(bookQuery, { status: "Available" });
+    res.json({ success: true, data: issue, fineamount: fine, latedays: lateDays });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.roleMaxDays = async (req, res) => {
+  try {
+    const colid = number(req.query.colid, undefined);
+    const query = { colid };
+    applyFilters(query, req.query, roleMaxDaysFields);
+    const [data, roles, categories] = await Promise.all([
+      LibraryRoleMaxDays.find(query).sort({ role: 1, bookcategory: 1 }).lean(),
+      User.distinct("role", { colid }),
+      LibraryBook.distinct("category", { colid })
+    ]);
+    res.json({
+      success: true,
+      data,
+      options: {
+        ...(await distinctOptions(LibraryRoleMaxDays, colid, roleMaxDaysFields)),
+        role: [...new Set([...(roles || []), "Student", "Faculty", "All"].map(text).filter(Boolean))].sort(),
+        bookcategory: [...new Set([...(categories || []), "General"].map(text).filter(Boolean))].sort()
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.saveRoleMaxDays = async (req, res) => {
+  try {
+    const colid = number(req.body.colid, undefined);
+    const payload = {
+      colid,
+      role: text(req.body.role),
+      bookcategory: text(req.body.bookcategory),
+      noofdays: number(req.body.noofdays, 0),
+      user: text(req.body.user)
+    };
+    if (!payload.role || !payload.bookcategory) return res.status(400).json({ success: false, message: "Role and book category are required" });
+    const data = req.body.id
+      ? await LibraryRoleMaxDays.findOneAndUpdate({ _id: req.body.id, colid }, payload, { new: true, runValidators: true })
+      : await LibraryRoleMaxDays.findOneAndUpdate({ colid, role: payload.role, bookcategory: payload.bookcategory }, payload, { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteRoleMaxDays = async (req, res) => {
+  try {
+    await LibraryRoleMaxDays.findOneAndDelete({ _id: req.body.id, colid: number(req.body.colid, undefined) });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkRoleMaxDays = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    let saved = 0;
+    for (const row of rows) {
+      if (!text(row.role) || !text(row.bookcategory)) continue;
+      const payload = {
+        colid: number(req.body.colid, undefined),
+        role: text(row.role),
+        bookcategory: text(row.bookcategory),
+        noofdays: number(row.noofdays, 0),
+        user: text(req.body.user)
+      };
+      await LibraryRoleMaxDays.findOneAndUpdate({ colid: payload.colid, role: payload.role, bookcategory: payload.bookcategory }, payload, { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true });
+      saved += 1;
+    }
+    res.json({ success: true, saved });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

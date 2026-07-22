@@ -6,6 +6,7 @@ const NepLmsTimetable = require("../Models/neplmstimetableds");
 const NepLmsAssignmentSubmission = require("../Models/neplmsassignmentsubmissionds");
 const NepLmsQuiz = require("../Models/neplmsquizds");
 const NepLmsQuizAttempt = require("../Models/neplmsquizattemptds");
+const NepLmsLessonContent = require("../Models/neplmslessoncontentds");
 
 const text = (value) => String(value || "").trim();
 const escRegex = (value) => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -17,12 +18,14 @@ const courseQueryForStudent = (source, student) => {
   const academicyear = text(source.academicyear || student.academicyear);
   const program = text(source.program || student.program);
   const programcode = text(source.programcode || student.programcode);
+  const regulation = text(source.regulation || student.regulation);
   const semester = text(source.semester || student.semester);
   const major = text(source.major || studentMajor(student));
 
   if (academicyear) query.academicyear = academicyear;
   if (program) query.program = program;
   if (programcode) query.programcode = programcode;
+  if (regulation) query.regulation = regulation;
   if (semester) query.semester = semester;
   if (major) query.subject = { $regex: `^${escRegex(major)}$`, $options: "i" };
   return query;
@@ -51,6 +54,21 @@ const courseBaseQueries = (courses, colid) => courses.map((course) => ({
   coursecode: course.coursecode
 }));
 
+const courseKey = (item = {}) => [
+  text(item.academicyear),
+  text(item.semester),
+  text(item.coursecode)
+].join("||");
+
+const maxDate = (...values) => {
+  const dates = values
+    .filter(Boolean)
+    .map((value) => new Date(value))
+    .filter((date) => !Number.isNaN(date.getTime()));
+  if (!dates.length) return null;
+  return new Date(Math.max(...dates.map((date) => date.getTime())));
+};
+
 exports.getStudentDashboard = async (req, res) => {
   try {
     const colid = Number(req.query.colid);
@@ -70,14 +88,71 @@ exports.getStudentDashboard = async (req, res) => {
     const now = new Date();
 
     const emptyOr = baseQueries.length ? { $or: baseQueries } : { coursecode: { $in: [] } };
-    const [attendanceRows, resources, timetable, submissions, quizzes, quizAttempts] = await Promise.all([
+    const [attendanceRows, resources, timetable, submissions, quizzes, quizAttempts, lessonContent] = await Promise.all([
       NepLmsAttendance.find({ colid, regno, coursecode: { $in: courseCodes } }).sort({ classdate: 1 }).lean(),
       NepLmsResource.find({ ...emptyOr, colid }).sort({ duedate: 1, createdAt: -1 }).lean(),
       NepLmsTimetable.find({ ...emptyOr, colid }).sort({ classdate: 1, classtime: 1 }).lean(),
       NepLmsAssignmentSubmission.find({ colid, regno, coursecode: { $in: courseCodes } }).lean(),
       NepLmsQuiz.find({ ...emptyOr, colid, status: "Active" }).sort({ startdatetime: 1 }).lean(),
-      NepLmsQuizAttempt.find({ colid, regno, coursecode: { $in: courseCodes } }).lean()
+      NepLmsQuizAttempt.find({ colid, regno, coursecode: { $in: courseCodes } }).lean(),
+      NepLmsLessonContent.find({ ...emptyOr, colid, status: "Active" }).sort({ sequence: 1 }).lean()
     ]);
+
+    const courseActivityMap = new Map(courses.map((course) => [courseKey(course), {
+      assignmentCount: 0,
+      materialCount: 0,
+      lessonPlanCount: 0,
+      quizCount: 0,
+      sequenceCount: 0,
+      latestActivityAt: null
+    }]));
+    resources.forEach((item) => {
+      const key = courseKey(item);
+      const stats = courseActivityMap.get(key);
+      if (!stats) return;
+      if (item.resourcetype === "Assignment") stats.assignmentCount += 1;
+      if (item.resourcetype === "Course Material") stats.materialCount += 1;
+      if (item.resourcetype === "Lesson Plan") stats.lessonPlanCount += 1;
+      stats.latestActivityAt = maxDate(stats.latestActivityAt, item.updatedAt, item.createdAt, item.duedate);
+    });
+    quizzes.forEach((item) => {
+      const key = courseKey(item);
+      const stats = courseActivityMap.get(key);
+      if (!stats) return;
+      stats.quizCount += 1;
+      stats.latestActivityAt = maxDate(stats.latestActivityAt, item.updatedAt, item.createdAt, item.startdatetime, item.enddatetime);
+    });
+    lessonContent.forEach((item) => {
+      const key = courseKey(item);
+      const stats = courseActivityMap.get(key);
+      if (!stats) return;
+      stats.sequenceCount += 1;
+      stats.latestActivityAt = maxDate(stats.latestActivityAt, item.updatedAt, item.createdAt);
+    });
+    const coursesWithActivity = courses.map((course) => {
+      const stats = courseActivityMap.get(courseKey(course)) || {};
+      const totalContent = Number(stats.assignmentCount || 0)
+        + Number(stats.materialCount || 0)
+        + Number(stats.quizCount || 0)
+        + Number(stats.sequenceCount || 0);
+      return {
+        ...compactCourse(course),
+        assignmentCount: stats.assignmentCount || 0,
+        materialCount: stats.materialCount || 0,
+        lessonPlanCount: stats.lessonPlanCount || 0,
+        quizCount: stats.quizCount || 0,
+        sequenceCount: stats.sequenceCount || 0,
+        totalContent,
+        hasContent: totalContent > 0,
+        latestActivityAt: stats.latestActivityAt ? stats.latestActivityAt.toISOString() : ""
+      };
+    }).sort((a, b) => {
+      if (a.hasContent !== b.hasContent) return a.hasContent ? -1 : 1;
+      const bDate = b.latestActivityAt ? new Date(b.latestActivityAt).getTime() : 0;
+      const aDate = a.latestActivityAt ? new Date(a.latestActivityAt).getTime() : 0;
+      if (bDate !== aDate) return bDate - aDate;
+      return `${a.semester || ""}${a.course || ""}`.localeCompare(`${b.semester || ""}${b.course || ""}`);
+    });
 
     const attendanceMap = new Map();
     attendanceRows.forEach((row) => {
@@ -141,9 +216,9 @@ exports.getStudentDashboard = async (req, res) => {
         section: student.section || ""
       },
       summary,
-      courses: courses.map(compactCourse),
+      courses: coursesWithActivity,
       attendance: [...attendanceMap.values()].sort((a, b) => String(a.coursecode).localeCompare(String(b.coursecode))),
-      upcomingClasses: upcomingClasses.slice(0, 12),
+      upcomingClasses,
       pastClasses: pastClasses.slice(0, 12),
       upcomingAssignments: upcomingAssignments.slice(0, 12),
       upcomingQuizzes: upcomingQuizzes.slice(0, 12),

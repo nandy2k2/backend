@@ -20,6 +20,7 @@ const libraryIssueSchema = new mongoose.Schema(
     student: { type: String, required: true, trim: true },
     regno: { type: String, required: true, trim: true, index: true },
     email: { type: String, trim: true, lowercase: true },
+    role: { type: String, trim: true },
     phone: { type: String, trim: true },
     program: { type: String, trim: true },
     programcode: { type: String, trim: true },

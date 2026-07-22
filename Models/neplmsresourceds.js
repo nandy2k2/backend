@@ -18,6 +18,8 @@ const nepLmsResourceSchema = new mongoose.Schema(
     module: { type: String, trim: true },
     topic: { type: String, trim: true },
     description: { type: String, trim: true },
+    order: { type: Number, default: 0 },
+    employabilityrelated: { type: String, trim: true, default: "No" },
     duedate: { type: String, trim: true },
     fullmarks: { type: Number, default: 0 },
     filename: { type: String, trim: true },

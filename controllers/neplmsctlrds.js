@@ -57,6 +57,8 @@ const resourcePayload = (body = {}) => ({
   module: text(body.module),
   topic: text(body.topic),
   description: text(body.description),
+  order: optionalNumber(body.order),
+  employabilityrelated: text(body.employabilityrelated || body.employabilityRelated || body.employability) || "No",
   duedate: text(body.duedate),
   fullmarks: optionalNumber(body.fullmarks),
   filename: text(body.filename),
@@ -207,9 +209,13 @@ const buildAiResourcePrompt = ({ body, rows }) => {
   const kind = resourceType === "Assignment" ? "assignment" : resourceType === "Lesson Plan" ? "lesson plan" : "course material";
   const selectedText = rows.map((row, index) => `${index + 1}. Module: ${row.module}\nTopic/Syllabus: ${row.syllabus}`).join("\n\n");
   const additionalPrompt = text(body.additionalprompt || body.additionalPrompt || body.prompt);
+  const includeEmployability = ["yes", "true", "1", "on"].includes(text(body.employabilityrelated || body.employabilityRelated || body.employability).toLowerCase());
+  const courseMaterialEmployability = includeEmployability
+    ? "Include a dedicated employability section with workplace applications, skill mapping, interview/project prompts, career pathways, and useful YouTube search links focused on practical employability."
+    : "Do not add a dedicated employability or career section. Keep the material focused on academic explanation, examples, exercises, recap questions, and useful YouTube search links.";
   const extraInstructions = {
     assignment: `Create a student-ready assignment with clear instructions, expected output, evaluation rubric, submission guidelines, practical/application-oriented tasks, and difficulty level ${text(body.difficulty) || "Medium"}. If full marks are provided, align the rubric to ${text(body.fullmarks)} marks.`,
-    "course material": "Create detailed student-ready course material with explanation, examples, practical applications, employability links, exercises, recap questions, and useful YouTube search links in the selected language.",
+    "course material": `Create detailed student-ready course material with explanation, examples, practical applications, exercises, recap questions, and useful YouTube search links in the selected language. ${courseMaterialEmployability}`,
     "lesson plan": `Create a teacher-ready classwise lesson plan for ${Math.max(1, Number(body.noofclasses || 1))} classes. Include class number, module/topic coverage, learning outcomes, teaching methods, activities, resources, assessment/check for understanding, homework/follow-up, and expected duration. Difficulty level: ${text(body.difficulty) || "Medium"}.`
   };
 
@@ -265,7 +271,7 @@ const wrapAiHtml = (body, content) => {
 
 exports.getResources = async (req, res) => {
   try {
-    const data = await NepLmsResource.find(courseFilter(req.query)).sort({ createdAt: -1 }).lean();
+    const data = await NepLmsResource.find(courseFilter(req.query)).sort({ order: 1, createdAt: -1 }).lean();
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
