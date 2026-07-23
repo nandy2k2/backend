@@ -12,6 +12,47 @@ const number = (value) => {
 };
 const regexText = (value) => new RegExp(`^${text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
 const randomOtp = () => String(Math.floor(100000 + Math.random() * 900000));
+const parseClassDate = (classdate) => {
+  const value = text(classdate);
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) return parsed;
+  const match = value.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+  if (!match) return null;
+  return new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]));
+};
+const parseTimeParts = (value) => {
+  const input = text(value).toLowerCase();
+  const match = input.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/);
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  const meridiem = match[3];
+  if (meridiem === "pm" && hour < 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+  if (hour > 23 || minute > 59) return null;
+  return { hour, minute };
+};
+const buildOtpValidityWindow = (classInfo = {}) => {
+  const classDate = parseClassDate(classInfo.classdate);
+  const startParts = parseTimeParts(classInfo.classtime);
+  if (!classDate || !startParts) return {};
+  const validfrom = new Date(classDate);
+  validfrom.setHours(startParts.hour, startParts.minute, 0, 0);
+
+  const timeText = text(classInfo.classtime);
+  const endText = timeText.includes("-") ? timeText.split("-").slice(1).join("-") : "";
+  const endParts = parseTimeParts(endText);
+  const validtill = new Date(validfrom);
+  if (endParts) {
+    validtill.setHours(endParts.hour, endParts.minute, 0, 0);
+    if (validtill <= validfrom) validtill.setDate(validtill.getDate() + 1);
+  } else {
+    validtill.setMinutes(validtill.getMinutes() + (number(classInfo.durationminutes) || 60));
+  }
+  return { validfrom, validtill };
+};
+const formatValidity = (date) => date ? date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "";
 
 const classFields = [
   "academicyear",
@@ -33,7 +74,7 @@ const classFields = [
   "status"
 ];
 
-const studentSelect = "name email phone regno admissionyear academicyear programcode regulation Major Minor semester section category gender department photo colid";
+const studentSelect = "name email phone regno rollno admissionyear academicyear program programcode regulation Major Minor semester section category gender department photo colid";
 
 const buildClassFilter = (source = {}) => {
   const filter = {};
@@ -186,6 +227,7 @@ exports.saveAttendance = async (req, res) => {
         studentemail: text(item.studentemail || item.email),
         studentphone: text(item.studentphone || item.phone),
         regno: text(item.regno),
+        rollno: text(item.rollno),
         program: text(classInfo.program),
         programcode: text(classInfo.programcode || item.programcode),
         academicyear: text(classInfo.academicyear),
@@ -226,6 +268,7 @@ const attendancePayloadFrom = ({ colid, classInfo, item, attendanceType, attenda
   studentemail: text(item.studentemail || item.email),
   studentphone: text(item.studentphone || item.phone),
   regno: text(item.regno),
+  rollno: text(item.rollno),
   program: text(classInfo.program),
   programcode: text(classInfo.programcode || item.programcode),
   academicyear: text(classInfo.academicyear || item.academicyear),
@@ -256,6 +299,23 @@ exports.createAttendanceOtps = async (req, res) => {
     const attendanceType = text(req.body.type) || "Regular";
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     if (!classInfo._id && !classInfo.classid) return res.status(400).json({ success: false, message: "Class is required" });
+    const validity = buildOtpValidityWindow(classInfo);
+    if (!validity.validfrom || !validity.validtill) {
+      return res.status(400).json({ success: false, message: "Class date and class time are required to create period-valid OTPs" });
+    }
+    const now = new Date();
+    if (now < validity.validfrom) {
+      return res.status(400).json({
+        success: false,
+        message: `OTP can be generated only during the class period. This class starts at ${formatValidity(validity.validfrom)}.`
+      });
+    }
+    if (now > validity.validtill) {
+      return res.status(400).json({
+        success: false,
+        message: `OTP cannot be generated because the class period ended at ${formatValidity(validity.validtill)}.`
+      });
+    }
     const otps = Array.from({ length: 6 }, randomOtp);
     const classid = classInfo._id || classInfo.classid;
     await NepLmsAttendanceOtp.updateMany({ colid, classid, type: attendanceType, status: "Active" }, { status: "Closed" });
@@ -273,13 +333,16 @@ exports.createAttendanceOtps = async (req, res) => {
       coursecode: text(classInfo.coursecode),
       classdate: text(classInfo.classdate),
       classtime: text(classInfo.classtime),
+      durationminutes: number(classInfo.durationminutes) || 0,
+      validfrom: validity.validfrom,
+      validtill: validity.validtill,
       type: attendanceType,
       status: "Active",
       colid,
       user: text(req.body.user),
       createdby: text(req.body.user)
     });
-    res.json({ success: true, data, otps });
+    res.json({ success: true, data, otps, validfrom: validity.validfrom, validtill: validity.validtill });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -306,6 +369,9 @@ exports.getStudentOtpSessions = async (req, res) => {
       semester: text(student.semester)
     };
     if (text(student.Major)) query.major = text(student.Major);
+    await NepLmsAttendanceOtp.updateMany({ colid, status: "Active", validtill: { $lt: new Date() } }, { status: "Expired" });
+    query.validfrom = { $lte: new Date() };
+    query.validtill = { $gte: new Date() };
     const data = await NepLmsAttendanceOtp.find(query).sort({ createdAt: -1 }).select("-otps").lean();
     res.json({ success: true, student, data });
   } catch (error) {
@@ -327,6 +393,14 @@ exports.submitStudentOtps = async (req, res) => {
     }
     const session = await NepLmsAttendanceOtp.findOne({ _id: sessionid, colid, status: "Active" }).lean();
     if (!session) return res.status(404).json({ success: false, message: "Active OTP session not found" });
+    const now = new Date();
+    if (session.validfrom && now < new Date(session.validfrom)) {
+      return res.status(400).json({ success: false, message: `OTP is valid only from ${formatValidity(new Date(session.validfrom))}.` });
+    }
+    if (session.validtill && now > new Date(session.validtill)) {
+      await NepLmsAttendanceOtp.updateOne({ _id: session._id, colid }, { status: "Expired" });
+      return res.status(400).json({ success: false, message: `OTP expired at ${formatValidity(new Date(session.validtill))}. Attendance cannot be marked after the class period.` });
+    }
     const matches = session.otps.every((otp, index) => text(otp) === submittedOtps[index]);
     if (!matches) return res.status(400).json({ success: false, message: "OTP values do not match" });
     const student = await User.findOne({

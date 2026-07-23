@@ -7,6 +7,7 @@ const nepLmsAttendanceSchema = new mongoose.Schema({
   studentemail: { type: String },
   studentphone: { type: String },
   regno: { type: String },
+  rollno: { type: String },
   program: { type: String },
   programcode: { type: String },
   academicyear: { type: String },

@@ -104,7 +104,9 @@ const compactActivity = (kind, item = {}) => {
     sequence: item.sequence || 0,
     marks: item.fullmarks || 0,
     link: item.url || item.filelink || item.videolink || "",
-    contenttype: item.contenttype || ""
+    contenttype: item.contenttype || "",
+    lessonresourceid: item.lessonresourceid ? String(item.lessonresourceid) : "",
+    resourceid: item.resourceid ? String(item.resourceid) : ""
   };
 };
 

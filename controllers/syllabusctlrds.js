@@ -241,6 +241,19 @@ exports.deleteSyllabus = async (req, res) => {
   }
 };
 
+exports.bulkDeleteSyllabi = async (req, res) => {
+  try {
+    const colid = toNumber(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one syllabus row" });
+    const data = await Syllabus.deleteMany({ _id: { $in: ids }, colid });
+    res.json({ success: true, deleted: data.deletedCount || 0 });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.bulkCreateSyllabi = async (req, res) => {
   try {
     const items = Array.isArray(req.body.items) ? req.body.items : [];
