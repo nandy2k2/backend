@@ -5,13 +5,14 @@ const fields = [
   "student", "regno", "user", "name", "feegroup", "feeitem", "feecategory", "feetype",
   "feebook", "cashbook", "semester", "amount", "paid", "concession", "balance",
   "Latefinedue", "Latefinepaid",
+  "refundable", "refundamount", "refunddate", "refundedamount", "refundmode", "refundrefno", "refundcomments",
   "cash", "upi", "cheque", "card", "pg", "neft", "paymode", "paydetails",
   "feecounter", "institution", "type", "installment", "status", "classdate",
   "duedate", "paiddate", "comments", "doclink", "feeid"
 ];
 
-const numberFields = ["amount", "paid", "concession", "balance", "Latefinedue", "Latefinepaid", "cash", "upi", "cheque", "card", "pg", "neft"];
-const dateFields = ["classdate", "duedate", "paiddate"];
+const numberFields = ["amount", "paid", "concession", "balance", "Latefinedue", "Latefinepaid", "refundamount", "refundedamount", "cash", "upi", "cheque", "card", "pg", "neft"];
+const dateFields = ["classdate", "duedate", "paiddate", "refunddate"];
 const requiredDefaults = {
   feegroup: "NA",
   regno: "NA",

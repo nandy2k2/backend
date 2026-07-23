@@ -98,6 +98,7 @@ exports.getFeeApplicationOptions = async (req, res) => {
       feeItems,
       feeCategories,
       feeTypes,
+      feeRefundables,
       feeStatuses
     ] = await Promise.all([
       distinctSorted(User, "academicyear", studentQuery),
@@ -124,6 +125,7 @@ exports.getFeeApplicationOptions = async (req, res) => {
       distinctSorted(Fees, "feeeitem", feeQuery),
       distinctSorted(Fees, "feecategory", feeQuery),
       distinctSorted(Fees, "feetype", feeQuery),
+      distinctSorted(Fees, "refundable", feeQuery),
       distinctSorted(Fees, "status", feeQuery)
     ]);
 
@@ -155,6 +157,7 @@ exports.getFeeApplicationOptions = async (req, res) => {
         feeeitem: feeItems,
         feecategory: feeCategories,
         feetype: feeTypes,
+        refundable: feeRefundables,
         status: feeStatuses
       }
     });
@@ -188,7 +191,7 @@ exports.searchFeeApplicationFees = async (req, res) => {
 
     const query = buildFeeQuery(colid, Array.isArray(req.body.filters) ? req.body.filters : []);
     const data = await Fees.find(query)
-      .select("program programcode regulation major minor IDC gender feegroup semester feeeitem academicyear feecategory feetype feebook cashbook classdate amount colid status")
+      .select("program programcode regulation major minor IDC gender feegroup semester feeeitem academicyear feecategory feetype feebook cashbook classdate amount refundable refundamount colid status")
       .sort({ academicyear: -1, programcode: 1, semester: 1, feegroup: 1, feeeitem: 1 })
       .limit(1000)
       .lean();
@@ -237,6 +240,9 @@ exports.applyFeesToStudents = async (req, res) => {
           paid,
           concession,
           balance,
+          refundable: fee.refundable || "No",
+          refundamount: toNumber(fee.refundamount) || 0,
+          refundedamount: 0,
           cash: 0,
           upi: 0,
           cheque: 0,
@@ -302,6 +308,9 @@ function ledgerEntryFromFee(student, fee, reqBody = {}) {
     balance: amount,
     Latefinedue: 0,
     Latefinepaid: 0,
+    refundable: fee.refundable || "No",
+    refundamount: toNumber(fee.refundamount) || 0,
+    refundedamount: 0,
     cash: 0,
     upi: 0,
     cheque: 0,
@@ -362,7 +371,7 @@ exports.getAutoFeesForStudent = async (req, res) => {
       semester: student.semester || ""
     };
     const fees = await Fees.find(query)
-      .select("program programcode regulation major minor IDC gender Medium feegroup semester feeeitem academicyear feecategory feetype feebook cashbook classdate amount colid status")
+      .select("program programcode regulation major minor IDC gender Medium feegroup semester feeeitem academicyear feecategory feetype feebook cashbook classdate amount refundable refundamount colid status")
       .sort({ feegroup: 1, feeeitem: 1 })
       .lean();
     const existing = await Ledgerstud.find({ colid, regno: student.regno })

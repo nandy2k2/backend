@@ -48,6 +48,30 @@ const ledgerstudschema = new mongoose.Schema({
      Latefinepaid: {
         type: Number
     },
+    refundable: {
+        type: String,
+        default: "No"
+    },
+    refundamount: {
+        type: Number,
+        default: 0
+    },
+    refunddate: {
+        type: Date
+    },
+    refundedamount: {
+        type: Number,
+        default: 0
+    },
+    refundmode: {
+        type: String
+    },
+    refundrefno: {
+        type: String
+    },
+    refundcomments: {
+        type: String
+    },
      cash: {
         type: Number
     },

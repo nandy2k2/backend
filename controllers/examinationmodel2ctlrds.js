@@ -26,7 +26,7 @@ const percent = (obtained, total) => number(total) ? Number(((number(obtained) /
 const markFields = [
   "academicyear", "regulation", "exam", "examcode", "program", "programcode", "semester", "course", "coursecode",
   "credit", "student", "regno", "abcid", "theorymarks", "theoryobtained", "theorypercentage", "theorygradepoint", "theorygrade",
-  "practicalmarks", "practicaltotal", "practicalpercentage", "practicalgradepoint", "practicalgrade", "overalltotalmarks", "overallgradepoint", "overallgrade",
+  "practicalmarks", "practicaltotal", "practicalpercentage", "practicalgradepoint", "practicalgrade", "overalltotalmarks", "overallobtained", "overallgradepoint", "overallgrade",
   "overallpercentage", "gpa", "status", "attempt", "type", "examdate", "resultprocessdate"
 ];
 const vivaMarkFields = [
@@ -43,7 +43,7 @@ const classConfigurationFields = ["academicyear", "program", "programcode", "fro
 const buildFilter = (source = {}) => {
   const filter = { colid: number(source.colid) };
   markFields.forEach((field) => {
-    if (["credit", "theorymarks", "theoryobtained", "theorypercentage", "theorygradepoint", "practicalmarks", "practicaltotal", "practicalpercentage", "practicalgradepoint", "overalltotalmarks", "overallgradepoint", "overallpercentage", "gpa", "attempt"].includes(field)) return;
+    if (["credit", "theorymarks", "theoryobtained", "theorypercentage", "theorygradepoint", "practicalmarks", "practicaltotal", "practicalpercentage", "practicalgradepoint", "overalltotalmarks", "overallobtained", "overallgradepoint", "overallpercentage", "gpa", "attempt"].includes(field)) return;
     if (text(source[field])) filter[field] = text(source[field]);
   });
   if (text(source.name)) filter.student = new RegExp(escapeRegex(source.name), "i");
@@ -75,11 +75,14 @@ const payloadFrom = (body = {}) => {
   const practicaltotal = number(body.practicaltotal);
   const credit = number(body.credit);
   const overallgradepoint = number(body.overallgradepoint);
-  const overalltotalmarks = body.overalltotalmarks === "" || body.overalltotalmarks === undefined
-    ? theoryobtained + practicalmarks
-    : number(body.overalltotalmarks);
   const totalObtained = theoryobtained + practicalmarks;
   const totalMarks = theorymarks + practicaltotal;
+  const overalltotalmarks = body.overalltotalmarks === "" || body.overalltotalmarks === undefined
+    ? totalMarks
+    : number(body.overalltotalmarks);
+  const overallobtained = body.overallobtained === "" || body.overallobtained === undefined
+    ? totalObtained
+    : number(body.overallobtained);
   return {
     colid: number(body.colid),
     academicyear: text(body.academicyear),
@@ -106,9 +109,10 @@ const payloadFrom = (body = {}) => {
     practicalgradepoint: number(body.practicalgradepoint),
     practicalgrade: text(body.practicalgrade),
     overalltotalmarks,
+    overallobtained,
     overallgradepoint,
     overallgrade: text(body.overallgrade),
-    overallpercentage: body.overallpercentage === "" || body.overallpercentage === undefined ? percent(totalObtained, totalMarks) : number(body.overallpercentage),
+    overallpercentage: body.overallpercentage === "" || body.overallpercentage === undefined ? percent(overallobtained, overalltotalmarks) : number(body.overallpercentage),
     gpa: Number((credit * overallgradepoint).toFixed(2)),
     status: text(body.status) || "Pass",
     attempt: number(body.attempt, 1),
@@ -640,7 +644,7 @@ exports.processGrades = async (req, res) => {
         ? number(row.theoryobtained)
         : component === "Practical"
           ? number(row.practicalmarks)
-          : number(row.overalltotalmarks || (number(row.theoryobtained) + number(row.practicalmarks)));
+          : number(row.overallobtained || (number(row.theoryobtained) + number(row.practicalmarks)));
       const gradeRule = details.find((item) => sourceValue >= number(item.frommarks) && sourceValue <= number(item.tomarks));
       if (!gradeRule) {
         skipped.push({ id: row._id, regno: row.regno, coursecode: row.coursecode, marks: sourceValue });
@@ -687,16 +691,20 @@ exports.processPercentages = async (req, res) => {
     let updated = 0;
     const preview = [];
     for (const row of rows) {
+      const update = {};
       if (component === "Theory") {
-        row.theorypercentage = percent(row.theoryobtained, row.theorymarks);
+        update.theorypercentage = percent(row.theoryobtained, row.theorymarks);
       } else if (component === "Practical") {
-        row.practicalpercentage = percent(row.practicalmarks, row.practicaltotal);
+        update.practicalpercentage = percent(row.practicalmarks, row.practicaltotal);
       } else {
         const totalMarks = number(row.theorymarks) + number(row.practicaltotal);
-        const obtained = number(row.overalltotalmarks || (number(row.theoryobtained) + number(row.practicalmarks)));
-        row.overallpercentage = percent(obtained, totalMarks);
+        const obtained = number(row.theoryobtained) + number(row.practicalmarks);
+        update.overalltotalmarks = totalMarks;
+        update.overallobtained = obtained;
+        update.overallpercentage = percent(obtained, totalMarks);
       }
-      await row.save();
+      await ExamMarks.updateOne({ _id: row._id, colid }, { $set: update });
+      Object.assign(row, update);
       updated += 1;
       preview.push(row.toObject());
     }

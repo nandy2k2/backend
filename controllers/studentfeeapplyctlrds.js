@@ -137,7 +137,7 @@ exports.getStudentApplicableFees = async (req, res) => {
     if (minorMatch) query.minor = minorMatch;
 
     const fees = await Fees.find(query)
-      .select("name program programcode regulation major minor feegroup semester feeeitem academicyear feecategory feebook cashbook classdate amount colid status")
+      .select("name program programcode regulation major minor feegroup semester feeeitem academicyear feecategory feebook cashbook classdate amount refundable refundamount colid status")
       .sort({ semester: 1, feegroup: 1, feeeitem: 1 })
       .lean();
     res.json({ success: true, source: "fees", student, data: fees });
@@ -182,6 +182,9 @@ exports.applyStudentFees = async (req, res) => {
         paid,
         concession,
         balance,
+        refundable: fee.refundable || "No",
+        refundamount: toNumber(fee.refundamount) || 0,
+        refundedamount: 0,
         feebook: fee.feebook,
         feecategory: fee.feecategory,
         semester: fee.semester || student.semester,

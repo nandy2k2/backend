@@ -19,6 +19,7 @@ const filterFields = [
   "feeitem",
   "feebook",
   "cashbook",
+  "refundable",
   "status",
   "paymode",
   "type",

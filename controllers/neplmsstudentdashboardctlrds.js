@@ -69,6 +69,50 @@ const maxDate = (...values) => {
   return new Date(Math.max(...dates.map((date) => date.getTime())));
 };
 
+const activityDate = (item = {}, fallback = null) => maxDate(
+  item.updatedAt,
+  item.createdAt,
+  item.duedate,
+  item.startdatetime,
+  item.enddatetime,
+  item.classdate,
+  fallback
+);
+
+const activityStamp = (item) => {
+  const date = activityDate(item);
+  return date ? date.getTime() : 0;
+};
+
+const compactActivity = (kind, item = {}) => {
+  const date = activityDate(item);
+  return {
+    id: String(item._id || ""),
+    kind,
+    title: item.title || item.lessonplantitle || item.quiztitle || item.originalname || item.topic || item.module || kind,
+    subtitle: item.description || item.topics || item.topic || item.module || "",
+    academicyear: item.academicyear || "",
+    semester: item.semester || "",
+    course: item.course || "",
+    coursecode: item.coursecode || "",
+    module: item.module || "",
+    topic: item.topic || item.topics || "",
+    date: date ? date.toISOString() : "",
+    dueDate: item.duedate || "",
+    startDateTime: item.startdatetime || "",
+    endDateTime: item.enddatetime || "",
+    sequence: item.sequence || 0,
+    marks: item.fullmarks || 0,
+    link: item.url || item.filelink || item.videolink || "",
+    contenttype: item.contenttype || ""
+  };
+};
+
+const latestForCourse = (items, course, kind) => items
+  .filter((item) => courseKey(item) === courseKey(course))
+  .sort((a, b) => activityStamp(b) - activityStamp(a))
+  .map((item) => compactActivity(kind, item));
+
 exports.getStudentDashboard = async (req, res) => {
   try {
     const colid = Number(req.query.colid);
@@ -133,8 +177,14 @@ exports.getStudentDashboard = async (req, res) => {
       const stats = courseActivityMap.get(courseKey(course)) || {};
       const totalContent = Number(stats.assignmentCount || 0)
         + Number(stats.materialCount || 0)
+        + Number(stats.lessonPlanCount || 0)
         + Number(stats.quizCount || 0)
         + Number(stats.sequenceCount || 0);
+      const assignments = latestForCourse(resources.filter((item) => item.resourcetype === "Assignment"), course, "Assignment");
+      const courseMaterials = latestForCourse(resources.filter((item) => item.resourcetype === "Course Material"), course, "Course Material");
+      const lessonPlans = latestForCourse(resources.filter((item) => item.resourcetype === "Lesson Plan"), course, "Lesson Plan");
+      const courseQuizzes = latestForCourse(quizzes, course, "Quiz");
+      const sequences = latestForCourse(lessonContent, course, "Sequence");
       return {
         ...compactCourse(course),
         assignmentCount: stats.assignmentCount || 0,
@@ -144,7 +194,14 @@ exports.getStudentDashboard = async (req, res) => {
         sequenceCount: stats.sequenceCount || 0,
         totalContent,
         hasContent: totalContent > 0,
-        latestActivityAt: stats.latestActivityAt ? stats.latestActivityAt.toISOString() : ""
+        latestActivityAt: stats.latestActivityAt ? stats.latestActivityAt.toISOString() : "",
+        activities: {
+          lessonPlans,
+          courseMaterials,
+          quizzes: courseQuizzes,
+          sequences,
+          assignments
+        }
       };
     }).sort((a, b) => {
       if (a.hasContent !== b.hasContent) return a.hasContent ? -1 : 1;

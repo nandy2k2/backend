@@ -11,7 +11,8 @@ const filterFields = [
   "cashbook",
   "regulation",
   "major",
-  "minor"
+  "minor",
+  "refundable"
 ];
 
 function toNumber(value) {

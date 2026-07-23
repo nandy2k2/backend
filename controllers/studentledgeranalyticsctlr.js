@@ -22,7 +22,8 @@ const filterFields = [
   "major",
   "minor",
   "semester",
-  "feecategory"
+  "feecategory",
+  "refundable"
 ];
 
 function groupRows(rows, field) {

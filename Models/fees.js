@@ -95,6 +95,14 @@ const feesschema = new mongoose.Schema({
         required: [true,'Please enter amount'],
         unique: false
     },
+    refundable: {
+        type: String,
+        default: "No"
+    },
+    refundamount: {
+        type: Number,
+        default: 0
+    },
     colid: {
         type: Number,
         required: [true,'Please enter colid']

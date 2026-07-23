@@ -43,6 +43,8 @@ function cleanPayload(input = {}) {
     feetype: text(input.feetype),
     classdate: input.classdate || new Date(),
     amount: toNumber(input.amount) || 0,
+    refundable: text(input.refundable) || "No",
+    refundamount: toNumber(input.refundamount) || 0,
     status: text(input.status) || "Added"
   };
 }
@@ -64,7 +66,7 @@ function buildQuery(source = {}) {
   const query = {};
   const colid = toNumber(source.colid);
   if (colid !== undefined) query.colid = colid;
-  ["academicyear", "programcode", "regulation", "major", "minor", "IDC", "gender", "Medium", "semester", "feebook", "cashbook", "status"].forEach((key) => {
+  ["academicyear", "programcode", "regulation", "major", "minor", "IDC", "gender", "Medium", "semester", "feebook", "cashbook", "refundable", "status"].forEach((key) => {
     if (source[key]) query[key] = source[key];
   });
   return query;
@@ -355,6 +357,48 @@ exports.bulkCreateMFees = async (req, res) => {
 
     if (valid.length) await Fees.insertMany(valid, { ordered: false });
     res.json({ success: true, inserted: valid.length, errors });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateRefundableByFeeItems = async (req, res) => {
+  try {
+    const colid = toNumber(req.body.colid);
+    const academicyear = text(req.body.academicyear);
+    const programcode = text(req.body.programcode);
+    const feeitems = Array.isArray(req.body.feeitems)
+      ? req.body.feeitems.map(text).filter(Boolean)
+      : String(req.body.feeitems || "").split(",").map(text).filter(Boolean);
+    const refundable = text(req.body.refundable) || "Yes";
+
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!academicyear) return res.status(400).json({ success: false, message: "Academic year is required" });
+    if (!programcode) return res.status(400).json({ success: false, message: "Program is required" });
+    if (!feeitems.length) return res.status(400).json({ success: false, message: "Select at least one fee item" });
+
+    const query = { colid, academicyear, programcode, feeeitem: { $in: feeitems } };
+    const rows = await Fees.find(query).lean();
+    if (!rows.length) return res.status(404).json({ success: false, message: "No matching fee records found" });
+
+    const updates = await Promise.all(rows.map((row) => Fees.findByIdAndUpdate(
+      row._id,
+      {
+        refundable,
+        refundamount: refundable === "Yes" ? toNumber(row.amount) || 0 : 0,
+        name: text(req.body.name) || row.name,
+        user: text(req.body.user) || row.user
+      },
+      { new: true }
+    )));
+
+    res.json({
+      success: true,
+      matched: rows.length,
+      updated: updates.filter(Boolean).length,
+      data: updates.filter(Boolean),
+      message: `Updated ${updates.filter(Boolean).length} fee item(s)`
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
