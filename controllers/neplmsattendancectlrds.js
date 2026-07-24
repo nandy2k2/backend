@@ -4,6 +4,7 @@ const NepLmsAttendance = require("../Models/neplmsattendanceds");
 const User = require("../Models/user");
 const NepLmsClassGroup = require("../Models/neplmsclassgroupds");
 const NepLmsAttendanceOtp = require("../Models/neplmsattendanceotpds");
+const { emitActivityEvent } = require("./activitymonitoringctlrds");
 
 const text = (value) => String(value || "").trim();
 const number = (value) => {
@@ -253,6 +254,21 @@ exports.saveAttendance = async (req, res) => {
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
       saved.push(row);
+    }
+
+    if (req.body.raiseActivityEvent) {
+      emitActivityEvent({
+        colid,
+        academicyear: text(classInfo.academicyear),
+        activity: "Attendance",
+        role: text(req.body.role) || "Faculty",
+        user: text(req.body.user),
+        username: text(classInfo.faculty),
+        useremail: text(classInfo.facultyemail || req.body.user),
+        date: text(classInfo.classdate) || new Date().toISOString().slice(0, 10),
+        source: "neplmsattendance",
+        sourceid: `${classid}-${attendanceType}-${text(classInfo.facultyemail || req.body.user)}`
+      });
     }
 
     res.json({ success: true, saved: saved.length, data: saved });

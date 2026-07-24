@@ -12,6 +12,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const AWS = require('aws-sdk');
 const nodemailer = require('nodemailer');
+const { emitAdmissionApplicationSubmitted } = require('./admissionaiagentctlrds');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -851,6 +852,11 @@ exports.createApplication = async (req, res) => {
 
     const data = await AdmissionApplication.create(payload);
     const mailStatus = await sendAdmissionConfirmationMail(data);
+    emitAdmissionApplicationSubmitted({
+      colid: data.colid,
+      formid: data.formid || 'default',
+      applicationid: String(data._id)
+    });
     const response = normalizeApplicationResponse(data);
     response.mailStatus = mailStatus;
     res.json(response);
@@ -948,6 +954,11 @@ exports.submitDraftApplication = async (req, res) => {
     );
     const mailStatus = await sendAdmissionConfirmationMail(data);
     const repaired = await ensureApplicationIdentifiers(data);
+    emitAdmissionApplicationSubmitted({
+      colid: repaired.colid,
+      formid: repaired.formid || 'default',
+      applicationid: String(repaired._id)
+    });
     const response = normalizeApplicationResponse(repaired);
     response.mailStatus = mailStatus;
     res.json(response);
