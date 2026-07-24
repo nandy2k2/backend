@@ -125,6 +125,9 @@ exports.getStudentDashboard = async (req, res) => {
     const student = await User.findOne({ colid, regno }).lean();
     if (!student) return res.status(404).json({ success: false, message: "Student not found" });
 
+    const semesterOptionQuery = courseQueryForStudent(req.query, student);
+    delete semesterOptionQuery.semester;
+    const semesterOptions = await WorkloadAssignment.distinct("semester", semesterOptionQuery);
     const courses = await WorkloadAssignment.find(courseQueryForStudent(req.query, student))
       .sort({ semester: 1, course: 1 })
       .lean();
@@ -262,6 +265,8 @@ exports.getStudentDashboard = async (req, res) => {
 
     res.json({
       success: true,
+      semesterOptions: [...new Set([student.semester, ...semesterOptions].map(text).filter(Boolean))]
+        .sort((a, b) => Number(a) - Number(b) || String(a).localeCompare(String(b))),
       student: {
         name: student.name || "",
         regno: student.regno || "",

@@ -7305,6 +7305,9 @@ const newBudgetApprovalCtrl = require('./controllers/newbudgetapprovalctlrds');
 const purchaseNewCtrl = require('./controllers/purchasenewctlrds');
 const requisitionCtrl = require('./controllers/requisitionctlrds');
 const assetNewCtrl = require('./controllers/assetnewctlrds');
+const dummyDataGeneratorCtrl = require('./controllers/dummydatageneratorctlrds');
+
+app.post('/api/v2/dummy-data/generate', dummyDataGeneratorCtrl.generateDummyData);
 
 // BUDGET ROUTES
 app.post('/indbudget', budgetCtrl.indCreateBudget);
