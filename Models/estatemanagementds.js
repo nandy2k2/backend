@@ -15,6 +15,17 @@ const EstateRealEstateTypeSchema = new mongoose.Schema({
   status: { type: String, trim: true, default: "Active" }
 }, schemaOptions);
 
+const EstateCampusSchema = new mongoose.Schema({
+  ...baseFields,
+  campus: { type: String, trim: true, required: true },
+  location: { type: String, trim: true },
+  latitude: { type: Number, default: 0 },
+  longitude: { type: Number, default: 0 },
+  director: { type: String, trim: true },
+  directoremail: { type: String, trim: true },
+  status: { type: String, trim: true, default: "Active" }
+}, schemaOptions);
+
 const EstateRealEstateSchema = new mongoose.Schema({
   ...baseFields,
   estatename: { type: String, trim: true, required: true },
@@ -180,6 +191,7 @@ const EstateMeetingRoomBookingSchema = new mongoose.Schema({
 
 module.exports = {
   EstateRealEstateType: mongoose.models.estaterealestatetypeds || mongoose.model("estaterealestatetypeds", EstateRealEstateTypeSchema),
+  EstateCampus: mongoose.models.estatecampusds || mongoose.model("estatecampusds", EstateCampusSchema),
   EstateRealEstate: mongoose.models.estaterealestateds || mongoose.model("estaterealestateds", EstateRealEstateSchema),
   EstateServiceType: mongoose.models.estateservicetypeds || mongoose.model("estateservicetypeds", EstateServiceTypeSchema),
   EstateMaintenanceSchedule: mongoose.models.estatemaintenancescheduleds || mongoose.model("estatemaintenancescheduleds", EstateMaintenanceScheduleSchema),

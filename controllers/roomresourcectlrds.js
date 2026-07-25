@@ -1,6 +1,7 @@
 const RoomResource = require("../Models/roomresourceds");
 const User = require("../Models/user");
 const NepLmsTimetable = require("../Models/neplmstimetableds");
+const { EstateCampus, EstateRealEstate } = require("../Models/estatemanagementds");
 
 const text = (value) => String(value || "").trim();
 const toNumber = (value) => {
@@ -49,9 +50,18 @@ exports.options = async (req, res) => {
   try {
     const colid = toNumber(req.query.colid);
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
-    const [rooms, users] = await Promise.all([
+    const [rooms, users, campuses, estateBuildings] = await Promise.all([
       RoomResource.find({ colid }).sort({ campus: 1, building: 1, floor: 1, roomno: 1 }).lean(),
-      User.find({ colid }).select("name email user role department").sort({ name: 1, email: 1 }).lean()
+      User.find({ colid }).select("name email user role department").sort({ name: 1, email: 1 }).lean(),
+      EstateCampus.find({ colid, status: { $not: /^inactive$/i } }).sort({ campus: 1 }).lean(),
+      EstateRealEstate.find({
+        colid,
+        status: { $not: /^inactive$/i },
+        $or: [
+          { estatetype: /building/i },
+          { type: /building/i }
+        ]
+      }).sort({ location: 1, estatename: 1 }).lean()
     ]);
     const owners = users
       .filter((item) => text(item.role).toLowerCase() !== "student")
@@ -61,8 +71,10 @@ exports.options = async (req, res) => {
       success: true,
       rooms,
       owners,
-      campuses: uniq(rooms.map((item) => item.campus)),
-      buildings: uniq(rooms.map((item) => item.building)),
+      campuses,
+      estateBuildings,
+      campusnames: uniq([...campuses.map((item) => item.campus), ...rooms.map((item) => item.campus)]),
+      buildings: uniq([...estateBuildings.map((item) => item.estatename), ...rooms.map((item) => item.building)]),
       floors: uniq(rooms.map((item) => item.floor)),
       roomnos: uniq(rooms.map((item) => item.roomno)),
       types: uniq(rooms.map((item) => item.type)),

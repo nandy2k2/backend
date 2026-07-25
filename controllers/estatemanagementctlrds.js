@@ -4,6 +4,7 @@ const AWS = require("aws-sdk");
 const XLSX = require("xlsx");
 const {
   EstateRealEstateType,
+  EstateCampus,
   EstateRealEstate,
   EstateServiceType,
   EstateMaintenanceSchedule,
@@ -54,6 +55,13 @@ const configs = {
     fields: ["typename", "description", "status"],
     required: ["typename"],
     sort: { typename: 1 }
+  },
+  campuses: {
+    model: EstateCampus,
+    fields: ["campus", "location", "latitude", "longitude", "director", "directoremail", "status"],
+    required: ["campus"],
+    numeric: ["latitude", "longitude"],
+    sort: { campus: 1 }
   },
   estates: {
     model: EstateRealEstate,
@@ -261,23 +269,27 @@ exports.options = async (req, res) => {
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
     const serviceTypes = await EstateServiceType.find({ colid }).sort({ servicetype: 1 }).lean();
     const realEstateTypes = await EstateRealEstateType.find({ colid }).sort({ typename: 1 }).lean();
+    const campuses = await EstateCampus.find({ colid }).sort({ campus: 1 }).lean();
     const estates = await EstateRealEstate.find({ colid }).sort({ estatename: 1 }).lean();
     const providers = await EstateServiceProvider.find({ colid }).sort({ providername: 1 }).lean();
     const allocations = await EstateServiceAllocation.find({ colid, status: { $ne: "Inactive" } }).sort({ employeename: 1 }).lean();
     const shifts = await HrShiftTiming.find({ colid }).sort({ location: 1, shift: 1 }).lean();
     const meetingFeatures = await EstateMeetingRoomFeature.find({ colid, status: { $ne: "Inactive" } }).sort({ feature: 1 }).lean();
     const meetingRooms = await EstateMeetingRoom.find({ colid, status: { $ne: "Inactive" } }).sort({ building: 1, roomname: 1 }).lean();
+    const users = await User.find({ colid, role: { $not: /^student$/i } }).select("name email phone department role designation status").sort({ name: 1, email: 1 }).limit(500).lean();
     const ollamaConfigs = await OllamaConfiguration.find({ colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean();
     res.json({
       success: true,
       serviceTypes,
       realEstateTypes,
+      campuses,
       estates,
       providers,
       allocations,
       shifts,
       meetingFeatures,
       meetingRooms,
+      users,
       ollamaConfigs,
       geminiModels: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
     });
