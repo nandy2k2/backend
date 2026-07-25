@@ -32,6 +32,7 @@ const examinationModel2VivaMarksSchema = new mongoose.Schema(
     vivagpa: { type: Number, default: 0 },
     vivagrade: { type: String, trim: true },
     overalltotalmarks: { type: Number, default: 0 },
+    overallobtained: { type: Number, default: 0 },
     overallgradepoint: { type: Number, default: 0 },
     overallgrade: { type: String, trim: true },
     overallpercentage: { type: Number, default: 0 },

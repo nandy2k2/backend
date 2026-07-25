@@ -495,6 +495,7 @@ app.post('/api/v2/student-data-upload-ai-field', studentDataUploadController.gen
 app.post('/api/v2/student-data-upload-photo', studentDataUploadController.uploadPhotoMiddleware, studentDataUploadController.uploadPhoto);
 app.get('/api/v2/examination-model2/options', examinationModel2Controller.options);
 app.get('/api/v2/examination-model2/students', examinationModel2Controller.students);
+app.get('/api/v2/examination-model2/viva-students', examinationModel2Controller.vivaStudents);
 app.get('/api/v2/examination-model2/marks', examinationModel2Controller.list);
 app.post('/api/v2/examination-model2/marks', examinationModel2Controller.save);
 app.post('/api/v2/examination-model2/marks-delete', examinationModel2Controller.delete);

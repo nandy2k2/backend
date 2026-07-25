@@ -22,6 +22,18 @@ const uniqueSorted = (values) => Array.from(new Set(values.map(text).filter(Bool
   .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 const escapeRegex = (value) => text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const percent = (obtained, total) => number(total) ? Number(((number(obtained) / number(total)) * 100).toFixed(2)) : 0;
+const yes = (value) => ["yes", "true", "1", "on"].includes(text(value).toLowerCase()) || value === true;
+const getUGCGrade = (percentage) => {
+  const value = number(percentage);
+  if (value >= 90) return { grade: "O", gradepoint: 10 };
+  if (value >= 80) return { grade: "A+", gradepoint: 9 };
+  if (value >= 70) return { grade: "A", gradepoint: 8 };
+  if (value >= 60) return { grade: "B+", gradepoint: 7 };
+  if (value >= 50) return { grade: "B", gradepoint: 6 };
+  if (value >= 40) return { grade: "C", gradepoint: 5 };
+  if (value >= 36) return { grade: "P", gradepoint: 4 };
+  return { grade: "F", gradepoint: 0 };
+};
 
 const markFields = [
   "academicyear", "regulation", "exam", "examcode", "program", "programcode", "semester", "course", "coursecode",
@@ -34,7 +46,7 @@ const vivaMarkFields = [
   "credit", "student", "regno", "abcid", "theorymarks", "theoryobtained", "theorypercentage", "theorygradepoint", "theorygrade",
   "practicalmarks", "practicaltotal", "practicalpercentage", "practicalgradepoint", "practicalgrade",
   "vivatotal", "vivaobtained", "vivapercentage", "vivagpa", "vivagrade",
-  "overalltotalmarks", "overallgradepoint", "overallgrade", "overallpercentage", "gpa", "status", "attempt", "type", "examdate", "resultprocessdate"
+  "overalltotalmarks", "overallobtained", "overallgradepoint", "overallgrade", "overallpercentage", "gpa", "status", "attempt", "type", "examdate", "resultprocessdate"
 ];
 const gradingTemplateFields = ["academicyear", "templatedescription", "status"];
 const gradingTemplateDetailFields = ["academicyear", "templatename", "templateid", "frommarks", "tomarks", "gradepoint", "grade"];
@@ -57,7 +69,7 @@ const buildFilter = (source = {}) => {
 const buildVivaFilter = (source = {}) => {
   const filter = { colid: number(source.colid) };
   vivaMarkFields.forEach((field) => {
-    if (["credit", "theorymarks", "theoryobtained", "theorypercentage", "theorygradepoint", "practicalmarks", "practicaltotal", "practicalpercentage", "practicalgradepoint", "vivatotal", "vivaobtained", "vivapercentage", "vivagpa", "overalltotalmarks", "overallgradepoint", "overallpercentage", "gpa", "attempt"].includes(field)) return;
+    if (["credit", "theorymarks", "theoryobtained", "theorypercentage", "theorygradepoint", "practicalmarks", "practicaltotal", "practicalpercentage", "practicalgradepoint", "vivatotal", "vivaobtained", "vivapercentage", "vivagpa", "overalltotalmarks", "overallobtained", "overallgradepoint", "overallpercentage", "gpa", "attempt"].includes(field)) return;
     if (text(source[field])) filter[field] = text(source[field]);
   });
   if (text(source.name)) filter.student = new RegExp(escapeRegex(source.name), "i");
@@ -135,8 +147,11 @@ const vivaPayloadFrom = (body = {}) => {
   const totalObtained = theoryobtained + practicalmarks + vivaobtained;
   const totalMarks = theorymarks + practicaltotal + vivatotal;
   const overalltotalmarks = body.overalltotalmarks === "" || body.overalltotalmarks === undefined
-    ? totalObtained
+    ? totalMarks
     : number(body.overalltotalmarks);
+  const overallobtained = body.overallobtained === "" || body.overallobtained === undefined
+    ? totalObtained
+    : number(body.overallobtained);
   return {
     colid: number(body.colid),
     academicyear: text(body.academicyear),
@@ -168,9 +183,10 @@ const vivaPayloadFrom = (body = {}) => {
     vivagpa: number(body.vivagpa),
     vivagrade: text(body.vivagrade),
     overalltotalmarks,
+    overallobtained,
     overallgradepoint,
     overallgrade: text(body.overallgrade),
-    overallpercentage: body.overallpercentage === "" || body.overallpercentage === undefined ? percent(totalObtained, totalMarks) : number(body.overallpercentage),
+    overallpercentage: body.overallpercentage === "" || body.overallpercentage === undefined ? percent(overallobtained, overalltotalmarks) : number(body.overallpercentage),
     gpa: Number((credit * overallgradepoint).toFixed(2)),
     status: text(body.status) || "Pass",
     attempt: number(body.attempt, 1),
@@ -231,6 +247,76 @@ exports.students = async (req, res) => {
     if (text(req.query.regno)) filter.regno = new RegExp(escapeRegex(req.query.regno), "i");
     const data = await User.find(filter).select("name regno abcid email phone photo academicyear regulation program programcode semester section Major").sort({ name: 1, regno: 1 }).limit(1000).lean();
     res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.vivaStudents = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const markFilter = { colid };
+    ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "semester"].forEach((field) => {
+      if (text(req.query[field])) markFilter[field] = text(req.query[field]);
+    });
+    if (text(req.query.regno)) markFilter.regno = new RegExp(escapeRegex(req.query.regno), "i");
+
+    const userFilter = { colid, role: /^Student$/i };
+    if (text(req.query.name)) userFilter.name = new RegExp(escapeRegex(req.query.name), "i");
+    if (text(req.query.email)) userFilter.email = new RegExp(escapeRegex(req.query.email), "i");
+    if (text(req.query.phone)) userFilter.phone = new RegExp(escapeRegex(req.query.phone), "i");
+    if (text(req.query.regno)) userFilter.regno = new RegExp(escapeRegex(req.query.regno), "i");
+
+    let userMap = new Map();
+    const needsUserFilter = text(req.query.name) || text(req.query.email) || text(req.query.phone) || text(req.query.regno);
+    if (needsUserFilter) {
+      const matchedUsers = await User.find(userFilter).select("name regno abcid email phone photo academicyear regulation program programcode semester section Major").limit(1000).lean();
+      const regnos = matchedUsers.map((item) => text(item.regno)).filter(Boolean);
+      if (!regnos.length) return res.json({ success: true, data: [] });
+      markFilter.regno = { $in: regnos };
+      userMap = new Map(matchedUsers.map((item) => [text(item.regno), item]));
+    }
+
+    const marks = await ExamVivaMarks.find(markFilter)
+      .select("academicyear regulation exam examcode program programcode semester student regno abcid")
+      .sort({ academicyear: -1, programcode: 1, semester: 1, regno: 1 })
+      .limit(5000)
+      .lean();
+    const grouped = new Map();
+    marks.forEach((row) => {
+      const key = text(row.regno);
+      if (!key || grouped.has(key)) return;
+      grouped.set(key, row);
+    });
+
+    if (!userMap.size) {
+      const regnos = Array.from(grouped.keys());
+      const users = await User.find({ colid, regno: { $in: regnos } }).select("name regno abcid email phone photo academicyear regulation program programcode semester section Major").lean();
+      userMap = new Map(users.map((item) => [text(item.regno), item]));
+    }
+
+    const data = Array.from(grouped.values()).map((row) => {
+      const user = userMap.get(text(row.regno)) || {};
+      return {
+        _id: `${row.regno}-${row.academicyear}-${row.examcode}`,
+        name: user.name || row.student,
+        regno: row.regno,
+        abcid: row.abcid || user.abcid || "",
+        email: user.email || "",
+        phone: user.phone || "",
+        photo: user.photo || "",
+        academicyear: row.academicyear,
+        regulation: row.regulation,
+        exam: row.exam,
+        examcode: row.examcode,
+        program: row.program,
+        programcode: row.programcode,
+        semester: row.semester,
+        section: user.section || ""
+      };
+    });
+    res.json({ success: true, data: data.slice(0, 1000) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -804,10 +890,26 @@ exports.processFinalGradeStatus = async (req, res) => {
 };
 
 const vivaGradeSource = (row, component) => {
-  if (component === "Theory") return number(row.theoryobtained);
-  if (component === "Practical") return number(row.practicalmarks);
-  if (component === "Viva") return number(row.vivaobtained);
-  return number(row.overalltotalmarks || (number(row.theoryobtained) + number(row.practicalmarks) + number(row.vivaobtained)));
+  const selectedComponent = text(component).toLowerCase();
+  if (selectedComponent === "theory") return number(row.theoryobtained);
+  if (selectedComponent === "practical") return number(row.practicalmarks);
+  if (selectedComponent === "viva") return number(row.vivaobtained);
+  const obtained = number(row.theoryobtained) + number(row.practicalmarks) + number(row.vivaobtained);
+  row.overallobtained = obtained;
+  return number(row.overallobtained || obtained);
+};
+
+const vivaUgcGradeSource = (row, component) => {
+  const selectedComponent = text(component).toLowerCase();
+  if (selectedComponent === "theory") return percent(row.theoryobtained, row.theorymarks);
+  if (selectedComponent === "practical") return percent(row.practicalmarks, row.practicaltotal);
+  if (selectedComponent === "viva") return percent(row.vivaobtained, row.vivatotal);
+  const totalMarks = number(row.theorymarks) + number(row.practicaltotal) + number(row.vivatotal);
+  const obtained = number(row.theoryobtained) + number(row.practicalmarks) + number(row.vivaobtained);
+  row.overalltotalmarks = totalMarks;
+  row.overallobtained = obtained;
+  row.overallpercentage = percent(obtained, totalMarks);
+  return row.overallpercentage;
 };
 
 exports.vivaProcessGrades = async (req, res) => {
@@ -818,13 +920,14 @@ exports.vivaProcessGrades = async (req, res) => {
     const examcode = text(req.body.examcode);
     const templateid = text(req.body.templateid);
     const component = text(req.body.component);
+    const useUgcTemplate = yes(req.body.useUgcTemplate);
     const programcodes = toArray(req.body.programcodes);
     const coursecodes = toArray(req.body.coursecodes);
-    if (!colid || !academicyear || !examcode || !templateid || !component) {
-      return res.status(400).json({ success: false, message: "Academic year, exam code, template and component are required" });
+    if (!colid || !academicyear || !examcode || !component || (!useUgcTemplate && !templateid)) {
+      return res.status(400).json({ success: false, message: "Academic year, exam code, component and grading template are required unless UGC template is selected" });
     }
-    const details = await GradingTemplateDetail.find({ colid, templateid }).sort({ frommarks: -1 }).lean();
-    if (!details.length) return res.status(404).json({ success: false, message: "No grade ranges found for selected template" });
+    const details = useUgcTemplate ? [] : await GradingTemplateDetail.find({ colid, templateid }).sort({ frommarks: -1 }).lean();
+    if (!useUgcTemplate && !details.length) return res.status(404).json({ success: false, message: "No grade ranges found for selected template" });
     const filter = { colid, academicyear, examcode };
     if (exam) filter.exam = exam;
     if (programcodes.length) filter.programcode = { $in: programcodes };
@@ -834,25 +937,33 @@ exports.vivaProcessGrades = async (req, res) => {
     const skipped = [];
     const preview = [];
     for (const row of rows) {
-      const sourceValue = vivaGradeSource(row, component);
-      const gradeRule = details.find((item) => sourceValue >= number(item.frommarks) && sourceValue <= number(item.tomarks));
+      const sourceValue = useUgcTemplate ? vivaUgcGradeSource(row, component) : vivaGradeSource(row, component);
+      const gradeRule = useUgcTemplate
+        ? getUGCGrade(sourceValue)
+        : details.find((item) => sourceValue >= number(item.frommarks) && sourceValue <= number(item.tomarks));
       if (!gradeRule) {
         skipped.push({ id: row._id, regno: row.regno, coursecode: row.coursecode, marks: sourceValue });
         continue;
       }
-      if (component === "Theory") {
+      const selectedComponent = text(component).toLowerCase();
+      if (selectedComponent === "theory") {
         row.theorygradepoint = number(gradeRule.gradepoint);
         row.theorygrade = text(gradeRule.grade);
-      } else if (component === "Practical") {
+      } else if (selectedComponent === "practical") {
         row.practicalgradepoint = number(gradeRule.gradepoint);
         row.practicalgrade = text(gradeRule.grade);
-      } else if (component === "Viva") {
+      } else if (selectedComponent === "viva") {
         row.vivagpa = number(gradeRule.gradepoint);
         row.vivagrade = text(gradeRule.grade);
       } else {
+        const totalMarks = number(row.theorymarks) + number(row.practicaltotal) + number(row.vivatotal);
+        const obtained = number(row.theoryobtained) + number(row.practicalmarks) + number(row.vivaobtained);
+        row.overalltotalmarks = totalMarks;
+        row.overallobtained = obtained;
+        row.overallpercentage = percent(obtained, totalMarks);
         row.overallgradepoint = number(gradeRule.gradepoint);
         row.overallgrade = text(gradeRule.grade);
-        row.gpa = Number((number(row.credit) * number(gradeRule.gradepoint)).toFixed(2));
+        row.gpa = Number((number(row.credit) * number(row.overallgradepoint)).toFixed(2));
       }
       await row.save();
       updated += 1;
@@ -892,7 +1003,9 @@ exports.vivaProcessPercentages = async (req, res) => {
         row.vivapercentage = percent(row.vivaobtained, row.vivatotal);
       } else {
         const totalMarks = number(row.theorymarks) + number(row.practicaltotal) + number(row.vivatotal);
-        const obtained = number(row.overalltotalmarks || (number(row.theoryobtained) + number(row.practicalmarks) + number(row.vivaobtained)));
+        const obtained = number(row.theoryobtained) + number(row.practicalmarks) + number(row.vivaobtained);
+        row.overalltotalmarks = totalMarks;
+        row.overallobtained = obtained;
         row.overallpercentage = percent(obtained, totalMarks);
       }
       await row.save();

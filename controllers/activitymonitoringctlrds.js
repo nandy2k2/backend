@@ -3,6 +3,7 @@ const ActivityPointConfig = require("../Models/activitypointconfigds");
 const ActivityUserPoints = require("../Models/activityuserpointsds");
 const User = require("../Models/user");
 const MenuAccess = require("../Models/menuaccessds");
+const Institution = require("../Models/insdetails");
 
 const text = (value) => String(value || "").trim();
 const number = (value) => {
@@ -17,7 +18,18 @@ const buildFilter = (source = {}) => {
   const filter = {};
   const colid = number(source.colid);
   if (colid !== undefined) filter.colid = colid;
+  if (source.fromdate || source.todate) {
+    filter.date = {};
+    if (source.fromdate) filter.date.$gte = text(source.fromdate);
+    if (source.todate) filter.date.$lte = text(source.todate);
+  }
+  const useremails = Array.isArray(source.useremails)
+    ? source.useremails
+    : text(source.useremails).split(",").map(text).filter(Boolean);
+  if (useremails.length) filter.useremail = { $in: useremails.map((email) => sameText(email)) };
   ["role", "activity", "status", "academicyear", "useremail", "user", "date"].forEach((field) => {
+    if (field === "date" && filter.date) return;
+    if (field === "useremail" && filter.useremail) return;
     if (source[field]) filter[field] = new RegExp(escapeRegex(source[field]), "i");
   });
   return filter;
@@ -171,8 +183,12 @@ exports.getActivityPointConfigOptions = async (req, res) => {
 
 exports.listUserPoints = async (req, res) => {
   try {
-    const data = await ActivityUserPoints.find(buildFilter(req.query)).sort({ date: -1, createdAt: -1 }).lean();
-    res.json({ success: true, data });
+    const filter = buildFilter(req.query);
+    const [data, institution] = await Promise.all([
+      ActivityUserPoints.find(filter).sort({ date: -1, createdAt: -1 }).limit(Number(req.query.limit || 5000)).lean(),
+      filter.colid === undefined ? null : Institution.findOne({ colid: filter.colid }).sort({ _id: -1 }).lean()
+    ]);
+    res.json({ success: true, data, institution });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -182,13 +198,24 @@ exports.getUserPointsOptions = async (req, res) => {
   try {
     const colid = number(req.query.colid);
     const query = colid === undefined ? {} : { colid };
-    const [roles, activities, years, users] = await Promise.all([
+    const [roles, activities, years, users, userEmails] = await Promise.all([
       ActivityUserPoints.distinct("role", query),
       ActivityUserPoints.distinct("activity", query),
       ActivityUserPoints.distinct("academicyear", query),
-      ActivityUserPoints.distinct("user", query)
+      ActivityUserPoints.distinct("user", query),
+      ActivityUserPoints.distinct("useremail", query)
     ]);
-    res.json({ success: true, roles, activities, years, users });
+    const userRows = await ActivityUserPoints.find(query).select("user useremail role").lean();
+    const seen = new Set();
+    const userOptions = userRows
+      .map((row) => ({ name: text(row.user), email: text(row.useremail), role: text(row.role) }))
+      .filter((row) => {
+        if (!row.email || seen.has(row.email.toLowerCase())) return false;
+        seen.add(row.email.toLowerCase());
+        return true;
+      })
+      .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email));
+    res.json({ success: true, roles, activities, years, users, userEmails, userOptions });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
