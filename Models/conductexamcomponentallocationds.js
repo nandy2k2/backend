@@ -18,6 +18,7 @@ const conductExamComponentAllocationSchema = new mongoose.Schema({
   student: { type: String, required: true, trim: true },
   regno: { type: String, required: true, trim: true },
   email: { type: String, trim: true, default: "" },
+  examrollno: { type: String, trim: true, default: "" },
   seatno: { type: String, trim: true, default: "" },
   examdate: { type: String, trim: true, default: "" },
   examslot: { type: String, trim: true, default: "" },

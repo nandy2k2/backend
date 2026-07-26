@@ -4,6 +4,7 @@ const ConductExamExaminer = require("../Models/conductexamexaminerds");
 const AssessmentComponent = require("../Models/assessmentcomponentds");
 const ComponentAllocation = require("../Models/conductexamcomponentallocationds");
 const ComponentMarks = require("../Models/exammodel2componentmarksds");
+const Institution = require("../Models/insdetails");
 
 const text = (value) => String(value ?? "").trim();
 const number = (value, fallback = 0) => {
@@ -18,10 +19,26 @@ const numberOrUndefined = (value) => {
 };
 const uniq = (values) => [...new Set(values.map(text).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 const escapeRegex = (value) => text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const todayString = () => new Date().toISOString().slice(0, 10);
+const dateInsideWindow = (startdate, enddate, date = todayString()) => {
+  const start = text(startdate);
+  const end = text(enddate);
+  if (start && date < start) return false;
+  if (end && date > end) return false;
+  return true;
+};
+const institutionFor = async (colid) => {
+  const item = await Institution.findOne({ colid }).lean();
+  return item ? {
+    institutionname: item.institutionname || item.name || "",
+    address: item.address || "",
+    logolink: item.logolink || item.logo || ""
+  } : null;
+};
 
 const courseFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode"];
-const allocationFields = [...courseFields, "examinername", "examineremail", "student", "regno", "examdate", "examslot", "componenttype", "scoretype", "assessmentgroup", "assessmentgrouptype", "assessmentcomponent", "status"];
-const marksFields = ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "student", "regno", "componenttype", "scoretype", "assessmentgroup", "assessmentgrouptype", "assessmentcomponent", "examinername", "examineremail"];
+const allocationFields = [...courseFields, "examinername", "examineremail", "student", "regno", "examrollno", "examdate", "examslot", "componenttype", "scoretype", "assessmentgroup", "assessmentgrouptype", "assessmentcomponent", "status"];
+const marksFields = ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "student", "regno", "examrollno", "componenttype", "scoretype", "assessmentgroup", "assessmentgrouptype", "assessmentcomponent", "examinername", "examineremail"];
 
 const buildFilter = (source = {}, fields = []) => {
   const filter = {};
@@ -66,6 +83,7 @@ const allocationPayload = (body = {}) => ({
   student: text(body.student),
   regno: text(body.regno),
   email: text(body.studentemail || body.emailstudent || body.studentEmail || body.ledgeremail || body.email),
+  examrollno: text(body.examrollno || body.examseatno || body.examRollNo || body.uniqueid || body.uniqueId),
   seatno: text(body.seatno),
   examdate: text(body.examdate),
   examslot: text(body.examslot || body.slot),
@@ -87,6 +105,7 @@ const marksPayload = (body = {}) => ({
   coursecode: text(body.coursecode),
   student: text(body.student),
   regno: text(body.regno),
+  examrollno: text(body.examrollno || body.examseatno || body.examRollNo || body.uniqueid || body.uniqueId),
   componenttype: text(body.componenttype),
   scoretype: text(body.scoretype),
   assessmentgroup: text(body.assessmentgroup),
@@ -97,6 +116,9 @@ const marksPayload = (body = {}) => ({
   credits: number(body.credits),
   examinername: text(body.examinername),
   examineremail: text(body.examineremail),
+  submissionstatus: text(body.submissionstatus) === "Submitted" ? "Submitted" : "Draft",
+  submitteddate: text(body.submitteddate),
+  submittedby: text(body.submittedby),
   user: text(body.user)
 });
 
@@ -116,6 +138,8 @@ const validateMarks = (item) => {
   if (item.marksobtained > item.maxmarks) return "Marks obtained cannot be more than max marks";
   return "";
 };
+
+const markKey = (row) => [row.colid, row.academicyear, row.examcode, row.regulation, row.programcode, row.coursecode, row.regno, row.componenttype, row.assessmentgroup, row.assessmentcomponent].map(text).join("||");
 
 exports.options = async (req, res) => {
   try {
@@ -144,8 +168,8 @@ exports.presentStudents = async (req, res) => {
     const filter = buildFilter(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode"]);
     if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     filter.attended = "Yes";
-    const data = await ConductExamRoll.find(filter).sort({ seatno: 1, regno: 1, student: 1 }).lean();
-    res.json({ success: true, data });
+    const data = await ConductExamRoll.find(filter).sort({ regno: 1, student: 1 }).lean();
+    res.json({ success: true, data: data.map((row) => ({ ...row, examrollno: String(row._id), examseatno: row.examseatno || String(row._id) })) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -165,6 +189,18 @@ exports.listAllocations = async (req, res) => {
 exports.saveAllocation = async (req, res) => {
   try {
     const item = allocationPayload(req.body);
+    if (!item.examrollno) {
+      const roll = await ConductExamRoll.findOne({
+        colid: item.colid,
+        academicyear: item.academicyear,
+        examcode: item.examcode,
+        regulation: item.regulation,
+        programcode: item.programcode,
+        coursecode: item.coursecode,
+        regno: item.regno
+      }).select("_id examseatno").lean();
+      item.examrollno = roll ? String(roll._id) : "";
+    }
     const error = validateAllocation(item);
     if (error) return res.status(400).json({ success: false, message: error });
     const data = req.body.id
@@ -259,6 +295,7 @@ exports.randomAllocate = async (req, res) => {
           student: student.student,
           regno: student.regno,
           email: student.email || "",
+          examrollno: String(student._id),
           seatno: student.seatno || "",
           examdate: student.examdate || "",
           examslot: student.examslot || "",
@@ -315,13 +352,26 @@ exports.examinerRows = async (req, res) => {
     const allocations = await ComponentAllocation.find(filter).sort({ regno: 1, assessmentcomponent: 1 }).lean();
     const markFilter = buildFilter(req.query, ["academicyear", "examcode", "regulation", "programcode", "coursecode"]);
     markFilter.colid = colid;
-    const marks = await ComponentMarks.find(markFilter).lean();
+    const [marks, examRolls] = await Promise.all([
+      ComponentMarks.find(markFilter).lean(),
+      ConductExamRoll.find(markFilter).select("_id regno").lean()
+    ]);
+    const rollMap = new Map(examRolls.map((row) => [row.regno, String(row._id)]));
     const markMap = new Map(marks.map((row) => [[row.regno, row.componenttype, row.assessmentgroup, row.assessmentcomponent].join("||"), row]));
     res.json({
       success: true,
       data: allocations.map((row, index) => {
         const mark = markMap.get([row.regno, row.componenttype, row.assessmentgroup, row.assessmentcomponent].join("||"));
-        return { ...row, displayid: row.seatno || `ID-${String(index + 1).padStart(4, "0")}`, marksobtained: mark?.marksobtained ?? "" };
+        const examrollno = row.examrollno || rollMap.get(row.regno) || "";
+        return {
+          ...row,
+          examrollno,
+          displayid: examrollno || `ID-${String(index + 1).padStart(4, "0")}`,
+          marksobtained: mark?.marksobtained ?? "",
+          submissionstatus: mark?.submissionstatus || "Draft",
+          submitteddate: mark?.submitteddate || "",
+          submittedby: mark?.submittedby || ""
+        };
       })
     });
   } catch (err) {
@@ -334,13 +384,55 @@ exports.saveExaminerMarks = async (req, res) => {
     const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
     const errors = [];
     const ops = [];
-    rows.forEach((row, index) => {
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
       const item = marksPayload({ ...row, colid: req.body.colid || row.colid, user: req.body.user || row.user });
       const error = validateMarks(item);
       if (error) {
         errors.push({ row: index + 1, regno: item.regno, message: error });
-        return;
+        continue;
       }
+      const allocation = await ComponentAllocation.findOne({
+        colid: item.colid,
+        academicyear: item.academicyear,
+        examcode: item.examcode,
+        regulation: item.regulation,
+        programcode: item.programcode,
+        coursecode: item.coursecode,
+        regno: item.regno,
+        componenttype: item.componenttype,
+        assessmentgroup: item.assessmentgroup,
+        assessmentcomponent: item.assessmentcomponent,
+        examineremail: new RegExp(`^${escapeRegex(item.examineremail)}$`, "i")
+      }).select("startdate enddate examrollno").lean();
+      if (!allocation) {
+        errors.push({ row: index + 1, regno: item.regno, message: "Allocation not found for this examiner and component" });
+        continue;
+      }
+      if (!dateInsideWindow(allocation.startdate, allocation.enddate)) {
+        errors.push({ row: index + 1, regno: item.regno, message: `Marks entry is allowed only from ${allocation.startdate || "start"} to ${allocation.enddate || "end"}` });
+        continue;
+      }
+      const existing = await ComponentMarks.findOne({
+        colid: item.colid,
+        academicyear: item.academicyear,
+        examcode: item.examcode,
+        regulation: item.regulation,
+        programcode: item.programcode,
+        coursecode: item.coursecode,
+        regno: item.regno,
+        componenttype: item.componenttype,
+        assessmentgroup: item.assessmentgroup,
+        assessmentcomponent: item.assessmentcomponent
+      }).select("submissionstatus").lean();
+      if (existing?.submissionstatus === "Submitted") {
+        errors.push({ row: index + 1, regno: item.regno, message: "Marks already submitted and cannot be edited" });
+        continue;
+      }
+      item.examrollno = item.examrollno || allocation.examrollno || "";
+      item.submissionstatus = "Draft";
+      item.submitteddate = "";
+      item.submittedby = "";
       ops.push({
         updateOne: {
           filter: { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, regulation: item.regulation, programcode: item.programcode, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
@@ -348,13 +440,87 @@ exports.saveExaminerMarks = async (req, res) => {
           upsert: true
         }
       });
-    });
+    }
     let saved = 0;
     if (ops.length) {
       const result = await ComponentMarks.bulkWrite(ops, { ordered: false });
       saved = (result.upsertedCount || 0) + (result.modifiedCount || 0) + (result.matchedCount || 0);
     }
     res.json({ success: true, saved, errors });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.submitExaminerMarks = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    const errors = [];
+    const ops = [];
+    const submitteddate = todayString();
+    const submittedby = text(req.body.user);
+    for (let index = 0; index < rows.length; index += 1) {
+      const item = marksPayload({ ...rows[index], colid: req.body.colid || rows[index].colid, user: submittedby, submissionstatus: "Submitted", submitteddate, submittedby });
+      const error = validateMarks(item);
+      if (error) {
+        errors.push({ row: index + 1, regno: item.regno, message: error });
+        continue;
+      }
+      const allocation = await ComponentAllocation.findOne({
+        colid: item.colid,
+        academicyear: item.academicyear,
+        examcode: item.examcode,
+        regulation: item.regulation,
+        programcode: item.programcode,
+        coursecode: item.coursecode,
+        regno: item.regno,
+        componenttype: item.componenttype,
+        assessmentgroup: item.assessmentgroup,
+        assessmentcomponent: item.assessmentcomponent,
+        examineremail: new RegExp(`^${escapeRegex(item.examineremail)}$`, "i")
+      }).select("startdate enddate examrollno").lean();
+      if (!allocation) {
+        errors.push({ row: index + 1, regno: item.regno, message: "Allocation not found for this examiner and component" });
+        continue;
+      }
+      if (!dateInsideWindow(allocation.startdate, allocation.enddate)) {
+        errors.push({ row: index + 1, regno: item.regno, message: `Submission is allowed only from ${allocation.startdate || "start"} to ${allocation.enddate || "end"}` });
+        continue;
+      }
+      const existing = await ComponentMarks.findOne({
+        colid: item.colid,
+        academicyear: item.academicyear,
+        examcode: item.examcode,
+        regulation: item.regulation,
+        programcode: item.programcode,
+        coursecode: item.coursecode,
+        regno: item.regno,
+        componenttype: item.componenttype,
+        assessmentgroup: item.assessmentgroup,
+        assessmentcomponent: item.assessmentcomponent
+      }).select("submissionstatus").lean();
+      if (existing?.submissionstatus === "Submitted") {
+        errors.push({ row: index + 1, regno: item.regno, message: "Marks already submitted" });
+        continue;
+      }
+      item.examrollno = item.examrollno || allocation.examrollno || "";
+      item.submissionstatus = "Submitted";
+      item.submitteddate = submitteddate;
+      item.submittedby = submittedby;
+      ops.push({
+        updateOne: {
+          filter: { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, regulation: item.regulation, programcode: item.programcode, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
+          update: { $set: item },
+          upsert: true
+        }
+      });
+    }
+    let submitted = 0;
+    if (ops.length) {
+      const result = await ComponentMarks.bulkWrite(ops, { ordered: false });
+      submitted = (result.upsertedCount || 0) + (result.modifiedCount || 0) + (result.matchedCount || 0);
+    }
+    res.json({ success: true, submitted, errors });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -418,6 +584,180 @@ exports.bulkMarks = async (req, res) => {
       saved += 1;
     }
     res.json({ success: true, saved, errors });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.monitoringOptions = async (req, res) => {
+  try {
+    const colid = numberOrUndefined(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const [allocations, examiners] = await Promise.all([
+      ComponentAllocation.find({ colid }).select(allocationFields.join(" ")).lean(),
+      ConductExamExaminer.find({ colid }).sort({ examinername: 1 }).lean()
+    ]);
+    const fields = ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "examinername", "examineremail", "componenttype", "assessmentcomponent"];
+    res.json({
+      success: true,
+      options: Object.fromEntries(fields.map((field) => [field, uniq(allocations.map((row) => row[field]))])),
+      examiners
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.marksEntryMonitoring = async (req, res) => {
+  try {
+    const filter = buildFilter(req.query, ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "examinername", "examineremail", "componenttype", "assessmentcomponent"]);
+    if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const [allocations, marks, institution] = await Promise.all([
+      ComponentAllocation.find(filter).lean(),
+      ComponentMarks.find(buildFilter(req.query, ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "examinername", "examineremail", "componenttype", "assessmentcomponent"])).lean(),
+      institutionFor(filter.colid)
+    ]);
+    const markMap = new Map(marks.map((row) => [markKey(row), row]));
+    const grouped = new Map();
+    allocations.forEach((row) => {
+      const key = [row.examineremail, row.coursecode].map(text).join("||");
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          examinername: row.examinername,
+          examineremail: row.examineremail,
+          academicyear: row.academicyear,
+          exam: row.exam,
+          examcode: row.examcode,
+          program: row.program,
+          programcode: row.programcode,
+          course: row.course,
+          coursecode: row.coursecode,
+          allocated: 0,
+          draft: 0,
+          submitted: 0,
+          completed: 0,
+          pending: 0
+        });
+      }
+      const item = grouped.get(key);
+      item.allocated += 1;
+      const mark = markMap.get(markKey(row));
+      if (mark?.submissionstatus === "Submitted") {
+        item.submitted += 1;
+        item.completed += 1;
+      } else if (mark) {
+        item.draft += 1;
+      } else {
+        item.pending += 1;
+      }
+    });
+    const details = allocations.map((row) => {
+      const mark = markMap.get(markKey(row));
+      return { ...row, marked: mark?.submissionstatus === "Submitted" ? "Submitted" : mark ? "Draft" : "Pending" };
+    });
+    const rows = [...grouped.values()].map((row, index) => ({ ...row, id: `${row.examineremail}-${row.coursecode}-${index}`, completionpercentage: row.allocated ? Number(((row.completed / row.allocated) * 100).toFixed(2)) : 0 }));
+    const totals = rows.reduce((acc, row) => ({
+      allocated: acc.allocated + row.allocated,
+      draft: acc.draft + row.draft,
+      submitted: acc.submitted + row.submitted,
+      completed: acc.completed + row.completed,
+      pending: acc.pending + row.pending
+    }), { allocated: 0, draft: 0, submitted: 0, completed: 0, pending: 0 });
+    res.json({ success: true, data: rows, details, totals, institution });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.daywiseMarksEntryMonitoring = async (req, res) => {
+  try {
+    const filter = buildFilter(req.query, ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "examinername", "examineremail", "componenttype", "assessmentcomponent"]);
+    if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const [allocations, marks, institution] = await Promise.all([
+      ComponentAllocation.find(filter).lean(),
+      ComponentMarks.find(filter).lean(),
+      institutionFor(filter.colid)
+    ]);
+    const grouped = new Map();
+    const ensureDay = (sourceRow, date) => {
+      const key = [date, sourceRow.examineremail, sourceRow.coursecode].map(text).join("||");
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          date,
+          examinername: sourceRow.examinername,
+          examineremail: sourceRow.examineremail,
+          academicyear: sourceRow.academicyear,
+          exam: sourceRow.exam,
+          examcode: sourceRow.examcode,
+          program: sourceRow.program,
+          programcode: sourceRow.programcode,
+          course: sourceRow.course,
+          coursecode: sourceRow.coursecode,
+          allocated: 0,
+          draft: 0,
+          submitted: 0,
+          marked: 0
+        });
+      }
+      return grouped.get(key);
+    };
+    allocations.forEach((row) => {
+      const date = (row.createdAt || row.updatedAt || new Date()).toISOString().slice(0, 10);
+      ensureDay(row, date).allocated += 1;
+    });
+    marks.forEach((row) => {
+      const date = row.submissionstatus === "Submitted" && row.submitteddate ? row.submitteddate : (row.updatedAt || row.createdAt || new Date()).toISOString().slice(0, 10);
+      const item = ensureDay(row, date);
+      item.marked += 1;
+      if (row.submissionstatus === "Submitted") item.submitted += 1;
+      else item.draft += 1;
+    });
+    const rows = [...grouped.values()].sort((a, b) => `${b.date}${b.coursecode}`.localeCompare(`${a.date}${a.coursecode}`)).map((row, index) => ({ ...row, id: `${row.date}-${row.examineremail}-${row.coursecode}-${index}` }));
+    const totals = {
+      allocated: rows.reduce((sum, row) => sum + row.allocated, 0),
+      draft: rows.reduce((sum, row) => sum + row.draft, 0),
+      submitted: rows.reduce((sum, row) => sum + row.submitted, 0),
+      marked: rows.reduce((sum, row) => sum + row.marked, 0),
+      days: uniq(rows.map((row) => row.date)).length
+    };
+    res.json({ success: true, data: rows, totals, institution });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.reassignmentRows = async (req, res) => {
+  try {
+    const filter = buildFilter(req.query, ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "examinername", "examineremail", "componenttype", "assessmentcomponent"]);
+    if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const [allocations, marks, examiners] = await Promise.all([
+      ComponentAllocation.find(filter).sort({ coursecode: 1, examinername: 1, regno: 1 }).lean(),
+      ComponentMarks.find(buildFilter(req.query, ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "examinername", "examineremail", "componenttype", "assessmentcomponent"])).lean(),
+      ConductExamExaminer.find({ colid: filter.colid }).sort({ examinername: 1 }).lean()
+    ]);
+    const markMap = new Map(marks.map((row) => [markKey(row), row]));
+    const rows = allocations.map((row) => ({ ...row, markedstatus: markMap.has(markKey(row)) ? "Marked" : "Pending" }));
+    const relevantCourses = uniq(rows.map((row) => row.coursecode));
+    res.json({ success: true, marked: rows.filter((row) => row.markedstatus === "Marked"), pending: rows.filter((row) => row.markedstatus === "Pending"), examiners: examiners.filter((row) => !relevantCourses.length || relevantCourses.includes(row.coursecode)) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.reassignExaminer = async (req, res) => {
+  try {
+    const colid = numberOrUndefined(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    const examineremail = text(req.body.examineremail);
+    const examinername = text(req.body.examinername);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one paper" });
+    if (!examineremail) return res.status(400).json({ success: false, message: "Select target examiner" });
+    const rows = await ComponentAllocation.find({ colid, _id: { $in: ids } }).lean();
+    const coursecodes = uniq(rows.map((row) => row.coursecode));
+    if (coursecodes.length > 1) return res.status(400).json({ success: false, message: "Reassign papers from one course code at a time" });
+    const result = await ComponentAllocation.updateMany({ colid, _id: { $in: ids } }, { $set: { examinername, examineremail, user: text(req.body.user) } });
+    res.json({ success: true, updated: result.modifiedCount || 0 });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

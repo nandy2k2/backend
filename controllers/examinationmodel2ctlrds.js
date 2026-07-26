@@ -11,6 +11,10 @@ const ConductExamCourse = require("../Models/conductexamcourseds");
 const ProgramwiseMarksheetConfiguration = require("../Models/programwisemarksheetconfigurationds");
 const Institution = require("../Models/insdetails");
 const BlockchainLedger = require("../Models/blockchainledgerds");
+const ComponentMarks = require("../Models/exammodel2componentmarksds");
+const ComponentAllocation = require("../Models/conductexamcomponentallocationds");
+const GradeConfiguration = require("../Models/gradeconfigurationds");
+const PassMarksConfiguration = require("../Models/passmarksconfigurationds");
 const { appendBlock } = require("./blockchainledgerctlrds");
 
 const text = (value) => String(value ?? "").trim();
@@ -34,6 +38,19 @@ const getUGCGrade = (percentage) => {
   if (value >= 36) return { grade: "P", gradepoint: 4 };
   return { grade: "F", gradepoint: 0 };
 };
+const componentMarkKey = (row) => [row.colid, row.academicyear, row.examcode, row.regulation, row.programcode, row.coursecode, row.regno, row.componenttype, row.assessmentgroup, row.assessmentcomponent].map(text).join("||");
+const studentCourseKey = (row) => [row.colid, row.academicyear, row.examcode, row.regulation, row.programcode, row.coursecode, row.regno].map(text).join("||");
+const gradeFromRules = (percentage, rows = []) => {
+  const value = number(percentage);
+  const rule = rows.find((item) => value >= number(item.frompercentage) && value <= number(item.topercentage));
+  return rule ? { grade: text(rule.grade), gradepoint: number(rule.gradepoint) } : getUGCGrade(value);
+};
+const passStatusFromRule = (component, obtained, total, rules = []) => {
+  const rule = rules.find((item) => text(item.component).toLowerCase() === text(component).toLowerCase());
+  if (!rule) return "Pass";
+  const threshold = number(rule.passpercentage) || percent(rule.passmarks, rule.maxmarks || total);
+  return percent(obtained, total) >= threshold ? "Pass" : "Fail";
+};
 
 const markFields = [
   "academicyear", "regulation", "exam", "examcode", "program", "programcode", "semester", "course", "coursecode",
@@ -44,13 +61,16 @@ const markFields = [
 const vivaMarkFields = [
   "academicyear", "regulation", "exam", "examcode", "program", "programcode", "semester", "course", "coursecode",
   "credit", "student", "regno", "abcid", "theorymarks", "theoryobtained", "theorypercentage", "theorygradepoint", "theorygrade",
+  "theorystatus",
   "practicalmarks", "practicaltotal", "practicalpercentage", "practicalgradepoint", "practicalgrade",
+  "practicalstatus",
   "vivatotal", "vivaobtained", "vivapercentage", "vivagpa", "vivagrade",
   "overalltotalmarks", "overallobtained", "overallgradepoint", "overallgrade", "overallpercentage", "gpa", "status", "attempt", "type", "examdate", "resultprocessdate"
 ];
 const gradingTemplateFields = ["academicyear", "templatedescription", "status"];
 const gradingTemplateDetailFields = ["academicyear", "templatename", "templateid", "frommarks", "tomarks", "gradepoint", "grade"];
 const classConfigurationFields = ["academicyear", "program", "programcode", "fromsgpa", "tosgpa", "classassigned"];
+const passMarksFields = ["academicyear", "regulation", "program", "programcode", "course", "coursecode", "component", "maxmarks", "passmarks", "passpercentage", "status"];
 
 const buildFilter = (source = {}) => {
   const filter = { colid: number(source.colid) };
@@ -115,11 +135,13 @@ const payloadFrom = (body = {}) => {
     theorypercentage: body.theorypercentage === "" || body.theorypercentage === undefined ? percent(theoryobtained, theorymarks) : number(body.theorypercentage),
     theorygradepoint: number(body.theorygradepoint),
     theorygrade: text(body.theorygrade),
+    theorystatus: text(body.theorystatus) || "Pass",
     practicalmarks,
     practicaltotal,
     practicalpercentage: body.practicalpercentage === "" || body.practicalpercentage === undefined ? percent(practicalmarks, practicaltotal) : number(body.practicalpercentage),
     practicalgradepoint: number(body.practicalgradepoint),
     practicalgrade: text(body.practicalgrade),
+    practicalstatus: text(body.practicalstatus) || "Pass",
     overalltotalmarks,
     overallobtained,
     overallgradepoint,
@@ -476,6 +498,145 @@ exports.vivaBulk = async (req, res) => {
   }
 };
 
+exports.processInterimMarksTransfer = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const filter = { colid };
+    ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "student", "regno"].forEach((field) => {
+      if (text(req.body[field])) filter[field] = text(req.body[field]);
+    });
+    const ids = toArray(req.body.ids);
+    if (ids.length) filter._id = { $in: ids };
+    const selectedRegnos = toArray(req.body.regnos);
+    if (selectedRegnos.length) filter.regno = { $in: selectedRegnos };
+
+    const componentRows = await ComponentMarks.find(filter).lean();
+    if (!componentRows.length) return res.status(404).json({ success: false, message: "No component marks found for selected filters" });
+
+    const baseFilter = { colid };
+    ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode"].forEach((field) => {
+      if (text(req.body[field])) baseFilter[field] = text(req.body[field]);
+    });
+    const [allocations, passRules, gradeRules, users] = await Promise.all([
+      ComponentAllocation.find(baseFilter).lean(),
+      PassMarksConfiguration.find({ colid, status: /^Active$/i }).lean(),
+      GradeConfiguration.find({ colid, status: /^Active$/i }).sort({ frompercentage: 1 }).lean(),
+      User.find({ colid, regno: { $in: uniqueSorted(componentRows.map((row) => row.regno)) } }).select("name regno abcid").lean()
+    ]);
+    const allocationMap = new Map(allocations.map((row) => [componentMarkKey(row), row]));
+    const userMap = new Map(users.map((row) => [text(row.regno), row]));
+    const grouped = new Map();
+    componentRows.forEach((mark) => {
+      const allocation = allocationMap.get(componentMarkKey(mark)) || {};
+      const merged = { ...allocation, ...mark, semester: allocation.semester || mark.semester || "" };
+      const key = studentCourseKey(merged);
+      if (!grouped.has(key)) {
+        const user = userMap.get(text(merged.regno)) || {};
+        grouped.set(key, {
+          base: {
+            colid,
+            academicyear: merged.academicyear,
+            regulation: merged.regulation,
+            exam: merged.exam,
+            examcode: merged.examcode,
+            program: merged.program,
+            programcode: merged.programcode,
+            semester: merged.semester,
+            course: merged.course,
+            coursecode: merged.coursecode,
+            credit: number(merged.credits || merged.credit),
+            student: merged.student || user.name || "",
+            regno: merged.regno,
+            abcid: user.abcid || merged.abcid || "",
+            attempt: number(req.body.attempt, 1),
+            type: text(req.body.type) || "Regular",
+            examdate: text(req.body.examdate || merged.examdate),
+            resultprocessdate: text(req.body.resultprocessdate) || new Date().toISOString().slice(0, 10),
+            user: text(req.body.user)
+          },
+          Theory: { total: 0, obtained: 0 },
+          Practical: { total: 0, obtained: 0 },
+          Viva: { total: 0, obtained: 0 }
+        });
+      }
+      const bucket = grouped.get(key)[text(merged.componenttype)] || grouped.get(key).Theory;
+      bucket.total += number(merged.maxmarks);
+      bucket.obtained += number(merged.marksobtained);
+      if (number(merged.credits) > number(grouped.get(key).base.credit)) grouped.get(key).base.credit = number(merged.credits);
+    });
+
+    let processed = 0;
+    const preview = [];
+    const errors = [];
+    for (const group of grouped.values()) {
+      try {
+        const base = group.base;
+        if (!base.semester) throw new Error(`Semester not found for ${base.regno} ${base.coursecode}`);
+        const matchingPassRules = passRules.filter((rule) => text(rule.academicyear) === text(base.academicyear) && text(rule.regulation) === text(base.regulation) && text(rule.programcode) === text(base.programcode) && text(rule.coursecode) === text(base.coursecode));
+        const matchingGradeRules = gradeRules.filter((rule) => text(rule.academicyear) === text(base.academicyear) && text(rule.regulation) === text(base.regulation) && text(rule.programcode) === text(base.programcode) && text(rule.coursecode) === text(base.coursecode));
+        const theoryPct = percent(group.Theory.obtained, group.Theory.total);
+        const practicalPct = percent(group.Practical.obtained, group.Practical.total);
+        const vivaPct = percent(group.Viva.obtained, group.Viva.total);
+        const overallTotal = group.Theory.total + group.Practical.total + group.Viva.total;
+        const overallObtained = group.Theory.obtained + group.Practical.obtained + group.Viva.obtained;
+        const overallPct = percent(overallObtained, overallTotal);
+        const theoryGrade = gradeFromRules(theoryPct, matchingGradeRules);
+        const practicalGrade = gradeFromRules(practicalPct, matchingGradeRules);
+        const vivaGrade = gradeFromRules(vivaPct, matchingGradeRules);
+        const overallGrade = gradeFromRules(overallPct, matchingGradeRules);
+        const theorystatus = passStatusFromRule("Theory", group.Theory.obtained, group.Theory.total, matchingPassRules);
+        const practicalstatus = passStatusFromRule("Practical", group.Practical.obtained, group.Practical.total, matchingPassRules);
+        const vivastatus = passStatusFromRule("Viva", group.Viva.obtained, group.Viva.total, matchingPassRules);
+        const status = [theorystatus, practicalstatus, vivastatus].includes("Fail") || overallGrade.grade === "F" ? "Fail" : "Pass";
+        const payload = vivaPayloadFrom({
+          ...base,
+          theorymarks: group.Theory.total,
+          theoryobtained: group.Theory.obtained,
+          theorypercentage: theoryPct,
+          theorygradepoint: theoryGrade.gradepoint,
+          theorygrade: theoryGrade.grade,
+          theorystatus,
+          practicaltotal: group.Practical.total,
+          practicalmarks: group.Practical.obtained,
+          practicalpercentage: practicalPct,
+          practicalgradepoint: practicalGrade.gradepoint,
+          practicalgrade: practicalGrade.grade,
+          practicalstatus,
+          vivatotal: group.Viva.total,
+          vivaobtained: group.Viva.obtained,
+          vivapercentage: vivaPct,
+          vivagpa: vivaGrade.gradepoint,
+          vivagrade: vivaGrade.grade,
+          overalltotalmarks: overallTotal,
+          overallobtained: overallObtained,
+          overallpercentage: overallPct,
+          overallgradepoint: overallGrade.gradepoint,
+          overallgrade: status === "Fail" ? "F" : overallGrade.grade,
+          status
+        });
+        if (status === "Fail") {
+          payload.overallgrade = "F";
+          payload.overallgradepoint = 0;
+          payload.gpa = 0;
+        }
+        await ExamVivaMarks.findOneAndUpdate(
+          { colid, academicyear: payload.academicyear, examcode: payload.examcode, programcode: payload.programcode, semester: payload.semester, coursecode: payload.coursecode, regno: payload.regno, attempt: payload.attempt },
+          payload,
+          { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+        );
+        processed += 1;
+        preview.push(payload);
+      } catch (error) {
+        errors.push({ key: group.base?.regno || "", message: error.message });
+      }
+    }
+    res.json({ success: true, processed, errors, data: preview.slice(0, 500) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 const templatePayload = (body = {}) => ({
   colid: number(body.colid),
   academicyear: text(body.academicyear),
@@ -506,6 +667,99 @@ const classConfigurationPayload = (body = {}) => ({
   classassigned: text(body.classassigned),
   user: text(body.user)
 });
+
+const passMarksPayload = (body = {}) => ({
+  colid: number(body.colid),
+  academicyear: text(body.academicyear),
+  regulation: text(body.regulation),
+  program: text(body.program),
+  programcode: text(body.programcode),
+  course: text(body.course),
+  coursecode: text(body.coursecode),
+  component: text(body.component),
+  maxmarks: number(body.maxmarks),
+  passmarks: number(body.passmarks),
+  passpercentage: number(body.passpercentage),
+  status: text(body.status) || "Active",
+  user: text(body.user)
+});
+
+exports.passMarksConfigurations = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const filter = { colid };
+    passMarksFields.forEach((field) => {
+      if (["maxmarks", "passmarks", "passpercentage"].includes(field)) return;
+      if (text(req.query[field])) filter[field] = text(req.query[field]);
+    });
+    const data = await PassMarksConfiguration.find(filter).sort({ academicyear: -1, programcode: 1, coursecode: 1, component: 1 }).lean();
+    const optionSource = data.length ? data : await RegulationCourseMap.find({ colid }).select("academicyear regulation program programcode course coursecode").lean();
+    res.json({
+      success: true,
+      data,
+      options: Object.fromEntries(passMarksFields.filter((field) => !["maxmarks", "passmarks", "passpercentage"].includes(field)).map((field) => [field, uniqueSorted(optionSource.map((row) => row[field]))]))
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.savePassMarksConfiguration = async (req, res) => {
+  try {
+    const payload = passMarksPayload(req.body);
+    if (!payload.colid || !payload.academicyear || !payload.regulation || !payload.programcode || !payload.coursecode || !payload.component) {
+      return res.status(400).json({ success: false, message: "Academic year, regulation, program code, course code and component are required" });
+    }
+    const id = req.body.id || req.body._id;
+    const data = id
+      ? await PassMarksConfiguration.findOneAndUpdate({ _id: id, colid: payload.colid }, payload, { new: true, runValidators: true })
+      : await PassMarksConfiguration.findOneAndUpdate(
+        { colid: payload.colid, academicyear: payload.academicyear, regulation: payload.regulation, programcode: payload.programcode, coursecode: payload.coursecode, component: payload.component },
+        payload,
+        { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+      );
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.code === 11000 ? "Duplicate passmarks configuration" : error.message });
+  }
+};
+
+exports.deletePassMarksConfiguration = async (req, res) => {
+  try {
+    const data = await PassMarksConfiguration.findOneAndDelete({ _id: req.body.id || req.body._id, colid: number(req.body.colid) });
+    if (!data) return res.status(404).json({ success: false, message: "Passmarks configuration not found" });
+    res.json({ success: true, message: "Deleted" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkPassMarksConfigurations = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    let saved = 0;
+    const errors = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      try {
+        const payload = passMarksPayload({ ...rows[index], colid, user: req.body.user || rows[index].user });
+        if (!payload.academicyear || !payload.regulation || !payload.programcode || !payload.coursecode || !payload.component) throw new Error("Required fields missing");
+        await PassMarksConfiguration.findOneAndUpdate(
+          { colid, academicyear: payload.academicyear, regulation: payload.regulation, programcode: payload.programcode, coursecode: payload.coursecode, component: payload.component },
+          payload,
+          { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+        );
+        saved += 1;
+      } catch (error) {
+        errors.push({ row: index + 2, message: error.message });
+      }
+    }
+    res.json({ success: true, saved, errors });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 exports.gradingTemplates = async (req, res) => {
   try {

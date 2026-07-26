@@ -12,6 +12,7 @@ const examModel2ComponentMarksSchema = new mongoose.Schema({
   coursecode: { type: String, required: true, trim: true },
   student: { type: String, trim: true, default: "" },
   regno: { type: String, required: true, trim: true },
+  examrollno: { type: String, trim: true, default: "" },
   componenttype: { type: String, enum: ["Theory", "Practical", "Viva", ""], trim: true, default: "" },
   scoretype: { type: String, enum: ["Internal", "External", ""], trim: true, default: "" },
   assessmentgroup: { type: String, trim: true, default: "" },
@@ -22,6 +23,9 @@ const examModel2ComponentMarksSchema = new mongoose.Schema({
   credits: { type: Number, default: 0 },
   examinername: { type: String, trim: true, default: "" },
   examineremail: { type: String, trim: true, default: "" },
+  submissionstatus: { type: String, enum: ["Draft", "Submitted"], trim: true, default: "Draft" },
+  submitteddate: { type: String, trim: true, default: "" },
+  submittedby: { type: String, trim: true, default: "" },
   user: { type: String, trim: true, default: "" }
 }, { timestamps: true });
 
