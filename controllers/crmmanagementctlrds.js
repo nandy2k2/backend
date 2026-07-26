@@ -48,6 +48,16 @@ const leadSearchQuery = (body = {}) => {
       { assignedto: regex }
     ];
   }
+  if (Array.isArray(body.dynamicFilters)) {
+    body.dynamicFilters.forEach((item) => {
+      const field = clean(item.field);
+      const value = clean(item.value);
+      const operator = clean(item.operator || "contains").toLowerCase();
+      if (!field || !value || field.includes("$") || field.includes(".")) return;
+      if (operator === "equals") query[field] = value;
+      else query[field] = { $regex: value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" };
+    });
+  }
   return query;
 };
 
