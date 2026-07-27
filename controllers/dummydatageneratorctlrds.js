@@ -69,6 +69,11 @@ const dateString = (offset = 0) => {
 };
 const objectIdFor = (value) => new mongoose.Types.ObjectId(crypto.createHash("md5").update(String(value)).digest("hex").slice(0, 24));
 const monthName = (date = today) => date.toLocaleString("en-US", { month: "long" });
+const timeToMinutes = (value, fallback = 9 * 60) => {
+  const [h, m] = text(value).split(":").map((part) => Number(part));
+  return Number.isFinite(h) ? h * 60 + (Number.isFinite(m) ? m : 0) : fallback;
+};
+const minutesToTime = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 const academicYears = ["2026-27", "2027-28", "2028-29"];
 const semesters = ["1", "2", "3", "4", "5", "6"];
 const departments = ["Computer Science", "Management", "Dental Sciences", "Accounts", "HR"];
@@ -424,16 +429,46 @@ exports.generateDummyData = async (req, res) => {
       summary.push(summaryLine("Workload assignment master loaded", workloadRows.length));
     }
 
-    const periodRows = programs.flatMap((p) => ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].flatMap((day) => ([
-      { colid, user, academicyear, program: p.program, programcode: p.programcode, dayofweek: day, periodname: "Period 1", starttime: "09:00", endtime: "10:00" },
-      { colid, user, academicyear, program: p.program, programcode: p.programcode, dayofweek: day, periodname: "Period 2", starttime: "10:00", endtime: "11:00" },
-      { colid, user, academicyear, program: p.program, programcode: p.programcode, dayofweek: day, periodname: "Period 3", starttime: "11:15", endtime: "12:15" },
-      { colid, user, academicyear, program: p.program, programcode: p.programcode, dayofweek: day, periodname: "Period 4", starttime: "13:00", endtime: "14:00" },
-      { colid, user, academicyear, program: p.program, programcode: p.programcode, dayofweek: day, periodname: "Period 5", starttime: "14:00", endtime: "15:00" },
-      { colid, user, academicyear, program: p.program, programcode: p.programcode, dayofweek: day, periodname: "Period 6", starttime: "15:15", endtime: "16:15" }
-    ])));
     if (shouldGenerate("periods")) {
-      await upsertMany(ProgramPeriodSlot, periodRows, ["colid", "academicyear", "programcode", "dayofweek", "periodname"]);
+      const requestedProgramCodes = Array.isArray(req.body.periodProgramCodes) ? req.body.periodProgramCodes.map(text).filter(Boolean) : [];
+      const targetPeriods = clamp(num(req.body.periodsPerDay, 6), 1, 12);
+      const durationMinutes = clamp(num(req.body.periodDurationMinutes, 60), 30, 180);
+      const gapMinutes = clamp(num(req.body.periodGapMinutes, 0), 0, 60);
+      const startBase = timeToMinutes(req.body.periodStartTime || "09:00");
+      const selectedPrograms = requestedProgramCodes.length ? programs.filter((p) => requestedProgramCodes.includes(text(p.programcode))) : programs;
+      const existingPeriods = await ProgramPeriodSlot.find({
+        colid,
+        academicyear,
+        programcode: { $in: selectedPrograms.map((p) => p.programcode) },
+        dayofweek: { $in: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] }
+      }).lean();
+      const periodRows = [];
+      selectedPrograms.forEach((p) => {
+        ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].forEach((day) => {
+          const existingForDay = existingPeriods
+            .filter((row) => text(row.programcode) === text(p.programcode) && text(row.dayofweek) === day)
+            .sort((a, b) => timeToMinutes(a.starttime) - timeToMinutes(b.starttime));
+          const missing = Math.max(0, targetPeriods - existingForDay.length);
+          if (!missing) return;
+          const firstNewStart = existingForDay.length ? timeToMinutes(existingForDay[existingForDay.length - 1].endtime, startBase) + gapMinutes : startBase;
+          for (let i = 0; i < missing; i += 1) {
+            const periodNumber = existingForDay.length + i + 1;
+            const start = firstNewStart + i * (durationMinutes + gapMinutes);
+            periodRows.push({
+              colid,
+              user,
+              academicyear,
+              program: p.program,
+              programcode: p.programcode,
+              dayofweek: day,
+              periodname: `Period ${periodNumber}`,
+              starttime: minutesToTime(start),
+              endtime: minutesToTime(start + durationMinutes)
+            });
+          }
+        });
+      });
+      if (periodRows.length) await upsertMany(ProgramPeriodSlot, periodRows, ["colid", "academicyear", "programcode", "dayofweek", "periodname"]);
       summary.push(summaryLine("Program period slots", periodRows.length));
     } else {
       skipped("Program period slots");

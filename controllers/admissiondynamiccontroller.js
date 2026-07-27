@@ -1168,6 +1168,35 @@ exports.getApplicationById = async (req, res) => {
   }
 };
 
+exports.getStudentApplications = async (req, res) => {
+  try {
+    const colid = Number(req.query.colid);
+    const email = String(req.query.email || req.query.user || '').trim().toLowerCase();
+    const regno = String(req.query.regno || '').trim();
+    const username = String(req.query.username || req.query.user || '').trim();
+    const phone = String(req.query.phone || '').trim();
+
+    if (!colid) return res.status(400).json({ msg: 'College id is required' });
+
+    const orFilters = [];
+    if (email) orFilters.push({ email }, { user: email }, { username: email });
+    if (username && username !== email) orFilters.push({ username }, { user: username });
+    if (regno) orFilters.push({ regno });
+    if (phone) orFilters.push({ phone });
+
+    if (!orFilters.length) {
+      return res.status(400).json({ msg: 'Student email, registration number, username, or phone is required' });
+    }
+
+    const applications = await AdmissionApplication.find({ colid, $or: orFilters }).sort({ updatedAt: -1, createdAt: -1 });
+    for (const application of applications) await ensureApplicationIdentifiers(application);
+
+    res.json(applications.map(normalizeApplicationResponse));
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
 exports.checkDuplicateEmail = async (req, res) => {
   try {
     const colid = Number(req.body.colid || req.query.colid);

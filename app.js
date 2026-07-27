@@ -365,6 +365,7 @@ app.post('/admission-dynamic/fields-update', admissionDynamicController.updateFi
 app.post('/admission-dynamic/fields-delete', admissionDynamicController.deleteField);
 app.get('/admission-dynamic/applications', admissionDynamicController.getApplications);
 app.get('/admission-dynamic/application', admissionDynamicController.getApplicationById);
+app.get('/admission-dynamic/student-applications', admissionDynamicController.getStudentApplications);
 app.post('/admission-dynamic/application-email-check', admissionDynamicController.checkDuplicateEmail);
 app.get('/admission-dynamic/application-retrieve', admissionDynamicController.retrieveApplication);
 app.post('/admission-dynamic/application-credential-retrieve', admissionDynamicController.retrieveApplicationByCredential);
@@ -4951,6 +4952,7 @@ const gradeconfigurationctlrds = require("./controllers/gradeconfigurationctlrds
 const relativegradingconfigurationctlrds = require("./controllers/relativegradingconfigurationctlrds");
 const zscoreconfigurationctlrds = require("./controllers/zscoreconfigurationctlrds");
 const workloadassignmentctlrds = require("./controllers/workloadassignmentctlrds");
+const facultyqualificationctlrds = require("./controllers/facultyqualificationctlrds");
 const programperiodslotctlrds = require("./controllers/programperiodslotctlrds");
 const facultyavailabilityctlrds = require("./controllers/facultyavailabilityctlrds");
 const neplmsctlrds = require("./controllers/neplmsctlrds");
@@ -5419,6 +5421,14 @@ app.get("/api/v2/workloadassignment", workloadassignmentctlrds.getWorkloadAssign
 app.post("/api/v2/workloadassignment/update", workloadassignmentctlrds.updateWorkloadAssignment);
 app.post("/api/v2/workloadassignment/delete", workloadassignmentctlrds.deleteWorkloadAssignment);
 app.post("/api/v2/workloadassignment/bulkupload", workloadassignmentctlrds.bulkCreateWorkloadAssignments);
+app.get("/api/v2/facultyqualification/options", facultyqualificationctlrds.options);
+app.get("/api/v2/facultyqualification", facultyqualificationctlrds.listQualifications);
+app.post("/api/v2/facultyqualification", facultyqualificationctlrds.saveQualification);
+app.post("/api/v2/facultyqualification/delete", facultyqualificationctlrds.deleteQualification);
+app.post("/api/v2/facultyqualification/bulkupload", facultyqualificationctlrds.bulkQualifications);
+app.post("/api/v2/facultyqualification/auto-preview", facultyqualificationctlrds.previewAutoAllocation);
+app.post("/api/v2/facultyqualification/auto-preview-ai", facultyqualificationctlrds.previewAutoAllocationAi);
+app.post("/api/v2/facultyqualification/auto-approve", facultyqualificationctlrds.approveAutoAllocation);
 app.get("/api/v2/program-period-slots/options", programperiodslotctlrds.getOptions);
 app.get("/api/v2/program-period-slots", programperiodslotctlrds.getSlots);
 app.post("/api/v2/program-period-slots", programperiodslotctlrds.createSlot);

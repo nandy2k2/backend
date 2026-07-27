@@ -328,12 +328,24 @@ const extractJson = (raw) => {
   }
 };
 
-const buildContext = async ({ colid, academicyear, startdate, enddate }) => {
+const toArray = (value) => Array.isArray(value) ? value.map(text).filter(Boolean) : text(value) ? [text(value)] : [];
+
+const buildContext = async ({ colid, academicyear, startdate, enddate, regulation, programcodes = [], semesters = [] }) => {
   const dates = datesBetween(startdate, enddate);
   if (!dates.length) throw new Error("Valid start date and end date are required");
+  const workloadQuery = { colid, academicyear, status: /^Active$/i };
+  const periodQuery = { colid, academicyear };
+  const programList = toArray(programcodes);
+  const semesterList = toArray(semesters);
+  if (text(regulation)) workloadQuery.regulation = text(regulation);
+  if (programList.length) {
+    workloadQuery.programcode = { $in: programList };
+    periodQuery.programcode = { $in: programList };
+  }
+  if (semesterList.length) workloadQuery.semester = { $in: semesterList };
   const [workloads, periods, availability, ollamaConfigs] = await Promise.all([
-    WorkloadAssignment.find({ colid, academicyear, status: /^Active$/i }).sort({ programcode: 1, semester: 1, course: 1 }).lean(),
-    ProgramPeriodSlot.find({ colid, academicyear }).sort({ programcode: 1, dayofweek: 1, starttime: 1 }).lean(),
+    WorkloadAssignment.find(workloadQuery).sort({ programcode: 1, semester: 1, course: 1 }).lean(),
+    ProgramPeriodSlot.find(periodQuery).sort({ programcode: 1, dayofweek: 1, starttime: 1 }).lean(),
     FacultyAvailability.find({ colid, academicyear }).lean(),
     OllamaConfiguration.find({ colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean()
   ]);
@@ -342,8 +354,8 @@ const buildContext = async ({ colid, academicyear, startdate, enddate }) => {
   return { dates, workloads, periods, availability, sessions, slots, ollamaConfigs };
 };
 
-const buildRoomContext = async ({ colid, academicyear, startdate, enddate }) => {
-  const ctx = await buildContext({ colid, academicyear, startdate, enddate });
+const buildRoomContext = async ({ colid, academicyear, startdate, enddate, regulation, programcodes = [], semesters = [] }) => {
+  const ctx = await buildContext({ colid, academicyear, startdate, enddate, regulation, programcodes, semesters });
   const [rooms, existingTimetable, courseMaps] = await Promise.all([
     RoomResource.find({ colid }).sort({ campus: 1, building: 1, floor: 1, roomno: 1 }).lean(),
     NepLmsTimetable.find({ colid, academicyear, classdate: { $gte: text(startdate), $lte: text(enddate) } }).lean(),
@@ -367,11 +379,22 @@ exports.options = async (req, res) => {
     const colid = Number(req.query.colid);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
     const [workloads, periods, ollamaConfigs] = await Promise.all([
-      WorkloadAssignment.find({ colid }).select("academicyear").lean(),
-      ProgramPeriodSlot.find({ colid }).select("academicyear").lean(),
+      WorkloadAssignment.find({ colid }).select("academicyear regulation program programcode semester").lean(),
+      ProgramPeriodSlot.find({ colid }).select("academicyear program programcode").lean(),
       OllamaConfiguration.find({ colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean()
     ]);
-    res.json({ success: true, academicyears: uniq([...workloads.map((item) => item.academicyear), ...periods.map((item) => item.academicyear)]), ollamaConfigs });
+    const programMap = new Map();
+    [...workloads, ...periods].forEach((item) => {
+      if (item.programcode) programMap.set(item.programcode, { program: item.program || "", programcode: item.programcode || "" });
+    });
+    res.json({
+      success: true,
+      academicyears: uniq([...workloads.map((item) => item.academicyear), ...periods.map((item) => item.academicyear)]),
+      regulations: uniq(workloads.map((item) => item.regulation)),
+      programs: [...programMap.values()].sort((a, b) => String(a.programcode).localeCompare(String(b.programcode), undefined, { numeric: true })),
+      semesters: uniq(workloads.map((item) => item.semester)),
+      ollamaConfigs
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -382,7 +405,7 @@ exports.generate = async (req, res) => {
     const colid = Number(req.body.colid);
     const academicyear = text(req.body.academicyear);
     if (!colid || !academicyear) return res.status(400).json({ success: false, message: "colid and academic year are required" });
-    const ctx = await buildContext({ colid, academicyear, startdate: req.body.startdate, enddate: req.body.enddate });
+    const ctx = await buildContext({ colid, academicyear, startdate: req.body.startdate, enddate: req.body.enddate, regulation: req.body.regulation, programcodes: req.body.programcodes, semesters: req.body.semesters });
     if (!ctx.workloads.length) return res.status(400).json({ success: false, message: "No active workload found for this academic year" });
     if (!ctx.periods.length) return res.status(400).json({ success: false, message: "No period configuration found for this academic year" });
     const shortages = capacityCheck(ctx);
@@ -406,7 +429,7 @@ exports.generateAi = async (req, res) => {
     const colid = Number(req.body.colid);
     const academicyear = text(req.body.academicyear);
     if (!colid || !academicyear) return res.status(400).json({ success: false, message: "colid and academic year are required" });
-    const ctx = await buildContext({ colid, academicyear, startdate: req.body.startdate, enddate: req.body.enddate });
+    const ctx = await buildContext({ colid, academicyear, startdate: req.body.startdate, enddate: req.body.enddate, regulation: req.body.regulation, programcodes: req.body.programcodes, semesters: req.body.semesters });
     const shortages = capacityCheck(ctx);
     if (shortages.length) return res.status(400).json({ success: false, message: "No of periods are less than no of workload for one or more programs", shortages });
 
@@ -561,7 +584,7 @@ exports.generateWithRooms = async (req, res) => {
     const colid = Number(req.body.colid);
     const academicyear = text(req.body.academicyear);
     if (!colid || !academicyear) return res.status(400).json({ success: false, message: "colid and academic year are required" });
-    const ctx = await buildRoomContext({ colid, academicyear, startdate: req.body.startdate, enddate: req.body.enddate });
+    const ctx = await buildRoomContext({ colid, academicyear, startdate: req.body.startdate, enddate: req.body.enddate, regulation: req.body.regulation, programcodes: req.body.programcodes, semesters: req.body.semesters });
     if (!ctx.workloads.length) return res.status(400).json({ success: false, message: "No active workload found for this academic year" });
     if (!ctx.periods.length) return res.status(400).json({ success: false, message: "No period configuration found for this academic year" });
     if (!ctx.rooms.length) return res.status(400).json({ success: false, message: "No room configuration found" });
@@ -593,7 +616,7 @@ exports.generateAiWithRooms = async (req, res) => {
     const colid = Number(req.body.colid);
     const academicyear = text(req.body.academicyear);
     if (!colid || !academicyear) return res.status(400).json({ success: false, message: "colid and academic year are required" });
-    const ctx = await buildRoomContext({ colid, academicyear, startdate: req.body.startdate, enddate: req.body.enddate });
+    const ctx = await buildRoomContext({ colid, academicyear, startdate: req.body.startdate, enddate: req.body.enddate, regulation: req.body.regulation, programcodes: req.body.programcodes, semesters: req.body.semesters });
     if (!ctx.rooms.length) return res.status(400).json({ success: false, message: "No room configuration found" });
     const shortages = capacityCheck(ctx);
     if (shortages.length) return res.status(400).json({ success: false, message: "No of periods are less than no of workload for one or more programs", shortages });
