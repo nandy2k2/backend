@@ -74,6 +74,9 @@ const timetablePayload = (body = {}) => ({
   major: text(body.major || body.subject),
   section: text(body.section),
   classgroup: text(body.classgroup),
+  enrollmentgroup: text(body.enrollmentgroup),
+  enrollmentgroupid: body.enrollmentgroupid || undefined,
+  specialization: text(body.specialization),
   classdate: text(body.classdate),
   classtime: text(body.classtime),
   period: text(body.period),
@@ -96,6 +99,9 @@ const courseFilter = (source = {}) => {
     "semester",
     "section",
     "classgroup",
+    "enrollmentgroup",
+    "enrollmentgroupid",
+    "specialization",
     "course",
     "coursecode",
     "faculty",
@@ -504,8 +510,8 @@ exports.bulkCreateTimetable = async (req, res) => {
     for (let index = 0; index < items.length; index += 1) {
       const rowNumber = items[index].rowNumber || index + 2;
       const payload = timetablePayload({ ...items[index], colid, user: req.body.user || items[index].user });
-      if (!payload.coursecode || !payload.classdate || !payload.classtime) {
-        errors.push({ rowNumber, message: "Course code, class date and class time are required" });
+      if ((!payload.coursecode && !payload.enrollmentgroupid) || !payload.classdate || !payload.classtime) {
+        errors.push({ rowNumber, message: "Course code or enrollment group, class date and class time are required" });
         continue;
       }
       try {
@@ -524,8 +530,8 @@ exports.bulkCreateTimetable = async (req, res) => {
 exports.createTimetable = async (req, res) => {
   try {
     const payload = timetablePayload(req.body);
-    if (!payload.colid || !payload.coursecode || !payload.classdate || !payload.classtime) {
-      return res.status(400).json({ success: false, message: "Course, class date and class time are required" });
+    if (!payload.colid || (!payload.coursecode && !payload.enrollmentgroupid) || !payload.classdate || !payload.classtime) {
+      return res.status(400).json({ success: false, message: "Course or enrollment group, class date and class time are required" });
     }
     const data = await NepLmsTimetable.create(payload);
     res.json({ success: true, data });

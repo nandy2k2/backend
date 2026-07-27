@@ -100,10 +100,17 @@ exports.getCourseWorkspace = async (req, res) => {
     const student = await getStudent(req.query);
     const course = await verifyCourseForStudent(req.query, student);
     const base = { colid: Number(req.query.colid), academicyear: course.academicyear, semester: course.semester, coursecode: course.coursecode };
+    const timetableQuery = {
+      ...base,
+      ...(course.regulation ? { regulation: course.regulation } : {}),
+      ...(course.program ? { program: course.program } : {}),
+      ...(course.programcode ? { programcode: course.programcode } : {}),
+      ...(student.section ? { section: student.section } : {})
+    };
     const now = new Date();
     const [resources, timetable, rawSubmissions, quizzes, quizAttempts] = await Promise.all([
       NepLmsResource.find(base).sort({ resourcetype: 1, duedate: 1, createdAt: -1 }).lean(),
-      NepLmsTimetable.find(base).sort({ classdate: 1, classtime: 1 }).lean(),
+      NepLmsTimetable.find(timetableQuery).sort({ classdate: 1, classtime: 1 }).lean(),
       NepLmsAssignmentSubmission.find({ colid: Number(req.query.colid), regno: text(req.query.regno), coursecode: course.coursecode }).sort({ submitteddate: -1 }).lean(),
       NepLmsQuiz.find({ ...base, status: "Active" }).sort({ startdatetime: 1 }).lean(),
       NepLmsQuizAttempt.find({ colid: Number(req.query.colid), regno: text(req.query.regno), coursecode: course.coursecode }).sort({ submitteddate: -1 }).lean()
