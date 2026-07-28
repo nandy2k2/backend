@@ -14,6 +14,8 @@ const RecruitmentInterviewPanel = require('../Models/recruitmentinterviewpanelds
 const RecruitmentPanelMember = require('../Models/recruitmentpanelmemberds');
 const RecruitmentPanelJob = require('../Models/recruitmentpaneljobds');
 const RecruitmentInterviewSchedule = require('../Models/recruitmentinterviewscheduleds');
+const RecruitmentInterviewParameter = require('../Models/recruitmentinterviewparameterds');
+const RecruitmentInterviewScore = require('../Models/recruitmentinterviewscoreds');
 const RecruitmentOfferTemplate = require('../Models/recruitmentoffertemplateds');
 const RecruitmentOnboardingStep = require('../Models/recruitmentonboardingstepds');
 const RecruitmentOnboardingRecord = require('../Models/recruitmentonboardingrecordds');
@@ -40,6 +42,34 @@ const s3Url = (bucket, region, key) => region === 'us-east-1'
   : `https://${bucket}.s3.${region}.amazonaws.com/${encodeS3Key(key)}`;
 
 const getColid = (req) => Number(req.body.colid || req.query.colid || 0);
+
+const experienceMonthsBetween = (start, end) => {
+  const from = new Date(start);
+  const to = new Date(end);
+  if (!start || !end || Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || to < from) return 0;
+  let months = (to.getFullYear() - from.getFullYear()) * 12 + (to.getMonth() - from.getMonth());
+  if (to.getDate() >= from.getDate()) months += 1;
+  return Math.max(0, months);
+};
+
+const formatExperienceMonths = (months) => {
+  const safeMonths = Math.max(0, Number(months || 0));
+  const years = Math.floor(safeMonths / 12);
+  const remaining = safeMonths % 12;
+  if (years && remaining) return `${years} year${years === 1 ? '' : 's'} ${remaining} month${remaining === 1 ? '' : 's'}`;
+  if (years) return `${years} year${years === 1 ? '' : 's'}`;
+  if (remaining) return `${remaining} month${remaining === 1 ? '' : 's'}`;
+  return '';
+};
+
+const normalizePastEmployments = (rows = []) => {
+  const normalized = Array.isArray(rows) ? rows.map((row) => {
+    const months = experienceMonthsBetween(row.dateofjoining, row.lastworkingdate);
+    return { ...row, totalexperience: months ? formatExperienceMonths(months) : clean(row.totalexperience) };
+  }) : [];
+  const totalMonths = normalized.reduce((sum, row) => sum + experienceMonthsBetween(row.dateofjoining, row.lastworkingdate), 0);
+  return { normalized, total: formatExperienceMonths(totalMonths) };
+};
 
 const getDefaultGeminiConfig = async (colid) => (
   await AiConfiguration.findOne({ colid: Number(colid), type: /^gemini$/i, active: /^yes$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
@@ -120,27 +150,35 @@ const callGeminiJson = async (apikey, prompt) => {
   throw new Error(lastError || 'Gemini API request failed');
 };
 
-const applicationPayload = (body = {}) => ({
-  colid: Number(body.colid),
-  jobid: clean(body.jobid),
-  formid: clean(body.formid),
-  applicationno: clean(body.applicationno),
-  applicantname: clean(body.applicantname || body.name),
-  email: clean(body.email).toLowerCase(),
-  phone: clean(body.phone),
-  username: clean(body.username || body.email).toLowerCase(),
-  password: clean(body.password),
-  status: clean(body.status || 'Submitted'),
-  photourl: clean(body.photourl),
-  approvalstatus: clean(body.approvalstatus || 'Pending'),
-  approvallevel: numberOrZero(body.approvallevel),
-  customfields: body.customfields || {},
-  documents: Array.isArray(body.documents) ? body.documents : [],
-  validationstatus: clean(body.validationstatus),
-  validationcomments: clean(body.validationcomments),
-  mandatoryvalidationstatus: clean(body.mandatoryvalidationstatus),
-  mandatoryvalidationcomments: clean(body.mandatoryvalidationcomments)
-});
+const applicationPayload = (body = {}) => {
+  const pastEmployment = normalizePastEmployments(body.pastemployments);
+  return {
+    colid: Number(body.colid),
+    jobid: clean(body.jobid),
+    formid: clean(body.formid),
+    applicationno: clean(body.applicationno),
+    applicantname: clean(body.applicantname || body.name),
+    email: clean(body.email).toLowerCase(),
+    phone: clean(body.phone),
+    username: clean(body.username || body.email).toLowerCase(),
+    password: clean(body.password),
+    status: clean(body.status || 'Submitted'),
+    photourl: clean(body.photourl),
+    approvalstatus: clean(body.approvalstatus || 'Pending'),
+    approvallevel: numberOrZero(body.approvallevel),
+    customfields: body.customfields || {},
+    documents: Array.isArray(body.documents) ? body.documents : [],
+    educationalqualifications: Array.isArray(body.educationalqualifications) ? body.educationalqualifications : [],
+    familydetails: Array.isArray(body.familydetails) ? body.familydetails : [],
+    pastemployments: pastEmployment.normalized,
+    totalexperience: pastEmployment.total || clean(body.totalexperience),
+    candidatedocuments: Array.isArray(body.candidatedocuments) ? body.candidatedocuments : [],
+    validationstatus: clean(body.validationstatus),
+    validationcomments: clean(body.validationcomments),
+    mandatoryvalidationstatus: clean(body.mandatoryvalidationstatus),
+    mandatoryvalidationcomments: clean(body.mandatoryvalidationcomments)
+  };
+};
 
 const hasPhoto = (payload = {}) => {
   if (payload.photourl) return true;
@@ -153,7 +191,18 @@ exports.createForm = async (req, res) => {
     const formid = cleanKey(req.body.formid || req.body.title || `form_${Date.now()}`);
     const data = await RecruitmentForm.findOneAndUpdate(
       { colid, formid },
-      { colid, formid, title: clean(req.body.title), description: clean(req.body.description), isactive: clean(req.body.isactive || 'Yes'), user: clean(req.body.user) },
+      {
+        colid,
+        formid,
+        title: clean(req.body.title),
+        description: clean(req.body.description),
+        isactive: clean(req.body.isactive || 'Yes'),
+        includeeducationpanel: clean(req.body.includeeducationpanel || 'No'),
+        includefamilypanel: clean(req.body.includefamilypanel || 'No'),
+        includeemploymentpanel: clean(req.body.includeemploymentpanel || 'No'),
+        includedocumentpanel: clean(req.body.includedocumentpanel || 'No'),
+        user: clean(req.body.user)
+      },
       { upsert: true, new: true, runValidators: true }
     );
     res.json(data);
@@ -857,6 +906,130 @@ exports.getPanelClassCalendar = async (req, res) => {
     }).sort({ classtime: 1, faculty: 1 }).lean();
 
     res.json({ members, classes });
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.saveInterviewParameter = async (req, res) => {
+  try {
+    const colid = getColid(req);
+    const payload = {
+      colid,
+      jobid: clean(req.body.jobid),
+      jobtitle: clean(req.body.jobtitle),
+      parameter: clean(req.body.parameter),
+      description: clean(req.body.description),
+      maxmarks: Number(req.body.maxmarks || 10),
+      order: Number(req.body.order || 0),
+      status: clean(req.body.status || 'Active'),
+      user: clean(req.body.user)
+    };
+    if (!payload.jobid) return res.status(400).json({ msg: 'Job is required' });
+    if (!payload.parameter) return res.status(400).json({ msg: 'Parameter is required' });
+    const data = req.body.id
+      ? await RecruitmentInterviewParameter.findOneAndUpdate({ _id: req.body.id, colid }, payload, { new: true, runValidators: true })
+      : await RecruitmentInterviewParameter.findOneAndUpdate({ colid, jobid: payload.jobid, parameter: payload.parameter }, payload, { upsert: true, new: true, runValidators: true });
+    res.json(data);
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.getInterviewParameters = async (req, res) => {
+  try {
+    const query = { colid: getColid(req) };
+    if (req.query.jobid) query.jobid = clean(req.query.jobid);
+    if (req.query.status) query.status = clean(req.query.status);
+    res.json(await RecruitmentInterviewParameter.find(query).sort({ jobtitle: 1, order: 1, parameter: 1 }).lean());
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.deleteInterviewParameter = async (req, res) => {
+  try { await RecruitmentInterviewParameter.deleteOne({ _id: req.body.id, colid: getColid(req) }); res.json({ success: true }); }
+  catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.saveInterviewScores = async (req, res) => {
+  try {
+    const colid = getColid(req);
+    const jobid = clean(req.body.jobid);
+    const applicationid = clean(req.body.applicationid);
+    const rows = Array.isArray(req.body.scores) ? req.body.scores : [];
+    if (!jobid || !applicationid) return res.status(400).json({ msg: 'Job and candidate are required' });
+    if (!rows.length) return res.status(400).json({ msg: 'Enter at least one score' });
+    const [job, candidate] = await Promise.all([
+      RecruitmentJobPost.findOne({ colid, jobid }).lean(),
+      RecruitmentApplication.findOne({ _id: applicationid, colid }).lean()
+    ]);
+    if (!candidate) return res.status(404).json({ msg: 'Candidate not found' });
+
+    const panelmemberemail = clean(req.body.panelmemberemail || req.body.user).toLowerCase();
+    const panelmembername = clean(req.body.panelmembername || req.body.name);
+    const saved = [];
+    for (const row of rows) {
+      const marks = Number(row.marks || 0);
+      const maxmarks = Number(row.maxmarks || 10);
+      const payload = {
+        colid,
+        jobid,
+        jobtitle: clean(req.body.jobtitle || job?.title),
+        applicationid,
+        applicationno: candidate.applicationno || '',
+        candidate: candidate.applicantname || '',
+        candidateemail: candidate.email || '',
+        panelmembername,
+        panelmemberemail,
+        parameterid: clean(row.parameterid || row._id),
+        parameter: clean(row.parameter),
+        description: clean(row.description),
+        maxmarks,
+        marks: Math.max(0, Math.min(marks, maxmarks)),
+        comments: clean(row.comments),
+        status: clean(req.body.status || 'Submitted'),
+        submittedat: new Date(),
+        user: clean(req.body.user)
+      };
+      if (!payload.parameter) continue;
+      const score = await RecruitmentInterviewScore.findOneAndUpdate(
+        { colid, jobid, applicationid, panelmemberemail, parameter: payload.parameter },
+        payload,
+        { upsert: true, new: true, runValidators: true }
+      );
+      saved.push(score);
+    }
+    res.json({ success: true, saved });
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.getInterviewScores = async (req, res) => {
+  try {
+    const query = { colid: getColid(req) };
+    if (req.query.jobid) query.jobid = clean(req.query.jobid);
+    if (req.query.applicationid) query.applicationid = clean(req.query.applicationid);
+    if (req.query.panelmemberemail) query.panelmemberemail = clean(req.query.panelmemberemail).toLowerCase();
+    res.json(await RecruitmentInterviewScore.find(query).sort({ candidate: 1, panelmembername: 1, parameter: 1 }).lean());
+  } catch (err) { res.status(500).json({ msg: err.message }); }
+};
+
+exports.getInterviewProfile = async (req, res) => {
+  try {
+    const colid = getColid(req);
+    const jobid = clean(req.query.jobid);
+    const applicationid = clean(req.query.applicationid);
+    if (!jobid || !applicationid) return res.status(400).json({ msg: 'Job and candidate are required' });
+    const [job, candidate, scores, institution] = await Promise.all([
+      RecruitmentJobPost.findOne({ colid, jobid }).lean(),
+      RecruitmentApplication.findOne({ _id: applicationid, colid }).lean(),
+      RecruitmentInterviewScore.find({ colid, jobid, applicationid }).sort({ panelmembername: 1, parameter: 1 }).lean(),
+      Institution.findOne({ colid }).lean()
+    ]);
+    if (!candidate) return res.status(404).json({ msg: 'Candidate not found' });
+    const summaryMap = {};
+    scores.forEach((score) => {
+      const email = clean(score.panelmemberemail || 'unknown');
+      if (!summaryMap[email]) summaryMap[email] = { panelmembername: score.panelmembername, panelmemberemail: score.panelmemberemail, marks: 0, maxmarks: 0 };
+      summaryMap[email].marks += Number(score.marks || 0);
+      summaryMap[email].maxmarks += Number(score.maxmarks || 0);
+    });
+    const summary = Object.values(summaryMap).map((item) => ({ ...item, percentage: item.maxmarks ? Number(((item.marks / item.maxmarks) * 100).toFixed(2)) : 0 }));
+    res.json({ job: job || {}, candidate, scores, summary, institution: institution || {} });
   } catch (err) { res.status(500).json({ msg: err.message }); }
 };
 

@@ -13,6 +13,8 @@ const LeaveApplication = require("../Models/hrleaveapplicationds");
 const LeaveClassPlan = require("../Models/hrleaveclassplands");
 const CompensatoryRule = require("../Models/hrleavecompensatoryruleds");
 const WeeklyOff = require("../Models/hrleaveweeklyoffds");
+const AccrualRule = require("../Models/hrleaveaccrualruleds");
+const HolidayList = require("../Models/hrleaveholidaylistds");
 
 const upload = multer({ storage: multer.memoryStorage() });
 exports.uploadMiddleware = upload.single("file");
@@ -165,6 +167,8 @@ const cycleCrud = crud(LeaveCycle, ["cyclename", "resetmonth", "resetday", "stat
 const balanceCrud = crud(LeaveBalance, ["cyclename", "employeename", "employeeemail", "department", "leavetype", "openingbalance", "carryforward", "earned", "used", "balance", "status"], ["employeeemail", "leavetype"]);
 const compRuleCrud = crud(CompensatoryRule, ["role", "leavestoadd", "description", "status"], ["role"]);
 const weeklyOffCrud = crud(WeeklyOff, ["employeename", "employeeemail", "role", "department", "dayofweek", "status"], ["employeeemail", "dayofweek"]);
+const accrualRuleCrud = crud(AccrualRule, ["role", "leavetype", "minimumdayspresent", "status"], ["role", "leavetype"]);
+const holidayCrud = crud(HolidayList, ["academicyear", "holidaydate", "holidaytype", "description", "status"], ["academicyear", "holidaydate", "holidaytype"]);
 
 exports.createHierarchy = hierarchyCrud.create;
 exports.getHierarchies = hierarchyCrud.get;
@@ -196,6 +200,16 @@ exports.getWeeklyOff = weeklyOffCrud.get;
 exports.updateWeeklyOff = weeklyOffCrud.update;
 exports.deleteWeeklyOff = weeklyOffCrud.delete;
 exports.bulkWeeklyOff = weeklyOffCrud.bulk;
+exports.createAccrualRule = accrualRuleCrud.create;
+exports.getAccrualRules = accrualRuleCrud.get;
+exports.updateAccrualRule = accrualRuleCrud.update;
+exports.deleteAccrualRule = accrualRuleCrud.delete;
+exports.bulkAccrualRule = accrualRuleCrud.bulk;
+exports.createHoliday = holidayCrud.create;
+exports.getHolidays = holidayCrud.get;
+exports.updateHoliday = holidayCrud.update;
+exports.deleteHoliday = holidayCrud.delete;
+exports.bulkHoliday = holidayCrud.bulk;
 
 const ensureCompensatoryLeaveType = async (colid, user = "") => {
   if (!colid) return null;

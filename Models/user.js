@@ -216,6 +216,9 @@ const userschema = new mongoose.Schema({
     scholarship:{
         type: String
     },
+    skills: {
+        type: String
+    },
     institution:{
         type: String
     },

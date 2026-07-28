@@ -3,6 +3,7 @@ const hrsalstructure = require('./../Models/hrsalstructure');
 const HrEmployeeAttendance = require('./../Models/hremployeeattendanceds');
 const LeaveType = require('./../Models/hrleavetypeds');
 const LeaveBalance = require('./../Models/hrleavebalanceds');
+const AccrualRule = require('./../Models/hrleaveaccrualruleds');
 const User = require('./../Models/user');
 
 const text = (value) => String(value || '').trim();
@@ -151,30 +152,70 @@ exports.addEarnedLeave = async (req, res) => {
         });
 
         const employeeEmails = [...employeeMap.values()].map((item) => item.employeeemail);
-        const users = await User.find({
-            colid,
-            $or: [{ email: { $in: employeeEmails } }, { user: { $in: employeeEmails } }]
-        }).select('name email user department').lean();
-        const userMap = new Map();
-        users.forEach((item) => {
-            if (text(item.email)) userMap.set(text(item.email).toLowerCase(), item);
-            if (text(item.user)) userMap.set(text(item.user).toLowerCase(), item);
-        });
+	        const users = await User.find({
+	            colid,
+	            $or: [{ email: { $in: employeeEmails } }, { user: { $in: employeeEmails } }]
+	        }).select('name email user department role').lean();
+	        const userMap = new Map();
+	        users.forEach((item) => {
+	            if (text(item.email)) userMap.set(text(item.email).toLowerCase(), item);
+	            if (text(item.user)) userMap.set(text(item.user).toLowerCase(), item);
+	        });
 
-        const results = [];
-        for (const employee of employeeMap.values()) {
-            const emailKey = text(employee.employeeemail).toLowerCase();
-            const employeeUser = userMap.get(emailKey) || {};
-            const employeename = text(employee.employeename || employeeUser.name);
-            const department = text(employeeUser.department);
-            const presentdays = presentMap[emailKey]?.size || 0;
-            const ratio = totaldays ? presentdays / totaldays : 0;
+	        const accrualRules = await AccrualRule.find({
+	            colid,
+	            status: /^Active$/i
+	        }).lean();
+	        const ruleMap = new Map();
+	        accrualRules.forEach((item) => {
+	            const key = `${text(item.role).toLowerCase()}|${text(item.leavetype).toLowerCase()}`;
+	            if (key !== '|') ruleMap.set(key, item);
+	        });
+	        const findAccrualRule = (role, leavetype) =>
+	            ruleMap.get(`${text(role).toLowerCase()}|${text(leavetype).toLowerCase()}`)
+	            || ruleMap.get(`all|${text(leavetype).toLowerCase()}`)
+	            || null;
 
-            for (const type of elTypes) {
-                const proratemontlyleave = number(type.annualquota) / 12;
-                const daysadded = Number((ratio * proratemontlyleave).toFixed(2));
+	        const results = [];
+	        for (const employee of employeeMap.values()) {
+	            const emailKey = text(employee.employeeemail).toLowerCase();
+	            const employeeUser = userMap.get(emailKey) || {};
+	            const employeename = text(employee.employeename || employeeUser.name);
+	            const department = text(employeeUser.department);
+	            const role = text(employeeUser.role);
+	            const presentdays = presentMap[emailKey]?.size || 0;
+	            const ratio = totaldays ? presentdays / totaldays : 0;
 
-                const balance = await LeaveBalance.findOneAndUpdate(
+	            for (const type of elTypes) {
+	                const accrualRule = findAccrualRule(role, type.leavetype);
+	                const minimumdayspresent = number(accrualRule?.minimumdayspresent);
+	                const proratemontlyleave = number(type.annualquota) / 12;
+	                if (accrualRule && presentdays < minimumdayspresent) {
+	                    results.push({
+	                        id: `${emailKey}-${type._id}-skipped`,
+	                        employeeemail: employee.employeeemail,
+	                        employeename,
+	                        department,
+	                        role,
+	                        cyclename,
+	                        leavetype: type.leavetype,
+	                        totaldays,
+	                        presentdays,
+	                        minimumdayspresent,
+	                        attendanceratio: Number(ratio.toFixed(4)),
+	                        proratemontlyleave: Number(proratemontlyleave.toFixed(2)),
+	                        annualquota: number(type.annualquota),
+	                        daysadded: 0,
+	                        earned: 0,
+	                        balance: 0,
+	                        accrualstatus: 'Skipped',
+	                        accrualremarks: `Minimum ${minimumdayspresent} present days required`
+	                    });
+	                    continue;
+	                }
+	                const daysadded = Number((ratio * proratemontlyleave).toFixed(2));
+
+	                const balance = await LeaveBalance.findOneAndUpdate(
                     {
                         colid,
                         cyclename,
@@ -209,27 +250,33 @@ exports.addEarnedLeave = async (req, res) => {
                     id: String(balance._id),
                     employeeemail: balance.employeeemail,
                     employeename: balance.employeename,
-                    department: balance.department,
-                    cyclename: balance.cyclename,
-                    leavetype: balance.leavetype,
-                    totaldays,
-                    presentdays,
-                    attendanceratio: Number(ratio.toFixed(4)),
-                    proratemontlyleave: Number(proratemontlyleave.toFixed(2)),
-                    annualquota: number(type.annualquota),
-                    daysadded,
-                    earned: Number(number(balance.earned).toFixed(2)),
-                    balance: Number(number(balance.balance).toFixed(2))
-                });
-            }
-        }
+	                    department: balance.department,
+	                    role,
+	                    cyclename: balance.cyclename,
+	                    leavetype: balance.leavetype,
+	                    totaldays,
+	                    presentdays,
+	                    minimumdayspresent: accrualRule ? minimumdayspresent : '',
+	                    attendanceratio: Number(ratio.toFixed(4)),
+	                    proratemontlyleave: Number(proratemontlyleave.toFixed(2)),
+	                    annualquota: number(type.annualquota),
+	                    daysadded,
+	                    earned: Number(number(balance.earned).toFixed(2)),
+	                    balance: Number(number(balance.balance).toFixed(2)),
+	                    accrualstatus: 'Added',
+	                    accrualremarks: accrualRule ? 'Minimum present days rule satisfied' : 'No minimum present days rule configured'
+	                });
+	            }
+	        }
 
-        res.json({
-            message: 'Earned leave added successfully',
-            totaldays,
-            count: results.length,
-            results
-        });
+	        res.json({
+	            message: 'Earned leave added successfully',
+	            totaldays,
+	            count: results.length,
+	            addedCount: results.filter((item) => item.accrualstatus === 'Added').length,
+	            skippedCount: results.filter((item) => item.accrualstatus === 'Skipped').length,
+	            results
+	        });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message, message: err.message });

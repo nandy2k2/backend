@@ -6,6 +6,10 @@ const RecruitmentFormSchema = new mongoose.Schema({
   title: { type: String, required: true },
   description: { type: String, default: '' },
   isactive: { type: String, default: 'Yes' },
+  includeeducationpanel: { type: String, default: 'No' },
+  includefamilypanel: { type: String, default: 'No' },
+  includeemploymentpanel: { type: String, default: 'No' },
+  includedocumentpanel: { type: String, default: 'No' },
   user: { type: String, default: '' }
 }, { timestamps: true });
 

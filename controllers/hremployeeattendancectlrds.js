@@ -4,6 +4,7 @@ const User = require("../Models/user");
 const HrEmployeeAttendance = require("../Models/hremployeeattendanceds");
 const HrEmployeeAttendanceApprovalMatrix = require("../Models/hremployeeattendanceapprovalmatrixds");
 const HrShiftAllocation = require("../Models/hrshiftallocationds");
+const HrEmployeeHours = require("../Models/hremployeehoursds");
 const HrLatePolicy = require("../Models/hrlatepolicyds");
 const HrOvertimePolicy = require("../Models/hrovertimepolicyds");
 const LeaveApplication = require("../Models/hrleaveapplicationds");
@@ -12,6 +13,7 @@ const LeaveType = require("../Models/hrleavetypeds");
 const LeaveCycle = require("../Models/hrleavecycleds");
 const CompensatoryRule = require("../Models/hrleavecompensatoryruleds");
 const WeeklyOff = require("../Models/hrleaveweeklyoffds");
+const HolidayList = require("../Models/hrleaveholidaylistds");
 const AcademicCalendar = require("../Models/macadcal");
 const HrSalStructure = require("../Models/hrsalstructure");
 const HrSalary = require("../Models/hrsalary");
@@ -57,6 +59,13 @@ const timeToMinutes = (value) => {
   const match = time.match(/^(\d{1,2}):(\d{2})$/);
   if (!match) return null;
   return Number(match[1]) * 60 + Number(match[2]);
+};
+const workedHoursBetween = (intime, outtime) => {
+  const inMinutes = timeToMinutes(intime);
+  const outMinutes = timeToMinutes(outtime);
+  if (inMinutes === null || outMinutes === null) return null;
+  const adjustedOut = outMinutes < inMinutes ? outMinutes + 1440 : outMinutes;
+  return Number(((adjustedOut - inMinutes) / 60).toFixed(2));
 };
 const yesNo = (flag) => (flag ? "Yes" : "No");
 const isDeduction = (value) => text(value).toLowerCase() === "deduction";
@@ -114,6 +123,13 @@ const isWeeklyOff = async (attendanceRow) => {
 const isHoliday = async (attendanceRow) => {
   const range = dateRangeFor(attendanceRow.date);
   if (!range) return false;
+  const hrHoliday = await HolidayList.findOne({
+    colid: Number(attendanceRow.colid),
+    academicyear: text(attendanceRow.academicyear),
+    holidaydate: { $gte: range.start, $lte: range.end },
+    status: /^Active$/i
+  }).lean();
+  if (hrHoliday) return true;
   const row = await AcademicCalendar.findOne({
     colid: Number(attendanceRow.colid),
     type: /^Holiday$/i,
@@ -398,6 +414,10 @@ const attendancePayload = async (body, actiontype = "Add") => {
   const earlyBefore = timeToMinutes(allocation?.earlybeforetime);
   const inMinutes = timeToMinutes(intime);
   const outMinutes = timeToMinutes(outtime);
+  const employeeHours = allocation ? null : await HrEmployeeHours.findOne({ colid, employeeemail, status: /^Active$/i }).sort({ updatedAt: -1 }).lean();
+  const requiredHours = number(employeeHours?.noofhours) || 8;
+  const workedHours = workedHoursBetween(intime, outtime);
+  const fallbackLate = !allocation && attendance === 1 && workedHours !== null ? yesNo(workedHours < requiredHours) : "No";
   return {
     academicyear: text(body.academicyear),
     month: text(body.month),
@@ -409,7 +429,9 @@ const attendancePayload = async (body, actiontype = "Add") => {
     status: attendanceStatus(attendance),
     intime,
     outtime,
-    islate: attendance === 1 && inMinutes !== null && lateAfter !== null ? yesNo(inMinutes > lateAfter) : "No",
+    islate: allocation
+      ? (attendance === 1 && inMinutes !== null && lateAfter !== null ? yesNo(inMinutes > lateAfter) : "No")
+      : fallbackLate,
     isearly: attendance === 1 && outMinutes !== null && earlyBefore !== null ? yesNo(outMinutes < earlyBefore) : "No",
     isovertime: "No",
     overtimerate: 0,

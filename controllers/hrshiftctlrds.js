@@ -5,6 +5,7 @@ const HrShiftTiming = require("../Models/hrshifttimingds");
 const HrShiftAllocation = require("../Models/hrshiftallocationds");
 const HrLatePolicy = require("../Models/hrlatepolicyds");
 const HrOvertimePolicy = require("../Models/hrovertimepolicyds");
+const HrEmployeeHours = require("../Models/hremployeehoursds");
 
 const upload = multer({ storage: multer.memoryStorage() });
 exports.uploadMiddleware = upload.single("file");
@@ -81,6 +82,15 @@ const overtimePolicyPayload = (body = {}) => ({
   user: text(body.user)
 });
 
+const employeeHoursPayload = (body = {}) => ({
+  employee: text(getValue(body, "employee", "Employee", "employeename", "Employee Name")),
+  employeeemail: text(getValue(body, "employeeemail", "Employee Email", "email")),
+  noofhours: number(getValue(body, "noofhours", "No Of Hours", "No of hours", "Hours")) || 8,
+  status: text(getValue(body, "status", "Status")) || "Active",
+  colid: number(body.colid),
+  user: text(body.user)
+});
+
 exports.options = async (req, res) => {
   try {
     const colid = number(req.query.colid);
@@ -90,6 +100,79 @@ exports.options = async (req, res) => {
       HrShiftTiming.distinct("location", { colid })
     ]);
     res.json({ success: true, users, shifts, locations: locations.filter(Boolean).sort() });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.createEmployeeHours = async (req, res) => {
+  try {
+    const payload = employeeHoursPayload(req.body);
+    if (!payload.colid || !payload.employeeemail) return res.status(400).json({ success: false, message: "Employee is required" });
+    const data = await HrEmployeeHours.findOneAndUpdate(
+      { colid: payload.colid, employeeemail: payload.employeeemail },
+      payload,
+      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+    );
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getEmployeeHours = async (req, res) => {
+  try {
+    const filter = { colid: number(req.query.colid) };
+    ["employeeemail", "status"].forEach((field) => {
+      if (text(req.query[field])) filter[field] = text(req.query[field]);
+    });
+    const data = await HrEmployeeHours.find(filter).sort({ employee: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateEmployeeHours = async (req, res) => {
+  try {
+    const data = await HrEmployeeHours.findOneAndUpdate(
+      { _id: req.body.id, colid: number(req.body.colid) },
+      employeeHoursPayload(req.body),
+      { new: true, runValidators: true }
+    );
+    if (!data) return res.status(404).json({ success: false, message: "Employee hours record not found" });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteEmployeeHours = async (req, res) => {
+  try {
+    await HrEmployeeHours.findOneAndDelete({ _id: req.body.id, colid: number(req.body.colid) });
+    res.json({ success: true, message: "Deleted" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkDeleteEmployeeHours = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+    await HrEmployeeHours.deleteMany({ _id: { $in: ids }, colid: number(req.body.colid) });
+    res.json({ success: true, deleted: ids.length });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkEmployeeHours = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    if (!req.file) return res.status(400).json({ success: false, message: "Excel file is required" });
+    const rows = readSheet(req.file.buffer).map((row) => employeeHoursPayload({ ...row, colid, user: req.body.user })).filter((row) => row.employeeemail);
+    const data = await HrEmployeeHours.insertMany(rows, { ordered: false });
+    res.json({ success: true, inserted: data.length, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
