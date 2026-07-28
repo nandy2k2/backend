@@ -108,16 +108,35 @@ const hasApprovedLeaveForDate = async (attendanceRow) => {
   return Boolean(leave);
 };
 
+const hasApprovedHalfDayLeaveForDate = async (attendanceRow) => {
+  if (!attendanceRow?.date) return false;
+  const leave = await LeaveApplication.findOne({
+    colid: Number(attendanceRow.colid),
+    employeeemail: text(attendanceRow.employeeemail),
+    status: "Approved",
+    vacationtype: /^half$/i,
+    fromdate: { $lte: text(attendanceRow.date) },
+    todate: { $gte: text(attendanceRow.date) }
+  }).lean();
+  return Boolean(leave);
+};
+
 const isWeeklyOff = async (attendanceRow) => {
   const dayofweek = dayName(attendanceRow.date);
   if (!dayofweek) return false;
-  const row = await WeeklyOff.findOne({
+  const attendanceDate = new Date(attendanceRow.date);
+  if (Number.isNaN(attendanceDate.getTime())) return false;
+  const dayofmonth = attendanceDate.getDate();
+  const rows = await WeeklyOff.find({
     colid: Number(attendanceRow.colid),
     employeeemail: text(attendanceRow.employeeemail),
-    dayofweek,
     status: /^Active$/i
   }).lean();
-  return Boolean(row);
+  return rows.some((row) => {
+    const ruleType = text(row.type || "every").toLowerCase();
+    if (ruleType === "dayofmonth") return number(row.dayofmonth) === dayofmonth;
+    return text(row.dayofweek).toLowerCase() === dayofweek.toLowerCase();
+  });
 };
 
 const isHoliday = async (attendanceRow) => {
@@ -172,8 +191,13 @@ const addCompensatoryLeaveIfRequired = async (attendanceRow) => {
   if (number(attendanceRow.attendance) !== 1 || attendanceRow.approvalstatus !== "Approved") return null;
   const offDay = await isWeeklyOff(attendanceRow);
   const holiday = await isHoliday(attendanceRow);
-  if (!offDay && !holiday) return null;
-  const comments = `Compensatory Leave for attendance ${attendanceRow._id} on ${attendanceRow.date}`;
+  const halfDayLeave = await hasApprovedHalfDayLeaveForDate(attendanceRow);
+  const workedHours = workedHoursBetween(attendanceRow.intime, attendanceRow.outtime);
+  const earnsHalfDayComp = halfDayLeave && workedHours !== null && workedHours > 7;
+  if (!offDay && !holiday && !earnsHalfDayComp) return null;
+  const comments = earnsHalfDayComp
+    ? `Half day compensatory leave for attendance ${attendanceRow._id} on ${attendanceRow.date}`
+    : `Compensatory Leave for attendance ${attendanceRow._id} on ${attendanceRow.date}`;
   if (text(attendanceRow.finalcomment).includes(comments)) return null;
   const employee = await User.findOne({ colid: Number(attendanceRow.colid), $or: [{ email: text(attendanceRow.employeeemail) }, { user: text(attendanceRow.employeeemail) }] }).select("name email user department role").lean();
   const rule = await CompensatoryRule.findOne({
@@ -181,7 +205,7 @@ const addCompensatoryLeaveIfRequired = async (attendanceRow) => {
     status: /^Active$/i,
     $or: [{ role: text(employee?.role) }, { role: /^All$/i }]
   }).sort({ role: -1, updatedAt: -1 }).lean();
-  const addDays = number(rule?.leavestoadd || 1);
+  const addDays = earnsHalfDayComp ? 0.5 : number(rule?.leavestoadd || 1);
   const balance = await ensureCompBalance(attendanceRow, employee);
   balance.earned = number(balance.earned) + addDays;
   balance.balance = number(balance.balance) + addDays;
