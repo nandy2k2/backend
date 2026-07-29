@@ -22,6 +22,10 @@ const optionalNumber = (value) => {
   const parsed = Number(value);
   return Number.isNaN(parsed) ? 0 : parsed;
 };
+const validNumber = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
 const encodeS3Key = (key) => String(key || "").split("/").map(encodeURIComponent).join("/");
 const s3Url = (bucket, region, key) => {
   const encodedKey = encodeS3Key(key);
@@ -46,7 +50,7 @@ const coursePayload = (body = {}) => ({
   floor: text(body.floor),
   roomid: text(body.roomid),
   roomno: text(body.roomno),
-  colid: Number(body.colid),
+  colid: validNumber(body.colid),
   user: text(body.user)
 });
 
@@ -84,11 +88,18 @@ const timetablePayload = (body = {}) => ({
   module: text(body.module),
   topic: text(body.topic),
   workcompleted: body.workcompleted === undefined ? "" : text(body.workcompleted),
+  onlineenabled: text(body.onlineenabled) || "No",
+  onlineclassstatus: text(body.onlineclassstatus) || "Scheduled",
+  onlineclassstartedat: body.onlineclassstartedat || undefined,
+  onlineclassendedat: body.onlineclassendedat || undefined,
+  onlineclasslink: text(body.onlineclasslink),
   status: text(body.status) || "Active"
 });
 
 const courseFilter = (source = {}) => {
-  const filter = { colid: Number(source.colid) };
+  const filter = {};
+  const colid = validNumber(source.colid);
+  if (colid) filter.colid = colid;
   [
     "academicyear",
     "regulation",
@@ -491,6 +502,13 @@ exports.deleteResource = async (req, res) => {
 
 exports.getTimetable = async (req, res) => {
   try {
+    if (req.query.classid || req.query.id) {
+      const data = await NepLmsTimetable.find({ _id: req.query.classid || req.query.id }).lean();
+      return res.json({ success: true, data });
+    }
+    if (!validNumber(req.query.colid)) {
+      return res.status(400).json({ success: false, message: "colid is required" });
+    }
     const data = await NepLmsTimetable.find(courseFilter(req.query)).sort({ classdate: 1, classtime: 1 }).lean();
     res.json({ success: true, data });
   } catch (error) {
@@ -542,9 +560,14 @@ exports.createTimetable = async (req, res) => {
 
 exports.updateTimetable = async (req, res) => {
   try {
+    const colid = Number(req.body.colid);
+    const filter = { _id: req.body.id };
+    if (colid) filter.colid = colid;
+    const payload = timetablePayload(req.body);
+    if (!colid) delete payload.colid;
     const data = await NepLmsTimetable.findOneAndUpdate(
-      { _id: req.body.id, colid: Number(req.body.colid) },
-      timetablePayload(req.body),
+      filter,
+      payload,
       { new: true, runValidators: true }
     );
     if (!data) return res.status(404).json({ success: false, message: "Class not found" });

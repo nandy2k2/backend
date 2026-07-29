@@ -1,5 +1,20 @@
 // socket.js
 let io;
+let _userConnections = [];
+const onlineClassRooms = new Map();
+
+const getOnlineRoom = (roomId) => {
+    const key = String(roomId || "");
+    if (!onlineClassRooms.has(key)) {
+        onlineClassRooms.set(key, { participants: new Map(), permissions: new Map() });
+    }
+    return onlineClassRooms.get(key);
+};
+
+const onlineClassParticipants = (room) => Array.from(room.participants.entries()).map(([socketId, user]) => ({
+    socketId,
+    ...user
+}));
 
 module.exports = {
     init: (httpServer) => {
@@ -17,12 +32,98 @@ module.exports = {
 
             socket.on("disconnect", () => {
                // console.log("Client disconnected:", socket.id);
+               onlineClassRooms.forEach((room, roomId) => {
+                if (room.participants.has(socket.id)) {
+                    room.participants.delete(socket.id);
+                    room.permissions.delete(socket.id);
+                    socket.to(roomId).emit("online-class-user-left", { socketId: socket.id });
+                }
+                if (!room.participants.size) onlineClassRooms.delete(roomId);
+               });
             });
 
             // Example listener
             socket.on("joinRoom", (room) => {
                 socket.join(room);
                 console.log(`Socket ${socket.id} joined room ${room}`);
+            });
+
+            socket.on("online-class-join", (data = {}, callback = () => {}) => {
+                const roomId = String(data.roomId || data.classId || "");
+                if (!roomId) return callback({ success: false, message: "roomId is required" });
+                const room = getOnlineRoom(roomId);
+                const user = {
+                    name: data.name || data.user || "User",
+                    email: data.email || "",
+                    role: data.role || "student",
+                    canShareAudio: data.role === "faculty",
+                    canShareCamera: data.role === "faculty",
+                    canShareScreen: data.role === "faculty"
+                };
+                room.participants.set(socket.id, user);
+                room.permissions.set(socket.id, {
+                    audio: user.canShareAudio,
+                    camera: user.canShareCamera,
+                    screen: user.canShareScreen
+                });
+                socket.join(roomId);
+                callback({
+                    success: true,
+                    socketId: socket.id,
+                    participants: onlineClassParticipants(room).filter((item) => item.socketId !== socket.id),
+                    permissions: room.permissions.get(socket.id)
+                });
+                socket.to(roomId).emit("online-class-user-joined", {
+                    socketId: socket.id,
+                    user,
+                    participants: onlineClassParticipants(room)
+                });
+                io.to(roomId).emit("online-class-participants", onlineClassParticipants(room));
+            });
+
+            socket.on("online-class-signal", (data = {}) => {
+                if (!data.to) return;
+                socket.to(data.to).emit("online-class-signal", {
+                    from: socket.id,
+                    signal: data.signal
+                });
+            });
+
+            socket.on("online-class-permission-request", (data = {}) => {
+                const roomId = String(data.roomId || "");
+                const room = onlineClassRooms.get(roomId);
+                if (!room) return;
+                const faculty = onlineClassParticipants(room).find((item) => String(item.role || "").toLowerCase() === "faculty");
+                if (faculty?.socketId) {
+                    socket.to(faculty.socketId).emit("online-class-permission-request", {
+                        from: socket.id,
+                        request: data.request || {},
+                        user: room.participants.get(socket.id)
+                    });
+                }
+            });
+
+            socket.on("online-class-permission-grant", (data = {}) => {
+                const roomId = String(data.roomId || "");
+                const room = onlineClassRooms.get(roomId);
+                if (!room || !data.to) return;
+                const nextPermission = {
+                    ...(room.permissions.get(data.to) || {}),
+                    ...(data.permissions || {})
+                };
+                room.permissions.set(data.to, nextPermission);
+                socket.to(data.to).emit("online-class-permission-grant", {
+                    permissions: nextPermission
+                });
+            });
+
+            socket.on("online-class-mute", (data = {}) => {
+                if (!data.to) return;
+                socket.to(data.to).emit("online-class-mute", {
+                    audio: data.audio !== false,
+                    camera: data.camera === true,
+                    screen: data.screen === true
+                });
             });
 
             var un="";
