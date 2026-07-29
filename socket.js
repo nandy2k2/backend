@@ -2,11 +2,13 @@
 const NepLmsTimetable = require("./Models/neplmstimetableds");
 const NepLmsAttendance = require("./Models/neplmsattendanceds");
 const NepLmsOnlineClassJoin = require("./Models/neplmsonlineclassjoinds");
+const LiveMeeting = require("./Models/livemeetingds");
 const User = require("./Models/user");
 
 let io;
 let _userConnections = [];
 const onlineClassRooms = new Map();
+const liveMeetingRooms = new Map();
 const text = (value) => String(value || "").trim();
 const number = (value) => {
     const parsed = Number(value);
@@ -24,6 +26,24 @@ const getOnlineRoom = (roomId) => {
 };
 
 const onlineClassParticipants = (room) => Array.from(room.participants.entries()).map(([socketId, user]) => ({
+    socketId,
+    ...user
+}));
+
+const getLiveMeetingRoom = (roomId) => {
+    const key = String(roomId || "");
+    if (!liveMeetingRooms.has(key)) {
+        liveMeetingRooms.set(key, { participants: new Map(), waiting: new Map() });
+    }
+    return liveMeetingRooms.get(key);
+};
+
+const liveMeetingParticipants = (room) => Array.from(room.participants.entries()).map(([socketId, user]) => ({
+    socketId,
+    ...user
+}));
+
+const liveMeetingWaiting = (room) => Array.from(room.waiting.entries()).map(([socketId, user]) => ({
     socketId,
     ...user
 }));
@@ -131,6 +151,17 @@ module.exports = {
                 }
                 if (!room.participants.size) onlineClassRooms.delete(roomId);
                });
+               liveMeetingRooms.forEach((room, roomId) => {
+                if (room.participants.has(socket.id)) {
+                    room.participants.delete(socket.id);
+                    socket.to(`live-meeting-${roomId}`).emit("live-meeting-user-left", { socketId: socket.id });
+                }
+                if (room.waiting.has(socket.id)) {
+                    room.waiting.delete(socket.id);
+                    socket.to(`live-meeting-${roomId}`).emit("live-meeting-waiting-list", liveMeetingWaiting(room));
+                }
+                if (!room.participants.size && !room.waiting.size) liveMeetingRooms.delete(roomId);
+               });
             });
 
             // Example listener
@@ -220,6 +251,100 @@ module.exports = {
             socket.on("online-class-mute", (data = {}) => {
                 if (!data.to) return;
                 socket.to(data.to).emit("online-class-mute", {
+                    audio: data.audio !== false,
+                    camera: data.camera === true,
+                    screen: data.screen === true
+                });
+            });
+
+            socket.on("live-meeting-join", async (data = {}, callback = () => {}) => {
+                try {
+                    const meetingId = String(data.meetingId || data.roomId || "");
+                    if (!meetingId) return callback({ success: false, message: "meetingId is required" });
+                    const meeting = await LiveMeeting.findById(meetingId).lean();
+                    if (!meeting) return callback({ success: false, message: "Meeting not found" });
+                    const room = getLiveMeetingRoom(meetingId);
+                    const email = text(data.email).toLowerCase();
+                    const user = {
+                        name: text(data.name || data.user) || "Guest",
+                        email,
+                        role: data.external ? "external" : "internal",
+                        external: Boolean(data.external),
+                        host: String(email).toLowerCase() === String(meeting.hostEmail || "").toLowerCase(),
+                        token: text(data.token)
+                    };
+                    const tokenOk = !user.external || user.token === meeting.publicJoinToken;
+                    if (user.external && !tokenOk) return callback({ success: false, message: "Invalid external meeting link" });
+
+                    socket.join(`live-meeting-${meetingId}`);
+                    if (user.external && !user.host) {
+                        room.waiting.set(socket.id, user);
+                        callback({ success: true, waiting: true, socketId: socket.id, message: "Waiting for host approval" });
+                        const hosts = liveMeetingParticipants(room).filter((item) => item.host);
+                        hosts.forEach((host) => socket.to(host.socketId).emit("live-meeting-lobby-request", { socketId: socket.id, user }));
+                        io.to(`live-meeting-${meetingId}`).emit("live-meeting-waiting-list", liveMeetingWaiting(room));
+                        return;
+                    }
+
+                    room.participants.set(socket.id, user);
+                    callback({
+                        success: true,
+                        waiting: false,
+                        socketId: socket.id,
+                        meeting,
+                        participants: liveMeetingParticipants(room).filter((item) => item.socketId !== socket.id),
+                        waitingList: liveMeetingWaiting(room)
+                    });
+                    socket.to(`live-meeting-${meetingId}`).emit("live-meeting-user-joined", { socketId: socket.id, user });
+                    io.to(`live-meeting-${meetingId}`).emit("live-meeting-participants", liveMeetingParticipants(room));
+                    io.to(`live-meeting-${meetingId}`).emit("live-meeting-waiting-list", liveMeetingWaiting(room));
+                } catch (error) {
+                    callback({ success: false, message: error.message });
+                }
+            });
+
+            socket.on("live-meeting-admit", (data = {}) => {
+                const meetingId = String(data.meetingId || "");
+                const room = liveMeetingRooms.get(meetingId);
+                if (!room || !data.to) return;
+                const host = room.participants.get(socket.id);
+                if (!host?.host) return;
+                const user = room.waiting.get(data.to);
+                if (!user) return;
+                room.waiting.delete(data.to);
+                room.participants.set(data.to, user);
+                socket.emit("live-meeting-user-joined", { socketId: data.to, user });
+                socket.to(data.to).emit("live-meeting-admitted", {
+                    meetingId,
+                    participants: liveMeetingParticipants(room).filter((item) => item.socketId !== data.to)
+                });
+                socket.to(`live-meeting-${meetingId}`).emit("live-meeting-user-joined", { socketId: data.to, user });
+                io.to(`live-meeting-${meetingId}`).emit("live-meeting-participants", liveMeetingParticipants(room));
+                io.to(`live-meeting-${meetingId}`).emit("live-meeting-waiting-list", liveMeetingWaiting(room));
+            });
+
+            socket.on("live-meeting-deny", (data = {}) => {
+                const meetingId = String(data.meetingId || "");
+                const room = liveMeetingRooms.get(meetingId);
+                if (!room || !data.to) return;
+                const host = room.participants.get(socket.id);
+                if (!host?.host) return;
+                room.waiting.delete(data.to);
+                socket.to(data.to).emit("live-meeting-denied", { message: "Host did not allow entry" });
+                io.to(`live-meeting-${meetingId}`).emit("live-meeting-waiting-list", liveMeetingWaiting(room));
+            });
+
+            socket.on("live-meeting-signal", (data = {}) => {
+                if (!data.to) return;
+                socket.to(data.to).emit("live-meeting-signal", {
+                    from: socket.id,
+                    signal: data.signal
+                });
+            });
+
+            socket.on("live-meeting-mute", (data = {}) => {
+                if (!data.to) return;
+                socket.to(data.to).emit("live-meeting-mute", {
                     audio: data.audio !== false,
                     camera: data.camera === true,
                     screen: data.screen === true
