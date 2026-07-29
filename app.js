@@ -5081,6 +5081,7 @@ app.post("/api/v2/hrleave/weeklyoff", hrleavemanagementctlrds.createWeeklyOff);
 app.get("/api/v2/hrleave/weeklyoff", hrleavemanagementctlrds.getWeeklyOff);
 app.post("/api/v2/hrleave/weeklyoff/update", hrleavemanagementctlrds.updateWeeklyOff);
 app.post("/api/v2/hrleave/weeklyoff/delete", hrleavemanagementctlrds.deleteWeeklyOff);
+app.post("/api/v2/hrleave/weeklyoff/bulk-delete", hrleavemanagementctlrds.bulkDeleteWeeklyOff);
 app.post("/api/v2/hrleave/weeklyoff/bulkupload", hrLeaveUpload.single("file"), hrleavemanagementctlrds.bulkWeeklyOff);
 app.post("/api/v2/hrleave/weeklyoff/many", hrleavemanagementctlrds.saveWeeklyOffMany);
 app.post("/api/v2/hrleave/holiday", hrleavemanagementctlrds.createHoliday);
@@ -8009,6 +8010,7 @@ app.post('/mbusers/:id', mbusercontroller.mbUpdateUser);
 app.post('/mbusersdel/:id', mbusercontroller.mbDeleteUser);
 app.post('/mbusers-update', mbusercontroller.mbUpdateUser);
 app.post('/mbusers-delete', mbusercontroller.mbDeleteUser);
+app.post('/mbusers-bulk-delete', mbusercontroller.mbBulkDeleteUsers);
 
 const rvcomparecreatctrl = require('./controllers/rvcomparecreatctrl');
 

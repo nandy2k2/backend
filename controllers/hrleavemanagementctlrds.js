@@ -270,6 +270,18 @@ exports.getWeeklyOff = weeklyOffCrud.get;
 exports.updateWeeklyOff = weeklyOffCrud.update;
 exports.deleteWeeklyOff = weeklyOffCrud.delete;
 exports.bulkWeeklyOff = weeklyOffCrud.bulk;
+exports.bulkDeleteWeeklyOff = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one weekly off record" });
+    const data = await WeeklyOff.deleteMany({ _id: { $in: ids }, colid });
+    res.json({ success: true, deleted: data.deletedCount || 0 });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 exports.createAccrualRule = accrualRuleCrud.create;
 exports.getAccrualRules = accrualRuleCrud.get;
 exports.updateAccrualRule = accrualRuleCrud.update;

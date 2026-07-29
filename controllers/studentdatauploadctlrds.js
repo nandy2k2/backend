@@ -1,6 +1,7 @@
 const path = require('path');
 const multer = require('multer');
 const AWS = require('aws-sdk');
+const mongoose = require('mongoose');
 const User = require('../Models/user');
 const Awsconfig = require('../Models/awsconfig');
 const UserCustomField = require('../Models/usercustomfieldds');
@@ -72,6 +73,35 @@ const randomPassword = (length = 10) => {
   return chars.join('');
 };
 
+const randomRegno = () => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return Array.from({ length: 10 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+};
+
+const generateRegnoValue = (payload, mode = 'random') => {
+  if (clean(mode) === 'academicYearMongo') {
+    return `${clean(payload.academicyear) || 'NA'}/${new mongoose.Types.ObjectId().toString()}`;
+  }
+  return randomRegno();
+};
+
+const addGeneratedRegno = async (payload, mode = 'random', excludeId = '') => {
+  if (clean(payload.regno)) return payload;
+  const selectedMode = clean(mode) || 'random';
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const regno = generateRegnoValue(payload, selectedMode);
+    const query = { colid: Number(payload.colid), role: 'Student', regno };
+    if (excludeId) query._id = { $ne: excludeId };
+    const exists = await User.exists(query);
+    if (!exists) {
+      payload.regno = regno;
+      return payload;
+    }
+  }
+  payload.regno = generateRegnoValue(payload, selectedMode);
+  return payload;
+};
+
 const scholarYearCode = (academicYear) => {
   const value = clean(academicYear);
   const match = value.match(/^(\d{2,4})\D+(\d{2,4})$/);
@@ -137,7 +167,7 @@ const buildPayload = (body = {}) => {
   const customFields = normalizeCustomFields(body);
   return {
     name: clean(body.name) || 'NA',
-    regno: clean(body.regno) || 'NA',
+    regno: clean(body.autogenerateregno) === 'Yes' ? '' : (clean(body.regno) || 'NA'),
     scholarnumber: clean(body.autogeneratescholarnumber) === 'Yes' ? '' : clean(body.scholarnumber),
     abcid: clean(body.abcid) || 'NA',
     password: clean(body.password) || 'NA',
@@ -355,6 +385,7 @@ exports.createStudent = async (req, res) => {
     const payload = buildPayload(req.body);
     if (!payload.colid) return res.status(400).json({ msg: 'colid is required' });
     if (!payload.email) return res.status(400).json({ msg: 'Email is required' });
+    await addGeneratedRegno(payload, req.body.regnogenerationmode);
     await addDefaultScholarNumber(payload);
     const data = await User.create(payload);
     res.json(serialize(data));
@@ -373,6 +404,7 @@ exports.updateStudent = async (req, res) => {
 
     const duplicate = await User.findOne({ _id: { $ne: req.body.id }, email: payload.email });
     if (duplicate) return res.status(400).json({ msg: 'Duplicate email is not allowed' });
+    await addGeneratedRegno(payload, req.body.regnogenerationmode, req.body.id);
     await addDefaultScholarNumber(payload, req.body.id);
 
     const data = await User.findOneAndUpdate(
@@ -440,6 +472,7 @@ exports.bulkStudents = async (req, res) => {
         errors.push({ rowNumber, msg: 'Email is required' });
         continue;
       }
+      await addGeneratedRegno(payload, row.regnogenerationmode || req.body.regnogenerationmode);
       await addDefaultScholarNumber(payload);
 
       try {

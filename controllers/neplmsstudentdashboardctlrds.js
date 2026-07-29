@@ -137,7 +137,7 @@ exports.getStudentDashboard = async (req, res) => {
     const now = new Date();
 
     const emptyOr = baseQueries.length ? { $or: baseQueries } : { coursecode: { $in: [] } };
-    const [attendanceRows, resources, timetable, submissions, quizzes, quizAttempts, lessonContent] = await Promise.all([
+    const [attendanceRows, resources, timetableRows, submissions, quizzes, quizAttempts, lessonContent] = await Promise.all([
       NepLmsAttendance.find({ colid, regno, coursecode: { $in: courseCodes } }).sort({ classdate: 1 }).lean(),
       NepLmsResource.find({ ...emptyOr, colid }).sort({ duedate: 1, createdAt: -1 }).lean(),
       NepLmsTimetable.find({ ...emptyOr, colid }).sort({ classdate: 1, classtime: 1 }).lean(),
@@ -146,6 +146,11 @@ exports.getStudentDashboard = async (req, res) => {
       NepLmsQuizAttempt.find({ colid, regno, coursecode: { $in: courseCodes } }).lean(),
       NepLmsLessonContent.find({ ...emptyOr, colid, status: "Active" }).sort({ sequence: 1 }).lean()
     ]);
+    const studentSection = text(student.section);
+    const timetable = timetableRows.filter((row) => {
+      if (!studentSection) return true;
+      return text(row.section).toLowerCase() === studentSection.toLowerCase();
+    });
 
     const courseActivityMap = new Map(courses.map((course) => [courseKey(course), {
       assignmentCount: 0,
@@ -275,6 +280,7 @@ exports.getStudentDashboard = async (req, res) => {
         academicyear: student.academicyear || "",
         program: student.program || "",
         programcode: student.programcode || "",
+        institution: student.institution || "",
         major: studentMajor(student),
         semester: student.semester || "",
         section: student.section || ""

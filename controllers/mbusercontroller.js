@@ -30,8 +30,10 @@ exports.mbCreateUser = async (req, res) => {
 
             institution: data.institution,
             department: data.department,
+            designation: data.designation,
             role: data.role,
             admissionyear: data.admissionyear,
+            joiningdate: data.joiningdate || data.dateofjoining,
 
             // 🎯 defaults
             status: 1,
@@ -76,7 +78,9 @@ exports.mbBulkCreateUsers = async (req, res) => {
             semester: "NA",
             section: "NA",
 
-            admissionyear: u.joiningyear
+            admissionyear: u.admissionyear || u.joiningyear || "NA",
+            designation: u.designation || "",
+            joiningdate: u.joiningdate || u.dateofjoining || ""
         }));
 
         const result = await User.insertMany(mapped);
@@ -137,6 +141,24 @@ exports.mbDeleteUser = async (req, res) => {
             return res.status(404).json({ error: 'User not found' });
         }
         res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+};
+
+exports.mbBulkDeleteUsers = async (req, res) => {
+    try {
+        const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+        const colid = req.body.colid;
+        if (!ids.length) {
+            return res.status(400).json({ error: 'Select at least one user' });
+        }
+        const deleted = await User.deleteMany({
+            _id: { $in: ids },
+            colid,
+            role: { $ne: 'Student' }
+        });
+        res.json({ success: true, deleted: deleted.deletedCount || 0 });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
