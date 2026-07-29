@@ -37,6 +37,7 @@ const hrLeaveApplicationSchema = new mongoose.Schema(
     todate: { type: String, trim: true },
     days: { type: Number, default: 0 },
     vacationtype: { type: String, trim: true },
+    component: { type: String, trim: true },
     source: { type: String, trim: true },
     reason: { type: String, trim: true },
     employeecomment: { type: String, trim: true },

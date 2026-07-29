@@ -7,6 +7,7 @@ const HrShiftAllocation = require("../Models/hrshiftallocationds");
 const HrEmployeeHours = require("../Models/hremployeehoursds");
 const HrLatePolicy = require("../Models/hrlatepolicyds");
 const HrOvertimePolicy = require("../Models/hrovertimepolicyds");
+const HrAttendanceProcessingRule = require("../Models/hrattendanceprocessingruleds");
 const LeaveApplication = require("../Models/hrleaveapplicationds");
 const LeaveBalance = require("../Models/hrleavebalanceds");
 const LeaveType = require("../Models/hrleavetypeds");
@@ -68,6 +69,7 @@ const workedHoursBetween = (intime, outtime) => {
   return Number(((adjustedOut - inMinutes) / 60).toFixed(2));
 };
 const yesNo = (flag) => (flag ? "Yes" : "No");
+const isYes = (value) => text(value || "Yes").toLowerCase() !== "no";
 const isDeduction = (value) => text(value).toLowerCase() === "deduction";
 const dayName = (dateValue) => {
   const date = new Date(dateValue);
@@ -168,6 +170,27 @@ const findBalance = async (colid, employeeemail, leavetype, cyclename = "") => {
   return LeaveBalance.findOne({ colid, employeeemail, leavetype }).sort({ updatedAt: -1 });
 };
 
+const defaultProcessingRule = (role = "") => ({
+  role: text(role) || "All",
+  leavecheck: "Yes",
+  holidaycheck: "Yes",
+  weeklyoffcheck: "Yes",
+  shiftcheck: "Yes",
+  workinghourscheck: "Yes",
+  minworkinghours: 8,
+  compoffupdate: "Yes",
+  lateadjustleavetype: "",
+  lopleavetype: "",
+  status: "Active"
+});
+
+const findProcessingRule = async (colid, role) => {
+  const exact = await HrAttendanceProcessingRule.findOne({ colid, role: text(role), status: /^Active$/i }).sort({ updatedAt: -1 }).lean();
+  if (exact) return { ...defaultProcessingRule(role), ...exact };
+  const all = await HrAttendanceProcessingRule.findOne({ colid, role: /^All$/i, status: /^Active$/i }).sort({ updatedAt: -1 }).lean();
+  return { ...defaultProcessingRule(role), ...(all || {}) };
+};
+
 const ensureCompBalance = async (attendanceRow, employee = null) => {
   const colid = Number(attendanceRow.colid);
   const cyclename = await getLatestCycleName(colid);
@@ -226,6 +249,22 @@ const deductCasualLeaveIfPossible = async (attendanceRow) => {
   const balance = await findBalance(colid, text(attendanceRow.employeeemail), clType.leavetype);
   if (!balance || number(balance.balance) < 1) return false;
   const marker = `CL deducted for attendance ${attendanceRow._id} on ${attendanceRow.date}`;
+  if (text(attendanceRow.finalcomment).includes(marker)) return true;
+  balance.used = number(balance.used) + 1;
+  balance.balance = number(balance.balance) - 1;
+  await balance.save();
+  attendanceRow.finalcomment = [text(attendanceRow.finalcomment), marker].filter(Boolean).join(" | ");
+  await attendanceRow.save();
+  return true;
+};
+
+const deductLeaveTypeIfPossible = async (attendanceRow, leavetype, markerPrefix = "Leave") => {
+  const colid = Number(attendanceRow.colid);
+  const type = text(leavetype);
+  if (!type) return false;
+  const balance = await findBalance(colid, text(attendanceRow.employeeemail), type);
+  if (!balance || number(balance.balance) < 1) return false;
+  const marker = `${markerPrefix} deducted from ${type} for attendance ${attendanceRow._id} on ${attendanceRow.date}`;
   if (text(attendanceRow.finalcomment).includes(marker)) return true;
   balance.used = number(balance.used) + 1;
   balance.balance = number(balance.balance) - 1;
@@ -408,6 +447,120 @@ const createLateAndOvertimeAdjustmentsIfRequired = async (attendanceRow, approve
   return attendanceRow;
 };
 
+const createSalaryDeduction = async (attendanceRow, approvedByUser, component, comments, amount) => {
+  if (amount <= 0) return null;
+  const existing = await HrSalary.findOne({
+    colid: Number(attendanceRow.colid),
+    empid: text(attendanceRow.employeeemail),
+    year: text(attendanceRow.academicyear),
+    month: text(attendanceRow.month),
+    component,
+    comments
+  }).lean();
+  if (existing) return existing;
+  const { salaryRows } = await dailySalaryFor(attendanceRow);
+  return HrSalary.create({
+    ...salarySeedFrom(attendanceRow, salaryRows, approvedByUser),
+    component,
+    amount: -Math.abs(amount),
+    type: "Deduction",
+    comments
+  });
+};
+
+const processRuleBasedAttendanceEffects = async (attendanceRow, approvedByUser) => {
+  const colid = Number(attendanceRow.colid);
+  const employeeemail = text(attendanceRow.employeeemail);
+  const employee = await User.findOne({ colid, $or: [{ email: employeeemail }, { user: employeeemail }] }).select("name email user department role").lean();
+  const role = text(attendanceRow.role || employee?.role);
+  const rule = await findProcessingRule(colid, role);
+  const workedHours = workedHoursBetween(attendanceRow.intime, attendanceRow.outtime);
+  const minHours = number(rule.minworkinghours) || 8;
+
+  if (number(attendanceRow.attendance) === 0) {
+    if (isYes(rule.leavecheck) && await hasApprovedLeaveForDate(attendanceRow)) {
+      attendanceRow.finalcomment = [text(attendanceRow.finalcomment), "Approved leave exists. No deduction."].filter(Boolean).join(" | ");
+      await attendanceRow.save();
+      return attendanceRow;
+    }
+    if (isYes(rule.holidaycheck) && await isHoliday(attendanceRow)) {
+      attendanceRow.finalcomment = [text(attendanceRow.finalcomment), "Holiday. No deduction."].filter(Boolean).join(" | ");
+      await attendanceRow.save();
+      return attendanceRow;
+    }
+    if (isYes(rule.weeklyoffcheck) && await isWeeklyOff(attendanceRow)) {
+      attendanceRow.finalcomment = [text(attendanceRow.finalcomment), "Weekly off. No deduction."].filter(Boolean).join(" | ");
+      await attendanceRow.save();
+      return attendanceRow;
+    }
+    const leaveAdjusted = await deductLeaveTypeIfPossible(attendanceRow, rule.lopleavetype, "LOP leave");
+    if (leaveAdjusted) return attendanceRow;
+    const { dailySalary } = await dailySalaryFor(attendanceRow);
+    await createSalaryDeduction(attendanceRow, approvedByUser, "LOP Deduction", `LOP Deduction for attendance ${attendanceRow._id} on ${attendanceRow.date}`, dailySalary);
+    attendanceRow.netsalary = Number((number(attendanceRow.netsalary) - dailySalary).toFixed(2));
+    attendanceRow.finalcomment = [text(attendanceRow.finalcomment), "LOP salary deduction processed."].filter(Boolean).join(" | ");
+    await attendanceRow.save();
+    return attendanceRow;
+  }
+
+  const allocation = await HrShiftAllocation.findOne({ colid, employeeemail, status: /^Active$/i }).sort({ updatedAt: -1 }).lean();
+  const inMinutes = timeToMinutes(attendanceRow.intime);
+  const outMinutes = timeToMinutes(attendanceRow.outtime);
+  const lateAfter = timeToMinutes(allocation?.lateaftertime);
+  const earlyBefore = timeToMinutes(allocation?.earlybeforetime);
+  let lateOrEarly = false;
+  if (isYes(rule.shiftcheck) && allocation) {
+    const isLate = inMinutes !== null && lateAfter !== null && inMinutes > lateAfter;
+    const isEarly = outMinutes !== null && earlyBefore !== null && outMinutes < earlyBefore;
+    attendanceRow.islate = yesNo(isLate);
+    attendanceRow.isearly = yesNo(isEarly);
+    lateOrEarly = isLate || isEarly;
+  } else {
+    attendanceRow.islate = "No";
+    attendanceRow.isearly = "No";
+  }
+  if (!lateOrEarly && isYes(rule.workinghourscheck) && workedHours !== null && workedHours < minHours) {
+    attendanceRow.islate = "Yes";
+    lateOrEarly = true;
+    attendanceRow.finalcomment = [text(attendanceRow.finalcomment), `Worked ${workedHours} hours, below minimum ${minHours}.`].filter(Boolean).join(" | ");
+  }
+  await attendanceRow.save();
+
+  if (lateOrEarly) {
+    const leaveAdjusted = await deductLeaveTypeIfPossible(attendanceRow, rule.lateadjustleavetype, "Late adjustment leave");
+    if (!leaveAdjusted) {
+      const { dailySalary } = await dailySalaryFor(attendanceRow);
+      const range = monthRange(attendanceRow.date);
+      const lateCount = range ? await HrEmployeeAttendance.countDocuments({
+        colid,
+        employeeemail,
+        academicyear: text(attendanceRow.academicyear),
+        month: text(attendanceRow.month),
+        attendance: 1,
+        approvalstatus: "Approved",
+        date: { $gte: range.start, $lte: range.end },
+        $or: [{ islate: "Yes" }, { isearly: "Yes" }]
+      }) : 1;
+      const latePolicy = await findRolePolicy(HrLatePolicy, colid, role, {
+        fromdays: { $lte: lateCount },
+        todays: { $gte: lateCount }
+      });
+      const deduction = Number(((dailySalary * number(latePolicy?.dailysalarypercentage)) / 100).toFixed(2));
+      await createSalaryDeduction(attendanceRow, approvedByUser, "Late Deduction", `Late/Early salary deduction for attendance ${attendanceRow._id} on ${attendanceRow.date}`, deduction);
+      attendanceRow.latesalarydeduction = deduction;
+      attendanceRow.netsalary = Number((number(attendanceRow.netsalary) - deduction).toFixed(2));
+      await attendanceRow.save();
+    }
+  }
+
+  if (isYes(rule.compoffupdate) && workedHours !== null && workedHours >= minHours) {
+    const offDay = await isWeeklyOff(attendanceRow);
+    const holiday = await isHoliday(attendanceRow);
+    if (offDay || holiday) await addCompensatoryLeaveIfRequired(attendanceRow);
+  }
+  return attendanceRow;
+};
+
 const buildApprovals = async (colid, department, user) => {
   const matrix = await HrEmployeeAttendanceApprovalMatrix.findOne({
     colid,
@@ -476,7 +629,120 @@ exports.options = async (req, res) => {
     const colid = Number(req.query.colid);
     const users = await User.find({ colid, role: { $not: /^Student$/i } }).select("name email user phone department role").sort({ name: 1 }).lean();
     const years = await HrEmployeeAttendance.distinct("academicyear", { colid });
-    res.json({ success: true, users, years });
+    const leaveTypes = await LeaveType.find({ colid, status: /^Active$/i }).sort({ leavetype: 1 }).lean();
+    res.json({ success: true, users, years, leaveTypes });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const rulePayload = (body = {}) => ({
+  role: text(body.role) || "All",
+  leavecheck: text(body.leavecheck) || "Yes",
+  holidaycheck: text(body.holidaycheck) || "Yes",
+  weeklyoffcheck: text(body.weeklyoffcheck) || "Yes",
+  shiftcheck: text(body.shiftcheck) || "Yes",
+  workinghourscheck: text(body.workinghourscheck) || "Yes",
+  minworkinghours: number(body.minworkinghours) || 8,
+  compoffupdate: text(body.compoffupdate) || "Yes",
+  lateadjustleavetype: text(body.lateadjustleavetype),
+  lopleavetype: text(body.lopleavetype),
+  status: text(body.status) || "Active",
+  colid: Number(body.colid),
+  user: text(body.user)
+});
+
+exports.createProcessingRule = async (req, res) => {
+  try {
+    const payload = rulePayload(req.body);
+    if (!payload.colid || !payload.role) return res.status(400).json({ success: false, message: "Role is required" });
+    const data = await HrAttendanceProcessingRule.create(payload);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getProcessingRules = async (req, res) => {
+  try {
+    const filter = { colid: Number(req.query.colid) };
+    ["role", "status"].forEach((field) => {
+      if (text(req.query[field])) filter[field] = text(req.query[field]);
+    });
+    const data = await HrAttendanceProcessingRule.find(filter).sort({ updatedAt: -1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateProcessingRule = async (req, res) => {
+  try {
+    const data = await HrAttendanceProcessingRule.findOneAndUpdate(
+      { _id: req.body.id, colid: Number(req.body.colid) },
+      rulePayload(req.body),
+      { new: true, runValidators: true }
+    );
+    if (!data) return res.status(404).json({ success: false, message: "Processing rule not found" });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteProcessingRule = async (req, res) => {
+  try {
+    await HrAttendanceProcessingRule.findOneAndDelete({ _id: req.body.id, colid: Number(req.body.colid) });
+    res.json({ success: true, message: "Deleted" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkProcessingRule = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    if (!req.file) return res.status(400).json({ success: false, message: "Excel file is required" });
+    const rows = readSheet(req.file.buffer).map((row) => rulePayload({ ...row, colid, user: req.body.user }));
+    const data = await HrAttendanceProcessingRule.insertMany(rows, { ordered: false });
+    res.json({ success: true, inserted: data.length, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const createApprovedRuleAttendance = async (body, actiontype = "Rule Based") => {
+  const payload = await attendancePayload(body, actiontype);
+  if (!payload.academicyear || !payload.month || !payload.date || !payload.employeeemail) {
+    throw new Error("Academic year, month, date and employee are required");
+  }
+  payload.approvalstatus = "Approved";
+  payload.approvals = [];
+  payload.currentlevel = 0;
+  payload.actiontype = actiontype;
+  const data = await HrEmployeeAttendance.create(payload);
+  return processRuleBasedAttendanceEffects(data, body.user);
+};
+
+exports.createRuleBasedAttendance = async (req, res) => {
+  try {
+    const data = await createApprovedRuleAttendance(req.body, "Rule Based");
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkRuleBasedAttendance = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    if (!req.file) return res.status(400).json({ success: false, message: "Excel file is required" });
+    const rows = readSheet(req.file.buffer);
+    const data = [];
+    for (const row of rows) {
+      data.push(await createApprovedRuleAttendance({ ...row, colid, user: req.body.user }, "Rule Based Bulk"));
+    }
+    res.json({ success: true, inserted: data.length, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

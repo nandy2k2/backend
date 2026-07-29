@@ -14,14 +14,16 @@ const LeaveClassPlan = require("../Models/hrleaveclassplands");
 const CompensatoryRule = require("../Models/hrleavecompensatoryruleds");
 const WeeklyOff = require("../Models/hrleaveweeklyoffds");
 const AccrualRule = require("../Models/hrleaveaccrualruleds");
+const NewJoineeRule = require("../Models/hrleavenewjoineeruleds");
 const HolidayList = require("../Models/hrleaveholidaylistds");
+const VacationMaster = require("../Models/hrleavevacationds");
 const VacationPolicy = require("../Models/hrleavevacationpolicyds");
-const HrSalary = require("../Models/hrsalary");
 
 const upload = multer({ storage: multer.memoryStorage() });
 exports.uploadMiddleware = upload.single("file");
 
 const text = (value) => String(value || "").trim();
+const norm = (value) => text(value).toLowerCase();
 const number = (value) => {
   const parsed = Number(value || 0);
   return Number.isNaN(parsed) ? 0 : parsed;
@@ -43,6 +45,57 @@ const datesBetween = (from, to) => {
     rows.push(new Date(date).toISOString().slice(0, 10));
   }
   return rows;
+};
+const datesFromDuration = (from, duration) => {
+  const start = new Date(from);
+  const days = Math.max(0, Math.ceil(number(duration)));
+  if (Number.isNaN(start.getTime()) || days <= 0) return [];
+  start.setHours(0, 0, 0, 0);
+  const rows = [];
+  for (let index = 0; index < days; index += 1) {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    rows.push(date.toISOString().slice(0, 10));
+  }
+  return rows;
+};
+const datesFromOffsetDuration = (from, offset, duration) => {
+  const start = new Date(from);
+  const days = Math.max(0, Math.ceil(number(duration)));
+  const skip = Math.max(0, Math.floor(number(offset)));
+  if (Number.isNaN(start.getTime()) || days <= 0) return [];
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() + skip);
+  const rows = [];
+  for (let index = 0; index < days; index += 1) {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    rows.push(date.toISOString().slice(0, 10));
+  }
+  return rows;
+};
+const activeRecordFilter = () => ({
+  $or: [{ status: /^Active$/i }, { status: { $exists: false } }, { status: "" }, { status: null }]
+});
+const VACATION_LEAVE_TYPE = "Vacation leave";
+const ensureVacationLeaveType = async (colid, user) => {
+  await LeaveType.findOneAndUpdate(
+    { colid, leavetype: VACATION_LEAVE_TYPE },
+    {
+      colid,
+      leavetype: VACATION_LEAVE_TYPE,
+      leavetypecategory: "Non EL",
+      code: "VACATION",
+      description: "Auto populated vacation leave",
+      roles: "All",
+      annualquota: 0,
+      documentrequired: "No",
+      carryforwardcriteria: "None",
+      status: "Active",
+      user
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
 };
 const readSheet = (buffer) => XLSX.utils.sheet_to_json(XLSX.read(buffer, { type: "buffer" }).Sheets[XLSX.read(buffer, { type: "buffer" }).SheetNames[0]], { defval: "" });
 const encodeS3Key = (key) => String(key || "").split("/").map(encodeURIComponent).join("/");
@@ -182,8 +235,10 @@ const balanceCrud = crud(LeaveBalance, ["cyclename", "employeename", "employeeem
 const compRuleCrud = crud(CompensatoryRule, ["role", "leavestoadd", "description", "status"], ["role"]);
 const weeklyOffCrud = crud(WeeklyOff, ["employeename", "employeeemail", "role", "department", "type", "dayofweek", "dayofmonth", "status"], ["employeeemail", "dayofweek"]);
 const accrualRuleCrud = crud(AccrualRule, ["role", "leavetype", "minimumdayspresent", "status"], ["role", "leavetype"]);
+const newJoineeRuleCrud = crud(NewJoineeRule, ["role", "leavetype", "coolingoffdays", "status"], ["role", "leavetype"]);
 const holidayCrud = crud(HolidayList, ["academicyear", "holidaydate", "holidaytype", "description", "status"], ["academicyear", "holidaydate", "holidaytype"]);
-const vacationPolicyCrud = crud(VacationPolicy, ["academicyear", "role", "vacationtype", "vacation", "fromdate", "todate", "minworking", "status"], ["academicyear", "role", "vacation", "fromdate", "todate"]);
+const vacationMasterCrud = crud(VacationMaster, ["academicyear", "role", "vacation", "fromdate", "status"], ["academicyear", "role", "vacation", "fromdate"]);
+const vacationPolicyCrud = crud(VacationPolicy, ["academicyear", "role", "vacationid", "vacationtype", "vacation", "component", "componentorder", "fromdate", "durationindays", "minworkingdays", "minworking", "status"], ["academicyear", "role", "vacation", "component", "fromdate"]);
 
 exports.createHierarchy = hierarchyCrud.create;
 exports.getHierarchies = hierarchyCrud.get;
@@ -220,16 +275,96 @@ exports.getAccrualRules = accrualRuleCrud.get;
 exports.updateAccrualRule = accrualRuleCrud.update;
 exports.deleteAccrualRule = accrualRuleCrud.delete;
 exports.bulkAccrualRule = accrualRuleCrud.bulk;
+exports.createNewJoineeRule = newJoineeRuleCrud.create;
+exports.getNewJoineeRules = newJoineeRuleCrud.get;
+exports.updateNewJoineeRule = newJoineeRuleCrud.update;
+exports.deleteNewJoineeRule = newJoineeRuleCrud.delete;
+exports.bulkNewJoineeRule = newJoineeRuleCrud.bulk;
 exports.createHoliday = holidayCrud.create;
 exports.getHolidays = holidayCrud.get;
 exports.updateHoliday = holidayCrud.update;
 exports.deleteHoliday = holidayCrud.delete;
 exports.bulkHoliday = holidayCrud.bulk;
-exports.createVacationPolicy = vacationPolicyCrud.create;
+exports.createVacationMaster = vacationMasterCrud.create;
+exports.getVacationMasters = vacationMasterCrud.get;
+exports.updateVacationMaster = vacationMasterCrud.update;
+exports.deleteVacationMaster = vacationMasterCrud.delete;
+exports.bulkVacationMaster = vacationMasterCrud.bulk;
 exports.getVacationPolicies = vacationPolicyCrud.get;
-exports.updateVacationPolicy = vacationPolicyCrud.update;
 exports.deleteVacationPolicy = vacationPolicyCrud.delete;
-exports.bulkVacationPolicy = vacationPolicyCrud.bulk;
+
+const hydrateVacationComponentPayload = async (payload, colid) => {
+  const vacationid = text(payload.vacationid);
+  if (!vacationid) return payload;
+  const vacation = await VacationMaster.findOne({ _id: vacationid, colid }).lean();
+  if (!vacation) throw new Error("Selected vacation not found");
+  return {
+    ...payload,
+    vacationid,
+    academicyear: text(vacation.academicyear),
+    role: text(vacation.role),
+    vacation: text(vacation.vacation),
+    fromdate: text(vacation.fromdate)
+  };
+};
+
+exports.createVacationPolicy = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const payload = await hydrateVacationComponentPayload({ colid, user: text(req.body.user) }, colid);
+    ["academicyear", "role", "vacationid", "vacationtype", "vacation", "component", "componentorder", "fromdate", "durationindays", "minworkingdays", "minworking", "status"].forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(req.body, field)) payload[field] = req.body[field];
+    });
+    const data = await VacationPolicy.create(await hydrateVacationComponentPayload(payload, colid));
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateVacationPolicy = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const payload = { user: text(req.body.user) };
+    ["academicyear", "role", "vacationid", "vacationtype", "vacation", "component", "componentorder", "fromdate", "durationindays", "minworkingdays", "minworking", "status"].forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(req.body, field)) payload[field] = req.body[field];
+    });
+    const data = await VacationPolicy.findOneAndUpdate({ _id: req.body.id, colid }, await hydrateVacationComponentPayload(payload, colid), { new: true, runValidators: true });
+    if (!data) return res.status(404).json({ success: false, message: "Record not found" });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkVacationPolicy = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    if (!req.file) return res.status(400).json({ success: false, message: "Excel file is required" });
+    const rows = [];
+    for (const row of readSheet(req.file.buffer)) {
+      rows.push(await hydrateVacationComponentPayload({
+        colid,
+        user: text(req.body.user),
+        vacationid: row.vacationid ?? "",
+        vacationtype: row.vacationtype ?? "full",
+        component: row.component ?? "",
+        componentorder: row.componentorder ?? 1,
+        durationindays: row.durationindays ?? 1,
+        minworkingdays: row.minworkingdays ?? row.minworking ?? 0,
+        status: row.status ?? "Active",
+        academicyear: row.academicyear ?? "",
+        role: row.role ?? "",
+        vacation: row.vacation ?? "",
+        fromdate: row.fromdate ?? ""
+      }, colid));
+    }
+    const data = await VacationPolicy.insertMany(rows, { ordered: false });
+    res.json({ success: true, inserted: data.length, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 const ensureCompensatoryLeaveType = async (colid, user = "") => {
   if (!colid) return null;
@@ -311,99 +446,156 @@ exports.saveWeeklyOffMany = async (req, res) => {
   }
 };
 
-const monthsWorkedInPreviousYear = async (colid, employeeemail, policy) => {
-  const to = new Date(policy.fromdate || Date.now());
-  const from = new Date(to);
-  from.setFullYear(from.getFullYear() - 1);
-  const rows = await HrSalary.find({
-    colid,
-    empid: employeeemail,
-    $or: [
-      { duedate: { $gte: from, $lte: to } },
-      { year: text(policy.academicyear) }
-    ]
-  }).select("month year duedate").lean();
-  const months = new Set();
-  rows.forEach((row) => {
-    if (row.duedate) {
-      const date = new Date(row.duedate);
-      if (!Number.isNaN(date.getTime())) months.add(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`);
-    } else if (text(row.year) || text(row.month)) {
-      months.add(`${text(row.year)}-${text(row.month)}`);
-    }
-  });
-  return months.size;
+const employmentDurationFromJoining = (joiningdate, targetdate) => {
+  const join = new Date(joiningdate);
+  const target = new Date(targetdate || Date.now());
+  if (Number.isNaN(join.getTime()) || Number.isNaN(target.getTime()) || target < join) {
+    return { days: 0, months: 0 };
+  }
+  join.setHours(0, 0, 0, 0);
+  target.setHours(0, 0, 0, 0);
+  const days = Math.floor((target - join) / 86400000) + 1;
+  const months = Number((days / 30.4375).toFixed(2));
+  return { days, months };
 };
 
 exports.populateVacation = async (req, res) => {
   try {
     const colid = Number(req.body.colid);
     const policyId = text(req.body.policyid || req.body.id);
+    const employeeids = Array.isArray(req.body.employeeids) ? req.body.employeeids.map(text).filter(Boolean) : [];
     const employeeemails = Array.isArray(req.body.employeeemails) ? req.body.employeeemails.map(text).filter(Boolean) : [];
-    if (!colid || !policyId || !employeeemails.length) {
+    if (!colid || !policyId || (!employeeids.length && !employeeemails.length)) {
       return res.status(400).json({ success: false, message: "Select vacation policy and at least one employee" });
     }
-    const policy = await VacationPolicy.findOne({ _id: policyId, colid, status: /^Active$/i }).lean();
-    if (!policy) return res.status(404).json({ success: false, message: "Active vacation policy not found" });
-    const allDates = datesBetween(policy.fromdate, policy.todate);
-    if (!allDates.length) return res.status(400).json({ success: false, message: "Policy date range is invalid" });
-    const users = await User.find({
-      colid,
-      $or: [{ email: { $in: employeeemails } }, { user: { $in: employeeemails } }]
-    }).select("name email user department role").lean();
-    const isHalf = text(policy.vacationtype).toLowerCase() === "half";
-    const dayValue = isHalf ? 0.5 : 1;
-    const minWorking = number(policy.minworking);
+    const activeFilter = activeRecordFilter();
+    let policy = await VacationMaster.findOne({ _id: policyId, colid, ...activeFilter }).lean();
+    let groupFilter = { colid, vacationid: policyId, ...activeFilter };
+    if (!policy) {
+      const componentPolicy = await VacationPolicy.findOne({ _id: policyId, colid, ...activeFilter }).lean();
+      if (!componentPolicy) return res.status(404).json({ success: false, message: "Active vacation not found" });
+      policy = {
+        _id: componentPolicy.vacationid || componentPolicy._id,
+        academicyear: componentPolicy.academicyear,
+        role: componentPolicy.role,
+        vacation: componentPolicy.vacation,
+        fromdate: componentPolicy.fromdate
+      };
+      groupFilter = componentPolicy.vacationid
+        ? { colid, vacationid: text(componentPolicy.vacationid), ...activeFilter }
+        : {
+            colid,
+            academicyear: text(componentPolicy.academicyear),
+            role: text(componentPolicy.role),
+            vacation: text(componentPolicy.vacation),
+            fromdate: text(componentPolicy.fromdate),
+            ...activeFilter
+          };
+    }
+    const components = (await VacationPolicy.find(groupFilter).lean()).sort((first, second) => {
+      const orderDiff = (number(first.componentorder) || 0) - (number(second.componentorder) || 0);
+      if (orderDiff) return orderDiff;
+      return new Date(first.createdAt || 0) - new Date(second.createdAt || 0);
+    });
+    if (!components.length) return res.status(404).json({ success: false, message: "No active vacation components found" });
+    const validStart = datesFromDuration(policy.fromdate, 1);
+    if (!validStart.length) return res.status(400).json({ success: false, message: "Policy start date or duration is invalid" });
+    await ensureVacationLeaveType(colid, text(req.body.user));
+    const validEmployeeIds = employeeids.filter((item) => /^[a-f0-9]{24}$/i.test(item));
+    const selectedIdSet = new Set(validEmployeeIds.map((item) => item.toLowerCase()));
+    const selectedEmailSet = new Set(employeeemails.map((item) => item.toLowerCase()));
+    const userSelectors = [];
+    if (validEmployeeIds.length) userSelectors.push({ _id: { $in: validEmployeeIds } });
+    if (employeeemails.length) userSelectors.push({ email: { $in: employeeemails } }, { user: { $in: employeeemails } });
+    if (!userSelectors.length) return res.status(400).json({ success: false, message: "Selected employee identifiers are invalid" });
+    const users = (await User.find({ colid, $or: userSelectors }).select("name email user department role joiningdate").lean())
+      .filter((employee) => {
+        const id = text(employee._id).toLowerCase();
+        const email = text(employee.email).toLowerCase();
+        const userValue = text(employee.user).toLowerCase();
+        return selectedIdSet.has(id) || selectedEmailSet.has(email) || selectedEmailSet.has(userValue);
+      });
+    if (!users.length) return res.status(404).json({ success: false, message: "Selected employee was not found" });
     const results = [];
     for (const employee of users) {
       const employeeemail = text(employee.email || employee.user);
-      const monthsWorked = await monthsWorkedInPreviousYear(colid, employeeemail, policy);
-      const eligibleRatio = minWorking > 0 ? Math.min(1, monthsWorked / minWorking) : 1;
-      const dateCount = eligibleRatio >= 1 ? allDates.length : Math.max(0, Math.ceil(allDates.length * eligibleRatio));
-      const allowedDates = allDates.slice(0, dateCount);
-      let inserted = 0;
-      for (const date of allowedDates) {
-        const exists = await LeaveApplication.findOne({
-          colid,
+      const employmentDuration = employmentDurationFromJoining(employee.joiningdate, policy.fromdate);
+      let cursor = 0;
+      for (const componentPolicy of components) {
+        const policyRole = text(policy.role);
+        const roleMismatch = policyRole && norm(policyRole) !== "all" && norm(employee.role) !== norm(policyRole);
+        const isHalf = text(componentPolicy.vacationtype).toLowerCase() === "half";
+        const dayValue = isHalf ? 0.5 : 1;
+        const componentDuration = number(componentPolicy.durationindays) || 1;
+        const minWorkingDays = number(componentPolicy.minworkingdays || componentPolicy.minworking);
+        const eligibleRatio = minWorkingDays > 0 ? Math.min(1, employmentDuration.days / minWorkingDays) : 1;
+        const dateCount = roleMismatch ? 0 : (eligibleRatio >= 1 ? componentDuration : Math.max(0, Math.ceil(componentDuration * eligibleRatio)));
+        const allowedDates = datesFromOffsetDuration(policy.fromdate, cursor, dateCount);
+        cursor += dateCount;
+        let inserted = 0;
+        let status = roleMismatch ? "Skipped: role does not match vacation policy" : "Not eligible";
+        if (allowedDates.length) {
+          const fromdate = allowedDates[0];
+          const todate = allowedDates[allowedDates.length - 1];
+          const exists = await LeaveApplication.findOne({
+            colid,
+            employeeemail,
+            source: "Vacation",
+            leavetype: VACATION_LEAVE_TYPE,
+            component: text(componentPolicy.component),
+            status: "Approved",
+            fromdate: { $lte: todate },
+            todate: { $gte: fromdate }
+          }).lean();
+          if (!exists) {
+            await LeaveApplication.create({
+              cyclename: text(policy.academicyear),
+              employeename: text(employee.name),
+              employeeemail,
+              department: text(employee.department),
+              leavetype: VACATION_LEAVE_TYPE,
+              fromdate,
+              todate,
+              days: Number((allowedDates.length * dayValue).toFixed(2)),
+              vacationtype: isHalf ? "half" : "full",
+              component: text(componentPolicy.component),
+              source: "Vacation",
+              reason: `${text(policy.vacation)} - ${text(componentPolicy.component)}`,
+              employeecomment: `Vacation: ${text(policy.vacation)}; component: ${text(componentPolicy.component)}; order: ${number(componentPolicy.componentorder) || 1}; joining date: ${employee.joiningdate ? new Date(employee.joiningdate).toISOString().slice(0, 10) : "Not set"}; employment duration: ${employmentDuration.months} months (${employmentDuration.days} days); min working days: ${minWorkingDays || "Not set"}; component duration: ${componentDuration}`,
+              approvals: [],
+              currentlevel: 0,
+              balancededucted: false,
+              status: "Approved",
+              finalcomment: `Auto approved vacation ${text(policy.vacation)} (${policyId})`,
+              colid,
+              user: text(req.body.user)
+            });
+            inserted = 1;
+            status = "Inserted";
+          } else {
+            status = "Already exists";
+          }
+        }
+        results.push({
+          employee: text(employee.name),
           employeeemail,
-          source: "Vacation",
-          leavetype: text(policy.vacation),
-          fromdate: date,
-          todate: date,
-          status: "Approved"
-        }).lean();
-        if (exists) continue;
-        await LeaveApplication.create({
-          cyclename: text(policy.academicyear),
-          employeename: text(employee.name),
-          employeeemail,
-          department: text(employee.department),
-          leavetype: text(policy.vacation),
-          fromdate: date,
-          todate: date,
-          days: dayValue,
-          vacationtype: isHalf ? "half" : "full",
-          source: "Vacation",
-          reason: `Vacation populated from ${text(policy.vacation)} policy`,
-          employeecomment: `Months worked: ${monthsWorked}; min working: ${minWorking || "Not set"}`,
-          approvals: [],
-          currentlevel: 0,
-          balancededucted: false,
-          status: "Approved",
-          finalcomment: `Auto approved vacation policy ${policyId}`,
-          colid,
-          user: text(req.body.user)
+          vacation: text(policy.vacation),
+          component: text(componentPolicy.component),
+          componentorder: number(componentPolicy.componentorder) || 1,
+          vacationtype: isHalf ? "Half" : "Full",
+          joiningdate: employee.joiningdate ? new Date(employee.joiningdate).toISOString().slice(0, 10) : "",
+          employmentdays: employmentDuration.days,
+          employmentmonths: employmentDuration.months,
+          minworkingdays: minWorkingDays,
+          componentduration: componentDuration,
+          eligibleRatio,
+          eligibleDates: allowedDates.length,
+          fromdate: allowedDates[0] || "",
+          todate: allowedDates[allowedDates.length - 1] || "",
+          inserted,
+          status
         });
-        inserted += 1;
       }
-      results.push({
-        employee: text(employee.name),
-        employeeemail,
-        monthsworked: monthsWorked,
-        eligibleRatio,
-        eligibleDates: allowedDates.length,
-        inserted
-      });
     }
     res.json({ success: true, results, inserted: results.reduce((sum, item) => sum + item.inserted, 0) });
   } catch (error) {
@@ -460,12 +652,54 @@ exports.uploadLeaveDocument = async (req, res) => {
   }
 };
 
+const ruleMatches = (ruleValue, actualValue) => {
+  const rule = text(ruleValue).toLowerCase();
+  const actual = text(actualValue).toLowerCase();
+  return rule === "all" || rule === actual;
+};
+
+const findNewJoineeRule = async (colid, role, leavetype) => {
+  const rules = await NewJoineeRule.find({ colid, status: /^Active$/i }).lean();
+  const ranked = rules
+    .filter((rule) => ruleMatches(rule.role, role) && ruleMatches(rule.leavetype, leavetype))
+    .map((rule) => ({
+      rule,
+      score: (text(rule.role).toLowerCase() === text(role).toLowerCase() ? 2 : 0)
+        + (text(rule.leavetype).toLowerCase() === text(leavetype).toLowerCase() ? 2 : 0)
+    }))
+    .sort((a, b) => b.score - a.score || number(b.rule.coolingoffdays) - number(a.rule.coolingoffdays));
+  return ranked[0]?.rule || null;
+};
+
+const daysSinceJoiningDate = (joiningdate, targetdate) => {
+  const join = new Date(joiningdate);
+  const target = new Date(targetdate);
+  if (Number.isNaN(join.getTime()) || Number.isNaN(target.getTime())) return null;
+  join.setHours(0, 0, 0, 0);
+  target.setHours(0, 0, 0, 0);
+  return Math.floor((target - join) / 86400000);
+};
+
 exports.applyLeave = async (req, res) => {
   try {
     const colid = Number(req.body.colid);
     const employeeemail = text(req.body.employeeemail || req.body.user);
     const days = dateDays(req.body.fromdate, req.body.todate);
     if (!days) return res.status(400).json({ success: false, message: "Valid from and to date are required" });
+    const employee = await User.findOne({
+      colid,
+      $or: [{ email: employeeemail }, { user: employeeemail }]
+    }).select("name email user role department joiningdate").lean();
+    const newJoineeRule = await findNewJoineeRule(colid, employee?.role || req.body.role, req.body.leavetype);
+    if (newJoineeRule && number(newJoineeRule.coolingoffdays) > 0) {
+      const completedDays = daysSinceJoiningDate(employee?.joiningdate, req.body.fromdate);
+      if (completedDays === null || completedDays < number(newJoineeRule.coolingoffdays)) {
+        return res.status(400).json({
+          success: false,
+          message: "Leave is not allowed. Cooling off period is not completed."
+        });
+      }
+    }
     const overlappingLeave = await LeaveApplication.findOne({
       colid,
       employeeemail,
@@ -558,6 +792,36 @@ exports.getApplications = async (req, res) => {
       return map;
     }, {});
     res.json({ success: true, data: data.map((item) => ({ ...item, classplans: plansByApplication[text(item._id)] || [] })) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteApplications = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const ids = Array.isArray(req.body.ids)
+      ? req.body.ids.map(text).filter(Boolean)
+      : [text(req.body.id)].filter(Boolean);
+    if (!colid || !ids.length) {
+      return res.status(400).json({ success: false, message: "colid and leave application id are required" });
+    }
+    const applications = await LeaveApplication.find({ _id: { $in: ids }, colid });
+    let restored = 0;
+    for (const app of applications) {
+      if (app.balancededucted) {
+        const balance = await findLeaveBalance(app.colid, app.employeeemail, app.leavetype, app.cyclename);
+        if (balance) {
+          balance.used = Math.max(0, number(balance.used) - number(app.days));
+          balance.balance = number(balance.balance) + number(app.days);
+          await balance.save();
+          restored += 1;
+        }
+      }
+    }
+    await LeaveClassPlan.deleteMany({ colid, leaveapplicationid: { $in: applications.map((item) => item._id) } });
+    const deleted = await LeaveApplication.deleteMany({ _id: { $in: ids }, colid });
+    res.json({ success: true, deleted: deleted.deletedCount || 0, restored });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
