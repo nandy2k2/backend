@@ -1,4 +1,7 @@
 const mongoose = require("mongoose");
+const multer = require("multer");
+const AWS = require("aws-sdk");
+const path = require("path");
 const {
   EventNew,
   AttendeeNew,
@@ -10,10 +13,15 @@ const {
   TransportRequirementNew,
   VehicleAllocationNew,
   EventFeedbackNew,
-  EventCertificateNew
+  EventCertificateNew,
+  EventPaperSubmissionNew
 } = require("../Models/eventmanagementnewds");
 const AiConfiguration = require("../Models/aiconfigurationds");
 const OllamaConfiguration = require("../Models/ollamaconfigurationds");
+const Awsconfig = require("../Models/awsconfig");
+
+const upload = multer({ storage: multer.memoryStorage() });
+exports.uploadMiddleware = upload.single("file");
 
 const models = {
   events: EventNew,
@@ -26,7 +34,8 @@ const models = {
   transportrequirements: TransportRequirementNew,
   vehicleallocations: VehicleAllocationNew,
   feedback: EventFeedbackNew,
-  certificates: EventCertificateNew
+  certificates: EventCertificateNew,
+  papersubmissions: EventPaperSubmissionNew
 };
 
 const modelFields = {
@@ -40,7 +49,8 @@ const modelFields = {
   transportrequirements: ["eventid", "eventname", "eventcode", "attendeeid", "attendee", "email", "requirementtype", "vehicletype", "passengercount", "location", "destination", "requirementdate", "requirementtime", "status", "remarks"],
   vehicleallocations: ["eventid", "eventname", "eventcode", "requirementid", "attendee", "email", "requirementtype", "vehicleno", "vehiclename", "vehicletype", "drivername", "driverphone", "allocationdate", "allocationtime", "location", "destination", "allocationmode", "status", "remarks"],
   feedback: ["eventid", "attendeeid", "eventname", "eventcode", "attendee", "email", "rating", "contentquality", "hospitality", "logistics", "comments", "submitteddate"],
-  certificates: ["eventid", "attendeeid", "eventname", "eventcode", "attendee", "email", "certificateno", "issuedate", "certificatehtml", "status"]
+  certificates: ["eventid", "attendeeid", "eventname", "eventcode", "attendee", "email", "certificateno", "issuedate", "certificatehtml", "status"],
+  papersubmissions: ["eventid", "attendeeid", "eventname", "eventcode", "attendee", "email", "phone", "papertitle", "authors", "abstract", "keywords", "paperlink", "paperfilename", "submitteddate", "status", "remarks"]
 };
 
 const numberFields = new Set(["colid", "rentperday", "noofbeds", "capacity", "passengercount", "rating", "contentquality", "hospitality", "logistics"]);
@@ -79,6 +89,11 @@ const filterQuery = (body = {}) => {
 };
 
 const overlaps = (fromA, toA, fromB, toB) => new Date(fromA) <= new Date(toB) && new Date(toA) >= new Date(fromB);
+const encodeS3Key = (key) => String(key || "").split("/").map(encodeURIComponent).join("/");
+const s3Url = (bucket, region, key) => region === "us-east-1" ? `https://${bucket}.s3.amazonaws.com/${encodeS3Key(key)}` : `https://${bucket}.s3.${region}.amazonaws.com/${encodeS3Key(key)}`;
+const getDefaultAwsConfig = async (colid) =>
+  Awsconfig.findOne({ colid: Number(colid), type: /^aws$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
+  || Awsconfig.findOne({ colid: Number(colid), type: /^aws$/i }).sort({ _id: -1 }).lean();
 
 async function getOllama(colid, id) {
   const query = { colid: num(colid), active: /^yes$/i };
@@ -387,18 +402,77 @@ exports.certificate = async (req, res) => {
   res.json({ success: true, data: certificate });
 };
 
+exports.uploadPaperFile = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    if (!req.file) return res.status(400).json({ success: false, message: "File is required" });
+    const config = await getDefaultAwsConfig(colid);
+    if (!config?.username || !config?.password || !config?.bucket || !config?.region) {
+      return res.status(400).json({ success: false, message: "Default AWS configuration is incomplete" });
+    }
+    const cleanName = path.basename(req.file.originalname || "paper").replace(/[^\w.\-() ]/g, "_");
+    const key = `${colid}/event-new/papers/${Date.now()}-${cleanName}`;
+    const s3 = new AWS.S3({ accessKeyId: config.username, secretAccessKey: config.password, region: config.region });
+    await s3.putObject({ Bucket: config.bucket, Key: key, Body: req.file.buffer, ContentType: req.file.mimetype }).promise();
+    res.json({ success: true, url: s3Url(config.bucket, config.region, key), filename: cleanName });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.attendeePaperOptions = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const email = clean(req.query.email).toLowerCase();
+    const phone = clean(req.query.phone);
+    const query = { colid, status: /^approved$/i };
+    if (email || phone) query.$or = [{ email: { $regex: email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" } }, { phone }];
+    const attendees = await AttendeeNew.find(query).sort({ eventname: 1 }).lean();
+    const submissions = await EventPaperSubmissionNew.find({ colid, email: { $regex: email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" } }).lean();
+    res.json({ success: true, attendees, submissions });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.submitPaper = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const attendee = await AttendeeNew.findOne({ _id: oid(req.body.attendeeid), colid }).lean();
+    if (!attendee) return res.status(404).json({ success: false, message: "Approved attendee registration not found" });
+    const payload = normalizePayload("papersubmissions", {
+      ...req.body,
+      colid,
+      eventid: attendee.eventid,
+      attendeeid: String(attendee._id),
+      eventname: attendee.eventname,
+      eventcode: attendee.eventcode,
+      attendee: attendee.attendee,
+      email: attendee.email,
+      phone: attendee.phone,
+      submitteddate: new Date(),
+      status: "Submitted"
+    });
+    const data = await EventPaperSubmissionNew.create(payload);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 exports.report = async (req, res) => {
   try {
     const colid = num(req.body.colid);
-    const [events, attendees, reservations, vehicles, allocations, feedback] = await Promise.all([
+    const [events, attendees, reservations, vehicles, allocations, feedback, papersubmissions] = await Promise.all([
       EventNew.find({ colid }).lean(),
       AttendeeNew.find({ colid }).lean(),
       GuestHouseReservationNew.find({ colid }).lean(),
       VehicleNew.find({ colid }).lean(),
       VehicleAllocationNew.find({ colid }).lean(),
-      EventFeedbackNew.find({ colid }).lean()
+      EventFeedbackNew.find({ colid }).lean(),
+      EventPaperSubmissionNew.find({ colid }).lean()
     ]);
-    res.json({ success: true, data: { events, attendees, reservations, vehicles, allocations, feedback } });
+    res.json({ success: true, data: { events, attendees, reservations, vehicles, allocations, feedback, papersubmissions } });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

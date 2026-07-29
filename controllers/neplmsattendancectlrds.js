@@ -1,6 +1,7 @@
 const WorkloadAssignment = require("../Models/workloadassignmentds");
 const NepLmsTimetable = require("../Models/neplmstimetableds");
 const NepLmsAttendance = require("../Models/neplmsattendanceds");
+const NepLmsOnlineClassJoin = require("../Models/neplmsonlineclassjoinds");
 const User = require("../Models/user");
 const NepLmsClassGroup = require("../Models/neplmsclassgroupds");
 const NepLmsAttendanceOtp = require("../Models/neplmsattendanceotpds");
@@ -278,6 +279,19 @@ exports.saveAttendance = async (req, res) => {
     res.json({ success: true, saved: saved.length, data: saved });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getOnlineClassJoins = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    const classid = text(req.query.classid || req.query.id);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!classid) return res.status(400).json({ success: false, message: "classid is required" });
+    const data = await NepLmsOnlineClassJoin.find({ colid, classid }).sort({ lastjoinedat: -1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || "Unable to load online class joins" });
   }
 };
 

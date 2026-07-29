@@ -196,6 +196,26 @@ const EventCertificateNew = model("eventnewcertificateds", {
   status: { type: String, default: "Issued" }
 });
 
+const EventPaperSubmissionNew = model("eventnewpapersubmissionds", {
+  ...base,
+  eventid: { type: mongoose.Schema.Types.ObjectId, ref: "eventneweventds", index: true },
+  attendeeid: String,
+  eventname: String,
+  eventcode: String,
+  attendee: String,
+  email: String,
+  phone: String,
+  papertitle: String,
+  authors: String,
+  abstract: String,
+  keywords: String,
+  paperlink: String,
+  paperfilename: String,
+  submitteddate: Date,
+  status: { type: String, default: "Submitted" },
+  remarks: String
+});
+
 module.exports = {
   EventNew,
   AttendeeNew,
@@ -207,5 +227,6 @@ module.exports = {
   TransportRequirementNew,
   VehicleAllocationNew,
   EventFeedbackNew,
-  EventCertificateNew
+  EventCertificateNew,
+  EventPaperSubmissionNew
 };

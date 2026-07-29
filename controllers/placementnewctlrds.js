@@ -9,6 +9,8 @@ const SipStudent = require("../Models/placementnewsipstudentds");
 const Mentor = require("../Models/placementnewmentords");
 const ProjectStage = require("../Models/placementnewprojectstageds");
 const StageEntry = require("../Models/placementnewprojectstageentryds");
+const PlacementStage = require("../Models/placementnewplacementstageds");
+const PlacementStageStudent = require("../Models/placementnewstagestudentds");
 const User = require("../Models/user");
 const MPrograms = require("../Models/mprograms");
 const VivaMarks = require("../Models/examinationmodel2vivamarksds");
@@ -73,7 +75,9 @@ const modelMap = {
   sip: { Model: SipStudent, fields: ["jobid", "jobtitle", "type", "program", "programcode", "student", "studentemail", "regno", "admissionyear", "academicyear", "company", "companyemail", "project", "startdate", "enddate", "companycontact", "mentor", "mentoremail", "status"] },
   mentor: { Model: Mentor, fields: ["mentor", "mentoremail", "student", "studentemail", "regno", "academicyear", "admissionyear", "program", "programcode", "status"] },
   stage: { Model: ProjectStage, fields: ["assignmentid", "stagename", "stageorder", "description", "status"] },
-  entry: { Model: StageEntry, fields: ["assignmentid", "stageid", "stagename", "details", "filelink", "remarks", "entrydate", "student", "studentemail", "regno"] }
+  entry: { Model: StageEntry, fields: ["assignmentid", "stageid", "stagename", "details", "filelink", "remarks", "entrydate", "student", "studentemail", "regno"] },
+  placementstage: { Model: PlacementStage, fields: ["stagename", "stageorder", "description", "status"] },
+  stagestudent: { Model: PlacementStageStudent, fields: ["jobid", "jobtitle", "jobtype", "company", "companyemail", "student", "studentemail", "regno", "phone", "academicyear", "admissionyear", "program", "programcode", "semester", "section", "stageid", "stagename", "stagedate", "status", "placementstatus", "confirmeddate", "offerletterlink", "offerlettername", "contactdetails", "address", "ctc", "industry", "sector", "comments"] }
 };
 
 const payloadFor = (kind, source = {}) => {
@@ -91,12 +95,14 @@ const payloadFor = (kind, source = {}) => {
 exports.options = async (req, res) => {
   try {
     const colid = Number(req.query.colid);
-    const [companies, programs, users, internships, sip, ollamaConfigs, institution] = await Promise.all([
+    const [companies, programs, users, internships, sip, placementStages, stageStudents, ollamaConfigs, institution] = await Promise.all([
       Company.find({ colid }).sort({ company: 1 }).lean(),
       MPrograms.find({ colid }).sort({ Order: 1, program: 1 }).lean(),
       User.find({ colid }).select("name email user phone role program programcode admissionyear academicyear regno semester section photo skills").sort({ name: 1 }).lean(),
       Internship.find({ colid }).sort({ createdAt: -1 }).lean(),
       SipStudent.find({ colid }).sort({ createdAt: -1 }).lean(),
+      PlacementStage.find({ colid }).sort({ stageorder: 1, stagename: 1 }).lean(),
+      PlacementStageStudent.find({ colid }).sort({ updatedAt: -1 }).lean(),
       OllamaConfiguration.find({ colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean(),
       Institution.findOne({ colid }).lean()
     ]);
@@ -110,6 +116,8 @@ exports.options = async (req, res) => {
       mentors: users.filter((item) => !/^student$/i.test(text(item.role))),
       internships,
       sip,
+      placementStages,
+      stageStudents,
       ollamaConfigs,
       geminiModels: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"],
       institution
@@ -252,6 +260,180 @@ exports.searchStudents = async (req, res) => {
         internshipareas: (internMap.get(text(student.regno)) || []).filter(Boolean).join(", ")
       };
     });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const stageStudentFilter = (source = {}) => {
+  const filter = { colid: Number(source.colid) };
+  ["jobid", "jobtitle", "jobtype", "company", "student", "studentemail", "regno", "phone", "academicyear", "admissionyear", "program", "programcode", "semester", "section", "stageid", "stagename", "placementstatus", "industry", "sector"].forEach((field) => {
+    if (text(source[field])) filter[field] = regex(source[field]);
+  });
+  if (text(source.createdFrom) || text(source.createdTo)) {
+    filter.createdAt = {};
+    if (text(source.createdFrom)) filter.createdAt.$gte = new Date(`${text(source.createdFrom)}T00:00:00.000Z`);
+    if (text(source.createdTo)) filter.createdAt.$lte = new Date(`${text(source.createdTo)}T23:59:59.999Z`);
+  }
+  return filter;
+};
+
+exports.addStageStudents = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const job = req.body.job || {};
+    const stage = req.body.stage || {};
+    const selected = Array.isArray(req.body.students) ? req.body.students : [];
+    if (!job._id) return res.status(400).json({ success: false, message: "Job is required" });
+    if (!stage._id) return res.status(400).json({ success: false, message: "Stage is required" });
+    if (!selected.length) return res.status(400).json({ success: false, message: "Select at least one student" });
+    const stagedate = text(req.body.stagedate) || new Date().toISOString().slice(0, 10);
+    const operations = selected.map((student) => {
+      const identity = text(student.regno) ? { regno: text(student.regno) } : { studentemail: text(student.email || student.studentemail) };
+      return {
+      updateOne: {
+        filter: { colid, jobid: String(job._id), ...identity },
+        update: {
+          $set: {
+            jobid: String(job._id),
+            jobtitle: text(job.jobtitle),
+            jobtype: text(job.type) || "Placement",
+            company: text(job.company),
+            companyemail: text(job.companyemail),
+            student: text(student.name || student.student),
+            studentemail: text(student.email || student.studentemail),
+            regno: text(student.regno),
+            phone: text(student.phone),
+            academicyear: text(student.academicyear),
+            admissionyear: text(student.admissionyear),
+            program: text(student.program),
+            programcode: text(student.programcode),
+            semester: text(student.semester),
+            section: text(student.section),
+            stageid: String(stage._id),
+            stagename: text(stage.stagename),
+            stagedate,
+            status: "Active",
+            placementstatus: "In Progress",
+            comments: text(req.body.comments),
+            colid,
+            user: text(req.body.user)
+          }
+        },
+        upsert: true
+      }
+    };
+    });
+    const result = await PlacementStageStudent.bulkWrite(operations, { ordered: false });
+    res.json({ success: true, matched: result.matchedCount, upserted: result.upsertedCount, modified: result.modifiedCount });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.stageStudents = async (req, res) => {
+  try {
+    const data = await PlacementStageStudent.find(stageStudentFilter(req.query)).sort({ updatedAt: -1 }).limit(5000).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.shiftStageStudents = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+    const stage = req.body.stage || {};
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one student" });
+    if (!stage._id) return res.status(400).json({ success: false, message: "Target stage is required" });
+    const result = await PlacementStageStudent.updateMany(
+      { _id: { $in: ids }, colid: Number(req.body.colid) },
+      { $set: { stageid: String(stage._id), stagename: text(stage.stagename), stagedate: text(req.body.stagedate) || new Date().toISOString().slice(0, 10), comments: text(req.body.comments), user: text(req.body.user) } }
+    );
+    res.json({ success: true, modified: result.modifiedCount });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.confirmPlacement = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one student" });
+    const payload = {
+      placementstatus: "Placed",
+      confirmeddate: text(req.body.confirmeddate) || new Date().toISOString().slice(0, 10),
+      offerletterlink: text(req.body.offerletterlink),
+      offerlettername: text(req.body.offerlettername),
+      company: text(req.body.company),
+      contactdetails: text(req.body.contactdetails),
+      address: text(req.body.address),
+      ctc: num(req.body.ctc),
+      industry: text(req.body.industry),
+      sector: text(req.body.sector),
+      comments: text(req.body.comments),
+      user: text(req.body.user)
+    };
+    const result = await PlacementStageStudent.updateMany({ _id: { $in: ids }, colid: Number(req.body.colid) }, { $set: payload });
+    res.json({ success: true, modified: result.modifiedCount });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.placementStageReport = async (req, res) => {
+  try {
+    const colid = Number(req.query.colid);
+    const filter = stageStudentFilter(req.query);
+    const [rows, jobs, institution] = await Promise.all([
+      PlacementStageStudent.find(filter).sort({ updatedAt: -1 }).lean(),
+      Job.find({ colid, type: "Placement" }).lean(),
+      Institution.findOne({ colid }).lean()
+    ]);
+    const byStage = Object.values(rows.reduce((acc, item) => {
+      const key = item.stagename || "Not specified";
+      acc[key] = acc[key] || { name: key, count: 0 };
+      acc[key].count += 1;
+      return acc;
+    }, {}));
+    const byIndustry = Object.values(rows.filter((item) => /^placed$/i.test(text(item.placementstatus))).reduce((acc, item) => {
+      const key = item.industry || "Not specified";
+      acc[key] = acc[key] || { name: key, count: 0 };
+      acc[key].count += 1;
+      return acc;
+    }, {}));
+    const bySector = Object.values(rows.filter((item) => /^placed$/i.test(text(item.placementstatus))).reduce((acc, item) => {
+      const key = item.sector || "Not specified";
+      acc[key] = acc[key] || { name: key, count: 0 };
+      acc[key].count += 1;
+      return acc;
+    }, {}));
+    const placed = rows.filter((item) => /^placed$/i.test(text(item.placementstatus))).length;
+    res.json({ success: true, rows, byStage, byIndustry, bySector, institution, summary: { total: rows.length, placed, jobs: jobs.length, conversion: rows.length ? Number(((placed / rows.length) * 100).toFixed(2)) : 0 } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.unemployedStudents = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const filters = req.body.filters || {};
+    const query = { colid, role: /^Student$/i };
+    Object.keys(filters).forEach((field) => {
+      if (text(filters[field])) query[field] = regex(filters[field]);
+    });
+    const placed = await PlacementStageStudent.find({ colid, placementstatus: /^Placed$/i }).select("regno studentemail").lean();
+    const placedRegnos = placed.map((item) => text(item.regno)).filter(Boolean);
+    const placedEmails = placed.map((item) => text(item.studentemail)).filter(Boolean);
+    if (placedRegnos.length || placedEmails.length) {
+      query.$and = [
+        { regno: { $nin: placedRegnos } },
+        { email: { $nin: placedEmails } }
+      ];
+    }
+    const data = await User.find(query).select("name email phone regno admissionyear academicyear program programcode semester section skills").sort({ name: 1 }).limit(5000).lean();
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

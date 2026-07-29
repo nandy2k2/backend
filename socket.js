@@ -1,7 +1,19 @@
 // socket.js
+const NepLmsTimetable = require("./Models/neplmstimetableds");
+const NepLmsAttendance = require("./Models/neplmsattendanceds");
+const NepLmsOnlineClassJoin = require("./Models/neplmsonlineclassjoinds");
+const User = require("./Models/user");
+
 let io;
 let _userConnections = [];
 const onlineClassRooms = new Map();
+const text = (value) => String(value || "").trim();
+const number = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+};
+const todayText = () => new Date().toISOString().slice(0, 10);
+const timeText = () => new Date().toLocaleTimeString("en-IN", { hour12: false, timeZone: "Asia/Kolkata" });
 
 const getOnlineRoom = (roomId) => {
     const key = String(roomId || "");
@@ -15,6 +27,85 @@ const onlineClassParticipants = (room) => Array.from(room.participants.entries()
     socketId,
     ...user
 }));
+
+const markOnlineClassAttendance = async ({ roomId, socketId, user }) => {
+    let colid = number(user.colid);
+    if (!roomId || String(user.role || "").toLowerCase() === "faculty") return null;
+
+    const classInfo = colid
+        ? await NepLmsTimetable.findOne({ _id: roomId, colid }).lean()
+        : await NepLmsTimetable.findOne({ _id: roomId }).lean();
+    if (!classInfo) return null;
+    colid = colid || number(classInfo.colid);
+    if (!colid) return null;
+
+    const studentQuery = { colid, role: /^Student$/i };
+    const or = [];
+    if (text(user.regno)) or.push({ regno: text(user.regno) });
+    if (text(user.email)) or.push({ email: new RegExp(`^${text(user.email).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") });
+    if (or.length) studentQuery.$or = or;
+    if (!or.length) return null;
+
+    const student = await User.findOne(studentQuery).lean();
+    if (!student?._id) return null;
+
+    const attendancePayload = {
+        classid: classInfo._id,
+        studentid: student._id,
+        student: text(student.name),
+        studentemail: text(student.email),
+        studentphone: text(student.phone),
+        regno: text(student.regno),
+        rollno: text(student.rollno),
+        program: text(classInfo.program || student.program),
+        programcode: text(classInfo.programcode || student.programcode),
+        academicyear: text(classInfo.academicyear || student.academicyear),
+        semester: text(classInfo.semester || student.semester),
+        section: text(classInfo.section || student.section),
+        classgroup: text(classInfo.classgroup),
+        enrollmentgroup: text(classInfo.enrollmentgroup),
+        enrollmentgroupid: classInfo.enrollmentgroupid || undefined,
+        specialization: text(classInfo.specialization || student.specialization),
+        major: text(classInfo.major || student.Major),
+        faculty: text(classInfo.faculty),
+        facultyemail: text(classInfo.facultyemail),
+        course: text(classInfo.course),
+        coursecode: text(classInfo.coursecode),
+        classdate: text(classInfo.classdate),
+        classtime: text(classInfo.classtime),
+        attendance: 1,
+        type: "Regular",
+        comments: "Marked present from online class join",
+        colid,
+        user: text(user.email)
+    };
+
+    const attendance = await NepLmsAttendance.findOneAndUpdate(
+        { colid, classid: classInfo._id, studentid: student._id, type: "Regular" },
+        attendancePayload,
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    await NepLmsOnlineClassJoin.findOneAndUpdate(
+        { colid, classid: classInfo._id, studentid: student._id },
+        {
+            $set: {
+                ...attendancePayload,
+                regulation: text(classInfo.regulation || student.regulation),
+                joindate: todayText(),
+                jointime: timeText(),
+                lastjoinedat: new Date(),
+                attendanceid: attendance._id,
+                socketid: socketId,
+                source: "Online Class"
+            },
+            $inc: { joincount: 1 }
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    return attendance;
+};
 
 module.exports = {
     init: (httpServer) => {
@@ -48,13 +139,15 @@ module.exports = {
                 console.log(`Socket ${socket.id} joined room ${room}`);
             });
 
-            socket.on("online-class-join", (data = {}, callback = () => {}) => {
+            socket.on("online-class-join", async (data = {}, callback = () => {}) => {
                 const roomId = String(data.roomId || data.classId || "");
                 if (!roomId) return callback({ success: false, message: "roomId is required" });
                 const room = getOnlineRoom(roomId);
                 const user = {
                     name: data.name || data.user || "User",
                     email: data.email || "",
+                    regno: data.regno || "",
+                    colid: data.colid || "",
                     role: data.role || "student",
                     canShareAudio: data.role === "faculty",
                     canShareCamera: data.role === "faculty",
@@ -67,11 +160,18 @@ module.exports = {
                     screen: user.canShareScreen
                 });
                 socket.join(roomId);
+                let attendanceMarked = false;
+                try {
+                    attendanceMarked = Boolean(await markOnlineClassAttendance({ roomId, socketId: socket.id, user }));
+                } catch (error) {
+                    console.error("Unable to mark online class attendance:", error.message);
+                }
                 callback({
                     success: true,
                     socketId: socket.id,
                     participants: onlineClassParticipants(room).filter((item) => item.socketId !== socket.id),
-                    permissions: room.permissions.get(socket.id)
+                    permissions: room.permissions.get(socket.id),
+                    attendanceMarked
                 });
                 socket.to(roomId).emit("online-class-user-joined", {
                     socketId: socket.id,

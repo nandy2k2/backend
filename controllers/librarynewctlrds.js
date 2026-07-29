@@ -1,8 +1,12 @@
 const mongoose = require("mongoose");
+const path = require("path");
+const multer = require("multer");
+const AWS = require("aws-sdk");
 const LibraryBook = require("../Models/librarybookds");
 const LibraryFine = require("../Models/libraryfinecategoryds");
 const LibraryIssue = require("../Models/libraryissueds");
 const LibraryRequest = require("../Models/libraryrequestds");
+const LibraryPhotocopyRequest = require("../Models/libraryphotocopyrequestds");
 const LibraryMaster = require("../Models/librarymasterds");
 const LibraryAccess = require("../Models/libraryaccessds");
 const LibraryTransfer = require("../Models/librarytransferds");
@@ -13,6 +17,11 @@ const Ledgerstud = require("../Models/ledgerstud");
 const User = require("../Models/user");
 const Institution = require("../Models/insdetails");
 const CounterFee2Transaction = require("../Models/counterfee2transactionds");
+const AiConfiguration = require("../Models/aiconfigurationds");
+const OllamaConfiguration = require("../Models/ollamaconfigurationds");
+const Awsconfig = require("../Models/awsconfig");
+
+const upload = multer({ storage: multer.memoryStorage() });
 
 const libraryFields = ["libraryname", "description", "type", "status"];
 const bookFields = [
@@ -27,6 +36,8 @@ const roleMaxBooksFields = ["role", "bookcategory", "noofbooks", "default"];
 const roleMaxDaysFields = ["role", "bookcategory", "noofdays"];
 const ledgerFields = ["academicyear", "program", "programcode", "regulation", "semester", "student", "regno", "feegroup", "feeitem", "status"];
 const userFields = ["name", "email", "user", "role", "department", "phone"];
+const photocopyFields = ["libraryname", "student", "regno", "email", "programcode", "semester", "title", "accessionno", "status"];
+const geminiModels = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash"];
 
 function text(value) {
   return String(value ?? "").trim();
@@ -51,6 +62,57 @@ function regex(value) {
 function escRegex(value) {
   return text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+const encodeS3Key = (key) => String(key || "").split("/").map(encodeURIComponent).join("/");
+const s3Url = (bucket, region, key) => {
+  const encodedKey = encodeS3Key(key);
+  if (region === "us-east-1") return `https://${bucket}.s3.amazonaws.com/${encodedKey}`;
+  return `https://${bucket}.s3.${region}.amazonaws.com/${encodedKey}`;
+};
+
+const getDefaultAwsConfig = async (colid) => Awsconfig.findOne({ colid, type: /^aws$/i }).sort({ default: -1, _id: -1 }).lean();
+
+const readGeminiText = (payload = {}) => (
+  payload.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("\n").trim() || ""
+);
+
+const getDefaultGeminiConfig = async (colid) => (
+  await AiConfiguration.findOne({ colid, type: /^gemini$/i, active: /^yes$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
+  || await AiConfiguration.findOne({ colid, type: /^gemini$/i, active: /^yes$/i }).sort({ _id: -1 }).lean()
+);
+
+const callGeminiText = async ({ colid, model, prompt }) => {
+  const config = await getDefaultGeminiConfig(colid);
+  if (!config?.apikey) throw new Error("Default active Gemini configuration is missing");
+  const selectedModel = text(model) || "gemini-2.5-flash";
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(selectedModel)}:generateContent?key=${encodeURIComponent(config.apikey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.25 }
+    })
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || "Gemini summary failed");
+  return readGeminiText(data) || "Gemini did not return a summary.";
+};
+
+const callOllamaText = async ({ colid, ollamaId, prompt }) => {
+  const config = ollamaId
+    ? await OllamaConfiguration.findOne({ _id: ollamaId, colid, active: /^yes$/i }).lean()
+    : await OllamaConfiguration.findOne({ colid, active: /^yes$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
+      || await OllamaConfiguration.findOne({ colid, active: /^yes$/i }).sort({ _id: -1 }).lean();
+  if (!config?.serveraddress || !config?.modelname) throw new Error("Active Ollama configuration is missing");
+  const response = await fetch(`${config.serveraddress.replace(/\/$/, "")}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: config.modelname, prompt, stream: false })
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Ollama summary failed");
+  return data.response || "Ollama did not return a summary.";
+};
 
 function dayStart(value) {
   const parsed = date(value);
@@ -107,6 +169,7 @@ async function applyLibraryAccess(query, colid, source = {}, studentMode = false
     return query;
   }
   if (studentMode) return query;
+  if (/^all$/i.test(text(source.role))) return query;
   const libs = await accessibleLibraries(colid, source.user || source.email);
   query.libraryid = { $in: libs.map((row) => String(row._id)) };
   return query;
@@ -1000,6 +1063,167 @@ exports.rejectRequest = async (req, res) => {
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.uploadMiddleware = upload.single("file");
+
+exports.aiOptions = async (req, res) => {
+  try {
+    const colid = number(req.query.colid, undefined);
+    const [gemini, ollama] = await Promise.all([
+      AiConfiguration.find({ colid, type: /^gemini$/i, active: /^yes$/i }).select("description default active").lean(),
+      OllamaConfiguration.find({ colid, active: /^yes$/i }).select("name serveraddress modelname default active").sort({ default: -1, name: 1 }).lean()
+    ]);
+    res.json({ success: true, geminiConfigured: gemini.length > 0, geminiModels, ollama });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || "Unable to load AI options" });
+  }
+};
+
+exports.summarizeBook = async (req, res) => {
+  try {
+    const colid = number(req.body.colid, undefined);
+    const book = await LibraryBook.findOne({ _id: req.body.bookid, colid }).lean();
+    if (!book) return res.status(404).json({ success: false, message: "Book not found" });
+    const prompt = [
+      "Create a concise student-friendly summary of the following library book.",
+      "Do not claim to have read the full book. Use only the metadata provided and clearly infer from title/subject/keywords.",
+      "Include: likely topic coverage, who should read it, and 5 useful study/search keywords.",
+      "",
+      `Title: ${book.title || ""}`,
+      `Author: ${book.author || ""}`,
+      `Subject: ${book.subject || ""}`,
+      `Category: ${book.category || ""}`,
+      `Classification: ${book.classification || ""}`,
+      `Publisher: ${book.publisher || ""}`,
+      `Publication Year: ${book.publicationyear || ""}`,
+      `Language: ${book.language || ""}`,
+      `Keywords: ${book.keywords || ""}`,
+      `Remarks: ${book.remarks || ""}`
+    ].join("\n");
+    const provider = text(req.body.provider || "Gemini");
+    const summary = /^ollama$/i.test(provider)
+      ? await callOllamaText({ colid, ollamaId: req.body.ollamaId || req.body.ollamaConfigId, prompt })
+      : await callGeminiText({ colid, model: req.body.geminiModel, prompt });
+    res.json({ success: true, summary });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || "Unable to summarize book" });
+  }
+};
+
+exports.requestPhotocopy = async (req, res) => {
+  try {
+    const colid = number(req.body.colid, undefined);
+    const book = await LibraryBook.findOne({ _id: req.body.bookid, colid }).lean();
+    if (!book) return res.status(404).json({ success: false, message: "Book not found" });
+    const frompage = number(req.body.frompage, 0);
+    const topage = number(req.body.topage, 0);
+    if (!frompage || !topage || topage < frompage) return res.status(400).json({ success: false, message: "Valid from page and to page are required" });
+    if (number(book.pages, 0) && topage > number(book.pages, 0)) return res.status(400).json({ success: false, message: `To page cannot exceed total pages (${book.pages})` });
+    const student = await getStudent(colid, { regno: req.body.regno, email: req.body.email, user: req.body.user });
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+    const existing = await LibraryPhotocopyRequest.findOne({
+      colid,
+      accessionno: book.accessionno,
+      regno: student.regno,
+      frompage,
+      topage,
+      status: { $in: ["Requested", "Uploaded"] }
+    });
+    if (existing) return res.status(400).json({ success: false, message: "Photocopy request already exists for this page range" });
+    const data = await LibraryPhotocopyRequest.create({
+      colid,
+      ...libraryPayload(book),
+      accessionno: book.accessionno,
+      bookid: String(book._id),
+      title: book.title,
+      author: book.author,
+      classification: book.classification,
+      publisher: book.publisher,
+      category: book.category,
+      frompage,
+      topage,
+      ...studentPayload(student),
+      status: "Requested",
+      remarks: text(req.body.remarks),
+      user: student.email || student.user
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || "Unable to create photocopy request" });
+  }
+};
+
+exports.studentPhotocopyRequests = async (req, res) => {
+  try {
+    const colid = number(req.query.colid, undefined);
+    const query = { colid };
+    const or = [];
+    if (text(req.query.regno)) or.push({ regno: text(req.query.regno) });
+    if (text(req.query.email)) or.push({ email: text(req.query.email).toLowerCase() });
+    if (text(req.query.user)) or.push({ email: text(req.query.user).toLowerCase() });
+    if (or.length) query.$or = or;
+    if (text(req.query.libraryid)) query.libraryid = text(req.query.libraryid);
+    const data = await LibraryPhotocopyRequest.find(query).sort({ requestdate: -1, createdAt: -1 }).limit(1000).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || "Unable to load photocopy requests" });
+  }
+};
+
+exports.photocopyRequests = async (req, res) => {
+  try {
+    const colid = number(req.query.colid, undefined);
+    const query = { colid };
+    await applyLibraryAccess(query, colid, req.query);
+    applyFilters(query, req.query, photocopyFields);
+    const data = await LibraryPhotocopyRequest.find(query).sort({ requestdate: -1, createdAt: -1 }).limit(3000).lean();
+    const optionBase = {};
+    await applyLibraryAccess(optionBase, colid, req.query);
+    res.json({ success: true, data, options: await distinctOptions(LibraryPhotocopyRequest, colid, photocopyFields, optionBase), libraries: await accessibleLibraries(colid, req.query.user || req.query.email) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || "Unable to load photocopy requests" });
+  }
+};
+
+exports.rejectPhotocopyRequest = async (req, res) => {
+  try {
+    const data = await LibraryPhotocopyRequest.findOneAndUpdate(
+      { _id: req.body.id, colid: number(req.body.colid, undefined) },
+      { status: "Rejected", actiondate: new Date(), actionby: text(req.body.user), remarks: text(req.body.remarks) },
+      { new: true }
+    );
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || "Unable to reject photocopy request" });
+  }
+};
+
+exports.uploadPhotocopy = async (req, res) => {
+  try {
+    const colid = number(req.body.colid, undefined);
+    const request = await LibraryPhotocopyRequest.findOne({ _id: req.body.id, colid });
+    if (!request) return res.status(404).json({ success: false, message: "Photocopy request not found" });
+    if (!req.file) return res.status(400).json({ success: false, message: "Upload file is required" });
+    const config = await getDefaultAwsConfig(colid);
+    if (!config?.username || !config?.password || !config?.bucket || !config?.region) {
+      return res.status(400).json({ success: false, message: "Default AWS configuration is incomplete" });
+    }
+    const cleanName = path.basename(req.file.originalname).replace(/[^\w.\-() ]/g, "_");
+    const key = `${colid}/library/photocopy-requests/${request._id}/${Date.now()}-${cleanName}`;
+    const s3 = new AWS.S3({ accessKeyId: config.username, secretAccessKey: config.password, region: config.region });
+    await s3.putObject({ Bucket: config.bucket, Key: key, Body: req.file.buffer, ContentType: req.file.mimetype }).promise();
+    request.documentlink = s3Url(config.bucket, config.region, key);
+    request.filename = cleanName;
+    request.status = "Uploaded";
+    request.actiondate = new Date();
+    request.actionby = text(req.body.user);
+    request.remarks = text(req.body.remarks) || request.remarks;
+    await request.save();
+    res.json({ success: true, data: request });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || "Unable to upload photocopy" });
   }
 };
 
