@@ -6260,6 +6260,8 @@ app.post("/api/v2/academiccalendar", academiccalendarctlrds.create);
 app.post("/api/v2/academiccalendar/update", academiccalendarctlrds.update);
 app.post("/api/v2/academiccalendar/delete", academiccalendarctlrds.deleteOne);
 app.post("/api/v2/academiccalendar/bulk", academiccalendarctlrds.bulk);
+app.get("/api/v2/academiccalendar/ai-options", academiccalendarctlrds.aiOptions);
+app.post("/api/v2/academiccalendar/generate-ai", academiccalendarctlrds.generateAi);
 app.get("/api/v2/studentledgercounterpayment", studentledgercounterpaymentctlr.getCounterPaymentLedger);
 app.post("/api/v2/studentledgercounterpayment/pay", studentledgercounterpaymentctlr.postCounterPayment);
 app.get("/api/v2/counterfee2/pending-ledger", counterfee2ctlrds.getPendingLedger);
