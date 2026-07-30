@@ -271,6 +271,7 @@ app.post('/api/v2/user-location/search', userLocationController.search);
 app.post('/api/v2/user-location/contact', userLocationController.contact);
 app.post('/api/v2/transcript/send-email', transcriptController.sendTranscriptEmail);
 app.post('/api/v2/transcript/gemini-transcribe', transcriptController.uploadAudioMiddleware, transcriptController.transcribeWithGemini);
+app.post('/api/v2/transcript/analyze-text', transcriptController.analyzeTranscriptText);
 app.get('/api/v2/transcript-meeting-users', transcriptMeetingController.searchUsers);
 app.get('/api/v2/transcript-meetings', transcriptMeetingController.getMeetings);
 app.get('/api/v2/transcript-meeting', transcriptMeetingController.getMeeting);

@@ -48,8 +48,10 @@ const parseExternalEmails = (value) => {
 const originFrom = (req, body = {}) => text(body.origin) || `${req.protocol}://${req.get('host')}`;
 const buildLinks = (req, meeting) => {
   const origin = originFrom(req, req.body || {});
-  const meetingLink = `${origin}/live-meeting-room?meetingid=${meeting._id}`;
-  const externalMeetingLink = `${origin}/live-meeting-room?meetingid=${meeting._id}&external=Yes&token=${encodeURIComponent(meeting.publicJoinToken)}`;
+  const roomPath = text(req.body?.roomPath || req.body?.roompath) || '/live-meeting-room';
+  const cleanRoomPath = roomPath.startsWith('/') ? roomPath : `/${roomPath}`;
+  const meetingLink = `${origin}${cleanRoomPath}?meetingid=${meeting._id}`;
+  const externalMeetingLink = `${origin}${cleanRoomPath}?meetingid=${meeting._id}&external=Yes&token=${encodeURIComponent(meeting.publicJoinToken)}`;
   return { meetingLink, externalMeetingLink };
 };
 

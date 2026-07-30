@@ -12,6 +12,7 @@ const nepLmsAssignmentSubmissionSchema = new mongoose.Schema(
     semester: { type: String, trim: true },
     course: { type: String, trim: true },
     coursecode: { type: String, trim: true },
+    coursegroup: { type: String, trim: true },
     assignmenttitle: { type: String, trim: true },
     student: { type: String, trim: true },
     regno: { type: String, trim: true, required: true, index: true },

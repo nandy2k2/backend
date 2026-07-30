@@ -11,6 +11,7 @@ const NepLmsQuizAttempt = require("../Models/neplmsquizattemptds");
 const NepLmsLessonContent = require("../Models/neplmslessoncontentds");
 const NepLmsLessonContentProgress = require("../Models/neplmslessoncontentprogressds");
 const NepLmsMindMap = require("../Models/neplmsmindmapds");
+const NepLmsClassGroup = require("../Models/neplmsclassgroupds");
 
 const upload = multer({ storage: multer.memoryStorage() });
 exports.uploadMiddleware = upload.single("file");
@@ -86,6 +87,7 @@ const coursePayload = (body = {}) => ({
   semester: text(body.semester),
   course: text(body.course),
   coursecode: text(body.coursecode),
+  coursegroup: text(body.coursegroup || body.coursegrouo || body.groupname),
   faculty: text(body.faculty || body.facultyname),
   facultyemail: text(body.facultyemail),
   colid: Number(body.colid),
@@ -140,7 +142,7 @@ const contentPayload = async (body = {}) => {
 
 const buildFilter = (source = {}) => {
   const filter = { colid: Number(source.colid) };
-  ["lessonresourceid", "academicyear", "semester", "coursecode", "facultyemail", "contenttype", "status"].forEach((field) => {
+  ["lessonresourceid", "academicyear", "semester", "coursecode", "coursegroup", "facultyemail", "contenttype", "status"].forEach((field) => {
     if (text(source[field])) filter[field] = source[field];
   });
   return filter;
@@ -422,9 +424,27 @@ const studentForRequest = async (source = {}) => {
   return student;
 };
 
+const verifyStudentCourseGroup = async (source = {}, student) => {
+  const coursegroup = text(source.coursegroup || source.coursegrouo || source.groupname);
+  if (!coursegroup) return;
+  const query = {
+    colid: Number(source.colid),
+    academicyear: text(source.academicyear),
+    semester: text(source.semester),
+    coursecode: text(source.coursecode),
+    groupname: coursegroup,
+    regno: text(student.regno)
+  };
+  if (text(source.regulation)) query.regulation = text(source.regulation);
+  if (text(source.programcode)) query.programcode = text(source.programcode);
+  const row = await NepLmsClassGroup.findOne(query).lean();
+  if (!row) throw new Error("Course group is not available for this student");
+};
+
 exports.getStudentLessonContent = async (req, res) => {
   try {
     const student = await studentForRequest(req.query);
+    await verifyStudentCourseGroup(req.query, student);
     const filter = buildFilter(req.query);
     filter.status = "Active";
     const contents = await NepLmsLessonContent.find(filter).sort({ lessonresourceid: 1, sequence: 1, createdAt: 1 }).lean();
@@ -465,6 +485,7 @@ exports.completeContent = async (req, res) => {
     const colid = Number(req.body.colid);
     const content = await NepLmsLessonContent.findOne({ _id: req.body.contentid, colid, status: "Active" }).lean();
     if (!content) return res.status(404).json({ success: false, message: "Content not found" });
+    await verifyStudentCourseGroup(content, student);
 
     const earlier = await NepLmsLessonContent.find({
       colid,
@@ -525,6 +546,7 @@ exports.completeContent = async (req, res) => {
         semester: content.semester,
         course: content.course,
         coursecode: content.coursecode,
+        coursegroup: content.coursegroup,
         faculty: content.faculty,
         facultyemail: content.facultyemail,
         student: student.name || "",

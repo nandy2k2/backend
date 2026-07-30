@@ -4,6 +4,7 @@ const path = require('path');
 const AWS = require('aws-sdk');
 const EmailConfiguration = require('../Models/emailconfigurationds');
 const AiConfiguration = require('../Models/aiconfigurationds');
+const OllamaConfiguration = require('../Models/ollamaconfigurationds');
 const Awsconfig = require('../Models/awsconfig');
 const AwsFileLibrary = require('../Models/awsfilelibraryds');
 const TranscriptMeeting = require('../Models/transcriptmeetingds');
@@ -64,6 +65,16 @@ const loadDefaultGeminiConfig = async (colid) => {
     || await AiConfiguration.findOne(baseQuery).sort({ updatedAt: -1, createdAt: -1 }).lean();
 };
 
+const loadOllamaConfig = async (colid, configId) => {
+  const baseQuery = { colid, active: /^Yes$/i };
+  if (text(configId)) {
+    const selected = await OllamaConfiguration.findOne({ ...baseQuery, _id: configId }).lean();
+    if (selected) return selected;
+  }
+  return await OllamaConfiguration.findOne({ ...baseQuery, default: /^Yes$/i }).sort({ _id: -1 }).lean()
+    || await OllamaConfiguration.findOne(baseQuery).sort({ _id: -1 }).lean();
+};
+
 const loadDefaultAwsConfig = async (colid) => {
   const baseQuery = { colid, type: /^aws$/i };
   return await Awsconfig.findOne({ ...baseQuery, default: /^Yes$/i }).sort({ _id: -1 }).lean()
@@ -73,6 +84,37 @@ const loadDefaultAwsConfig = async (colid) => {
 const readGeminiText = (payload = {}) => {
   const parts = payload.candidates?.[0]?.content?.parts || [];
   return parts.map((part) => part.text || '').join('\n').trim();
+};
+
+const callGeminiText = async ({ colid, model, prompt }) => {
+  const config = await loadDefaultGeminiConfig(colid);
+  if (!config?.apikey) throw new Error('Default active Gemini AI configuration is missing');
+  const selectedModel = text(model) || 'gemini-2.5-flash';
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${encodeURIComponent(config.apikey)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.35 }
+    })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error?.message || 'Gemini analysis failed');
+  return readGeminiText(payload);
+};
+
+const callOllamaText = async ({ colid, ollamaConfigId, prompt }) => {
+  const config = await loadOllamaConfig(colid, ollamaConfigId);
+  if (!config?.serveraddress || !config?.modelname) throw new Error('Active Ollama configuration is missing');
+  const server = text(config.serveraddress || 'http://localhost:11434').replace(/\/+$/, '');
+  const response = await fetch(`${server}/api/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: text(config.modelname), prompt, stream: false, options: { temperature: 0.35 } })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Ollama analysis failed');
+  return payload.response || '';
 };
 
 const parseGeminiJson = (value) => {
@@ -104,6 +146,24 @@ const buildTranscriptPrompt = (translateToEnglish) => `Analyze the uploaded audi
   "actionItems": "clear bullet list of action items, decisions, owners, and deadlines if available"
 }
 Do not include markdown, code fences, or commentary. ${translateToEnglish ? 'Translate the transcript to English.' : 'Keep englishTranslation as an empty string.'}`;
+
+const buildMeetingAnalysisPrompt = ({ meetingTitle, transcript, additionalPrompt }) => `Analyze this meeting transcript and return only valid JSON with these exact keys:
+{
+  "summary": "clear professional summary of the meeting",
+  "actionItems": "bullet list of action items with owners and deadlines where available",
+  "decisions": "bullet list of decisions made",
+  "risks": "bullet list of open risks or blockers"
+}
+
+Meeting title: ${text(meetingTitle) || 'Live meeting'}
+
+Transcript:
+${text(transcript)}
+
+Additional user instructions:
+${text(additionalPrompt) || 'None'}
+
+Do not include markdown fences or commentary.`;
 
 const uploadTranscriptAudioToAws = async ({ colid, file, user }) => {
   const config = await loadDefaultAwsConfig(colid);
@@ -278,6 +338,35 @@ exports.sendTranscriptEmail = async (req, res) => {
     });
 
     res.json({ success: true, msg: 'Transcript email sent successfully' });
+  } catch (err) {
+    res.status(500).json({ success: false, msg: err.message });
+  }
+};
+
+exports.analyzeTranscriptText = async (req, res) => {
+  try {
+    const colid = toNumber(req.body.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, msg: 'colid is required' });
+    const transcript = text(req.body.transcript);
+    if (!transcript) return res.status(400).json({ success: false, msg: 'Transcript text is required' });
+    const prompt = buildMeetingAnalysisPrompt({
+      meetingTitle: req.body.meetingTitle || req.body.title,
+      transcript,
+      additionalPrompt: req.body.additionalPrompt || req.body.prompt
+    });
+    const provider = text(req.body.provider).toLowerCase();
+    const raw = provider === 'ollama'
+      ? await callOllamaText({ colid, ollamaConfigId: req.body.ollamaConfigId || req.body.ollamaId, prompt })
+      : await callGeminiText({ colid, model: req.body.model, prompt });
+    const structured = parseGeminiJson(raw);
+    res.json({
+      success: true,
+      summary: text(structured.summary) || raw,
+      actionItems: text(structured.actionItems),
+      decisions: text(structured.decisions),
+      risks: text(structured.risks),
+      raw
+    });
   } catch (err) {
     res.status(500).json({ success: false, msg: err.message });
   }

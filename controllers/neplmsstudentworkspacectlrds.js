@@ -9,6 +9,7 @@ const NepLmsAssignmentSubmission = require("../Models/neplmsassignmentsubmission
 const NepLmsQuiz = require("../Models/neplmsquizds");
 const NepLmsQuizAttempt = require("../Models/neplmsquizattemptds");
 const Awsconfig = require("../Models/awsconfig");
+const NepLmsClassGroup = require("../Models/neplmsclassgroupds");
 
 const upload = multer({ storage: multer.memoryStorage() });
 exports.uploadMiddleware = upload.single("file");
@@ -33,6 +34,23 @@ const getStudent = async (source = {}) => {
 };
 
 const studentMajor = (student) => text(student.Major || student.major || student.majorname || student.department);
+const selectedCourseGroup = (source = {}) => text(source.coursegroup || source.coursegrouo || source.groupname);
+
+const verifyCourseGroupForStudent = async ({ colid, academicyear, regulation, programcode, semester, coursecode, coursegroup }, student) => {
+  if (!coursegroup) return;
+  const query = {
+    colid: Number(colid),
+    academicyear: text(academicyear),
+    programcode: text(programcode),
+    semester: text(semester),
+    coursecode: text(coursecode),
+    groupname: text(coursegroup),
+    regno: text(student.regno)
+  };
+  if (text(regulation)) query.regulation = text(regulation);
+  const row = await NepLmsClassGroup.findOne(query).lean();
+  if (!row) throw new Error("Course group is not available for this student");
+};
 
 const buildCourseQuery = (source, student) => {
   const query = { colid: Number(source.colid), status: "Active" };
@@ -100,6 +118,9 @@ exports.getCourseWorkspace = async (req, res) => {
     const student = await getStudent(req.query);
     const course = await verifyCourseForStudent(req.query, student);
     const base = { colid: Number(req.query.colid), academicyear: course.academicyear, semester: course.semester, coursecode: course.coursecode };
+    const coursegroup = selectedCourseGroup(req.query);
+    await verifyCourseGroupForStudent({ ...course, colid: req.query.colid, coursegroup }, student);
+    if (coursegroup) base.coursegroup = coursegroup;
     const timetableQuery = {
       ...base,
       ...(course.regulation ? { regulation: course.regulation } : {}),
@@ -108,15 +129,21 @@ exports.getCourseWorkspace = async (req, res) => {
       ...(student.section ? { section: student.section } : {})
     };
     const now = new Date();
+    const quizAttemptFilter = { colid: Number(req.query.colid), regno: text(req.query.regno), coursecode: course.coursecode };
+    if (coursegroup) quizAttemptFilter.coursegroup = coursegroup;
     const [resources, timetable, rawSubmissions, quizzes, quizAttempts] = await Promise.all([
       NepLmsResource.find(base).sort({ resourcetype: 1, duedate: 1, createdAt: -1 }).lean(),
       NepLmsTimetable.find(timetableQuery).sort({ classdate: 1, classtime: 1 }).lean(),
       NepLmsAssignmentSubmission.find({ colid: Number(req.query.colid), regno: text(req.query.regno), coursecode: course.coursecode }).sort({ submitteddate: -1 }).lean(),
       NepLmsQuiz.find({ ...base, status: "Active" }).sort({ startdatetime: 1 }).lean(),
-      NepLmsQuizAttempt.find({ colid: Number(req.query.colid), regno: text(req.query.regno), coursecode: course.coursecode }).sort({ submitteddate: -1 }).lean()
+      NepLmsQuizAttempt.find(quizAttemptFilter).sort({ submitteddate: -1 }).lean()
     ]);
+    const visibleAssignmentIds = new Set(resources.filter((item) => item.resourcetype === "Assignment").map((item) => String(item._id)));
+    const visibleSubmissions = coursegroup
+      ? rawSubmissions.filter((item) => visibleAssignmentIds.has(String(item.assignmentid || "")))
+      : rawSubmissions;
     const assignmentMarks = Object.fromEntries(resources.filter((item) => item.resourcetype === "Assignment").map((item) => [String(item._id), item.fullmarks || 0]));
-    const submissions = rawSubmissions.map((item) => ({
+    const submissions = visibleSubmissions.map((item) => ({
       ...item,
       fullmarks: item.fullmarks || assignmentMarks[String(item.assignmentid)] || 0
     }));
@@ -151,6 +178,7 @@ exports.submitAssignment = async (req, res) => {
     }).lean();
     if (!assignment) return res.status(404).json({ success: false, message: "Assignment not found" });
     await verifyCourseForStudent({ ...req.body, coursecode: assignment.coursecode, academicyear: assignment.academicyear, semester: assignment.semester }, student);
+    await verifyCourseGroupForStudent({ ...assignment, colid: req.body.colid, coursegroup: assignment.coursegroup }, student);
 
     const config = await getDefaultAwsConfig(req.body.colid);
     if (!config?.username || !config?.password || !config?.bucket || !config?.region) {
@@ -181,6 +209,7 @@ exports.submitAssignment = async (req, res) => {
       semester: assignment.semester,
       course: assignment.course,
       coursecode: assignment.coursecode,
+      coursegroup: assignment.coursegroup,
       assignmenttitle: assignment.title,
       fullmarks: assignment.fullmarks || 0,
       student: student.name || "",

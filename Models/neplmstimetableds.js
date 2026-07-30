@@ -22,6 +22,7 @@ const nepLmsTimetableSchema = new mongoose.Schema(
     specialization: { type: String, trim: true },
     course: { type: String, trim: true },
     coursecode: { type: String, trim: true },
+    coursegroup: { type: String, trim: true },
     classdate: { type: String, trim: true },
     classtime: { type: String, trim: true },
     period: { type: String, trim: true },
@@ -41,6 +42,6 @@ const nepLmsTimetableSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-nepLmsTimetableSchema.index({ colid: 1, academicyear: 1, semester: 1, coursecode: 1, classdate: 1 });
+nepLmsTimetableSchema.index({ colid: 1, academicyear: 1, semester: 1, coursecode: 1, coursegroup: 1, classdate: 1 });
 
 module.exports = mongoose.model("neplmstimetableds", nepLmsTimetableSchema);

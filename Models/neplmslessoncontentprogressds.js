@@ -21,6 +21,7 @@ const nepLmsLessonContentProgressSchema = new mongoose.Schema(
     semester: { type: String, trim: true },
     course: { type: String, trim: true },
     coursecode: { type: String, trim: true },
+    coursegroup: { type: String, trim: true },
     faculty: { type: String, trim: true },
     facultyemail: { type: String, trim: true },
     student: { type: String, trim: true },
@@ -37,6 +38,6 @@ const nepLmsLessonContentProgressSchema = new mongoose.Schema(
 );
 
 nepLmsLessonContentProgressSchema.index({ colid: 1, contentid: 1, regno: 1 }, { unique: true });
-nepLmsLessonContentProgressSchema.index({ colid: 1, academicyear: 1, semester: 1, coursecode: 1, regno: 1 });
+nepLmsLessonContentProgressSchema.index({ colid: 1, academicyear: 1, semester: 1, coursecode: 1, coursegroup: 1, regno: 1 });
 
 module.exports = mongoose.model("neplmslessoncontentprogressds", nepLmsLessonContentProgressSchema);

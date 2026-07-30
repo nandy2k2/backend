@@ -8,6 +8,7 @@ const Awsconfig = require("../Models/awsconfig");
 const NepLmsQuiz = require("../Models/neplmsquizds");
 const NepLmsQuizAttempt = require("../Models/neplmsquizattemptds");
 const NepLmsResource = require("../Models/neplmsresourceds");
+const NepLmsClassGroup = require("../Models/neplmsclassgroupds");
 
 const upload = multer({ storage: multer.memoryStorage() });
 exports.uploadMiddleware = upload.single("file");
@@ -124,6 +125,7 @@ const coursePayload = (body = {}) => ({
   semester: text(body.semester),
   course: text(body.course),
   coursecode: text(body.coursecode),
+  coursegroup: text(body.coursegroup || body.coursegrouo || body.groupname),
   faculty: text(body.faculty || body.facultyname),
   facultyemail: text(body.facultyemail),
   colid: Number(body.colid),
@@ -142,7 +144,7 @@ const quizPayload = (body = {}) => ({
 
 const courseFilter = (source = {}) => {
   const filter = { colid: Number(source.colid) };
-  ["academicyear", "regulation", "program", "programcode", "type", "major", "semester", "course", "coursecode", "facultyemail", "status"].forEach((field) => {
+  ["academicyear", "regulation", "program", "programcode", "type", "major", "semester", "course", "coursecode", "coursegroup", "facultyemail", "status"].forEach((field) => {
     if (text(source[field])) filter[field] = text(source[field]);
   });
   return filter;
@@ -232,6 +234,18 @@ const verifyQuizForStudent = async (quiz, student) => {
   if (major) query.subject = { $regex: `^${escRegex(major)}$`, $options: "i" };
   const course = await WorkloadAssignment.findOne(query).lean();
   if (!course) throw new Error("Quiz is not available for this student");
+  if (text(quiz.coursegroup)) {
+    const group = await NepLmsClassGroup.findOne({
+      colid: quiz.colid,
+      academicyear: quiz.academicyear,
+      programcode: quiz.programcode,
+      semester: quiz.semester,
+      coursecode: quiz.coursecode,
+      groupname: quiz.coursegroup,
+      regno: student.regno
+    }).lean();
+    if (!group) throw new Error("Quiz is not available for this course group");
+  }
 };
 
 exports.getQuizzes = async (req, res) => {
@@ -494,7 +508,7 @@ exports.getQuizAttempts = async (req, res) => {
   try {
     const filter = { colid: Number(req.query.colid) };
     if (!filter.colid) return res.status(400).json({ success: false, message: "colid is required" });
-    ["quizid", "coursecode", "regno", "academicyear", "semester", "facultyemail"].forEach((field) => {
+    ["quizid", "coursecode", "coursegroup", "regno", "academicyear", "semester", "facultyemail"].forEach((field) => {
       if (text(req.query[field])) filter[field] = text(req.query[field]);
     });
     const data = await NepLmsQuizAttempt.find(filter).sort({ submitteddate: -1, student: 1 }).lean();
@@ -527,6 +541,7 @@ exports.submitQuiz = async (req, res) => {
       semester: quiz.semester,
       course: quiz.course,
       coursecode: quiz.coursecode,
+      coursegroup: quiz.coursegroup,
       faculty: quiz.faculty,
       facultyemail: quiz.facultyemail,
       student: student.name || "",
@@ -563,7 +578,8 @@ exports.getActiveStudentQuizzes = async (req, res) => {
     }).lean();
     if (!course) return res.status(400).json({ success: false, message: "Course is not available for this student" });
     const now = new Date();
-    const quizzes = await NepLmsQuiz.find({
+    const coursegroup = text(req.query.coursegroup || req.query.coursegrouo || req.query.groupname);
+    const quizFilter = {
       colid: Number(req.query.colid),
       academicyear: course.academicyear,
       semester: course.semester,
@@ -571,8 +587,12 @@ exports.getActiveStudentQuizzes = async (req, res) => {
       status: "Active",
       startdatetime: { $lte: now },
       enddatetime: { $gte: now }
-    }).sort({ enddatetime: 1 }).lean();
-    const attempts = await NepLmsQuizAttempt.find({ colid: Number(req.query.colid), regno: student.regno, coursecode: course.coursecode }).lean();
+    };
+    if (coursegroup) quizFilter.coursegroup = coursegroup;
+    const quizzes = await NepLmsQuiz.find(quizFilter).sort({ enddatetime: 1 }).lean();
+    const attemptFilter = { colid: Number(req.query.colid), regno: student.regno, coursecode: course.coursecode };
+    if (coursegroup) attemptFilter.coursegroup = coursegroup;
+    const attempts = await NepLmsQuizAttempt.find(attemptFilter).lean();
     const attemptedIds = new Set(attempts.map((attempt) => String(attempt.quizid)));
     res.json({ success: true, data: quizzes.filter((quiz) => !attemptedIds.has(String(quiz._id))), attempts });
   } catch (error) {
