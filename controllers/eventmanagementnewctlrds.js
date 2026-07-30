@@ -14,7 +14,9 @@ const {
   VehicleAllocationNew,
   EventFeedbackNew,
   EventCertificateNew,
-  EventPaperSubmissionNew
+  EventPaperSubmissionNew,
+  EventChecklistConfigNew,
+  EventChecklistDetailNew
 } = require("../Models/eventmanagementnewds");
 const AiConfiguration = require("../Models/aiconfigurationds");
 const OllamaConfiguration = require("../Models/ollamaconfigurationds");
@@ -35,7 +37,9 @@ const models = {
   vehicleallocations: VehicleAllocationNew,
   feedback: EventFeedbackNew,
   certificates: EventCertificateNew,
-  papersubmissions: EventPaperSubmissionNew
+  papersubmissions: EventPaperSubmissionNew,
+  checklistconfigs: EventChecklistConfigNew,
+  checklistdetails: EventChecklistDetailNew
 };
 
 const modelFields = {
@@ -50,11 +54,13 @@ const modelFields = {
   vehicleallocations: ["eventid", "eventname", "eventcode", "requirementid", "attendee", "email", "requirementtype", "vehicleno", "vehiclename", "vehicletype", "drivername", "driverphone", "allocationdate", "allocationtime", "location", "destination", "allocationmode", "status", "remarks"],
   feedback: ["eventid", "attendeeid", "eventname", "eventcode", "attendee", "email", "rating", "contentquality", "hospitality", "logistics", "comments", "submitteddate"],
   certificates: ["eventid", "attendeeid", "eventname", "eventcode", "attendee", "email", "certificateno", "issuedate", "certificatehtml", "status"],
-  papersubmissions: ["eventid", "attendeeid", "eventname", "eventcode", "attendee", "email", "phone", "papertitle", "authors", "abstract", "keywords", "paperlink", "paperfilename", "submitteddate", "status", "remarks"]
+  papersubmissions: ["eventid", "attendeeid", "eventname", "eventcode", "attendee", "email", "phone", "papertitle", "authors", "abstract", "keywords", "paperlink", "paperfilename", "submitteddate", "status", "remarks"],
+  checklistconfigs: ["eventtype", "category", "checklistitem", "description", "mandatory", "order", "status"],
+  checklistdetails: ["eventid", "eventname", "eventcode", "eventtype", "category", "checklistitem", "description", "mandatory", "order", "checkliststatus", "detail", "responsible", "targetdate", "completeddate", "remarks"]
 };
 
-const numberFields = new Set(["colid", "rentperday", "noofbeds", "capacity", "passengercount", "rating", "contentquality", "hospitality", "logistics"]);
-const dateFields = new Set(["startdate", "enddate", "registrationstartdate", "registrationenddate", "approveddate", "fromdate", "todate", "requirementdate", "allocationdate", "submitteddate", "issuedate"]);
+const numberFields = new Set(["colid", "rentperday", "noofbeds", "capacity", "passengercount", "rating", "contentquality", "hospitality", "logistics", "order"]);
+const dateFields = new Set(["startdate", "enddate", "registrationstartdate", "registrationenddate", "approveddate", "fromdate", "todate", "requirementdate", "allocationdate", "submitteddate", "issuedate", "targetdate", "completeddate"]);
 const clean = (value) => String(value ?? "").trim();
 const num = (value) => {
   const parsed = Number(value);
@@ -463,16 +469,87 @@ exports.submitPaper = async (req, res) => {
 exports.report = async (req, res) => {
   try {
     const colid = num(req.body.colid);
-    const [events, attendees, reservations, vehicles, allocations, feedback, papersubmissions] = await Promise.all([
+    const [events, attendees, reservations, vehicles, allocations, feedback, papersubmissions, checklistconfigs, checklistdetails] = await Promise.all([
       EventNew.find({ colid }).lean(),
       AttendeeNew.find({ colid }).lean(),
       GuestHouseReservationNew.find({ colid }).lean(),
       VehicleNew.find({ colid }).lean(),
       VehicleAllocationNew.find({ colid }).lean(),
       EventFeedbackNew.find({ colid }).lean(),
-      EventPaperSubmissionNew.find({ colid }).lean()
+      EventPaperSubmissionNew.find({ colid }).lean(),
+      EventChecklistConfigNew.find({ colid }).lean(),
+      EventChecklistDetailNew.find({ colid }).lean()
     ]);
-    res.json({ success: true, data: { events, attendees, reservations, vehicles, allocations, feedback, papersubmissions } });
+    res.json({ success: true, data: { events, attendees, reservations, vehicles, allocations, feedback, papersubmissions, checklistconfigs, checklistdetails } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.checklistReport = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const eventQuery = { colid };
+    if (req.body.fromdate || req.body.todate) {
+      eventQuery.startdate = {};
+      if (req.body.fromdate) eventQuery.startdate.$gte = new Date(req.body.fromdate);
+      if (req.body.todate) eventQuery.startdate.$lte = new Date(req.body.todate);
+    }
+    (req.body.filters || []).forEach(({ field, value }) => {
+      if (!field || value === undefined || value === "") return;
+      if (["eventname", "eventcode", "type", "mode", "academicyear", "venue", "status"].includes(field)) {
+        eventQuery[field] = { $regex: clean(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" };
+      }
+    });
+    const events = await EventNew.find(eventQuery).sort({ startdate: -1 }).lean();
+    const eventIds = events.map((event) => event._id);
+    const detailQuery = { colid, eventid: { $in: eventIds } };
+    (req.body.filters || []).forEach(({ field, value }) => {
+      if (!field || value === undefined || value === "") return;
+      if (["category", "checklistitem", "checkliststatus", "responsible", "mandatory"].includes(field)) {
+        detailQuery[field] = { $regex: clean(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" };
+      }
+    });
+    const details = await EventChecklistDetailNew.find(detailQuery).sort({ eventname: 1, order: 1, category: 1 }).lean();
+    const configs = await EventChecklistConfigNew.find({ colid, status: { $ne: "Inactive" } }).sort({ eventtype: 1, order: 1, category: 1 }).lean();
+    const detailKey = (row) => [String(row.eventid || ""), clean(row.category), clean(row.checklistitem)].join("||");
+    const detailMap = new Map(details.map((row) => [detailKey(row), row]));
+    const rows = [];
+    events.forEach((event) => {
+      const matchingConfigs = configs.filter((cfg) => !cfg.eventtype || clean(cfg.eventtype).toLowerCase() === clean(event.type).toLowerCase());
+      matchingConfigs.forEach((cfg) => {
+        const detail = detailMap.get([String(event._id), clean(cfg.category), clean(cfg.checklistitem)].join("||"));
+        rows.push({
+          id: `${event._id}-${cfg._id}`,
+          eventid: event._id,
+          eventname: event.eventname,
+          eventcode: event.eventcode,
+          eventtype: event.type,
+          mode: event.mode,
+          academicyear: event.academicyear,
+          startdate: event.startdate,
+          enddate: event.enddate,
+          venue: event.venue,
+          category: cfg.category,
+          checklistitem: cfg.checklistitem,
+          mandatory: cfg.mandatory,
+          order: cfg.order,
+          checkliststatus: detail?.checkliststatus || "Pending",
+          detail: detail?.detail || "",
+          responsible: detail?.responsible || "",
+          targetdate: detail?.targetdate || null,
+          completeddate: detail?.completeddate || null,
+          remarks: detail?.remarks || ""
+        });
+      });
+    });
+    const totals = rows.reduce((acc, row) => {
+      acc.total += 1;
+      const status = clean(row.checkliststatus) || "Pending";
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    }, { total: 0 });
+    res.json({ success: true, data: rows, events, details, configs, totals });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

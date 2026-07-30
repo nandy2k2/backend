@@ -356,3 +356,28 @@ exports.overrideExamrollRuleStatus = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+exports.bulkUpdateExamrollRuleRows = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(text).filter(Boolean) : [];
+    const action = text(req.body.action);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one exam roll entry" });
+    let update = {};
+    if (action === "admiteligible") {
+      update = { admitcardeligible: "Yes" };
+    } else if (action === "attendancepresent") {
+      update = { attendance: "Yes", attended: "Yes" };
+    } else {
+      return res.status(400).json({ success: false, message: "Valid action is required" });
+    }
+    const result = await ConductExamRoll.updateMany(
+      { _id: { $in: ids }, colid },
+      { $set: update }
+    );
+    res.json({ success: true, updated: result.modifiedCount || result.nModified || 0 });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

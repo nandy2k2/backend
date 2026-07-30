@@ -723,6 +723,7 @@ app.post('/api/v2/ollama-configuration-update', ollamaConfigurationController.up
 app.post('/api/v2/ollama-configuration-delete', ollamaConfigurationController.deleteOllamaConfiguration);
 app.get('/api/v2/event-management-new/options', eventManagementNewController.options);
 app.post('/api/v2/event-management-new/report', eventManagementNewController.report);
+app.post('/api/v2/event-management-new/checklist-report', eventManagementNewController.checklistReport);
 app.get('/api/v2/event-management-new/public/events', eventManagementNewController.publicEvents);
 app.post('/api/v2/event-management-new/public/register', eventManagementNewController.publicRegister);
 app.post('/api/v2/event-management-new/public/feedback', eventManagementNewController.submitFeedback);
@@ -5373,6 +5374,7 @@ app.post("/api/v2/conductexam/examroll-rules/check-fees", exameligibilityctlrds.
 app.post("/api/v2/conductexam/examroll-rules/check-disciplinary", exameligibilityctlrds.checkExamrollDisciplinary);
 app.post("/api/v2/conductexam/examroll-rules/check-backlogs", exameligibilityctlrds.checkExamrollBacklogs);
 app.post("/api/v2/conductexam/examroll-rules/override", exameligibilityctlrds.overrideExamrollRuleStatus);
+app.post("/api/v2/conductexam/examroll-rules/bulk-update", exameligibilityctlrds.bulkUpdateExamrollRuleRows);
 app.get("/api/v2/conductexam/hallticket-options", conductexamhallticketctlrds.options);
 app.get("/api/v2/conductexam/hallticket-eligible-students", conductexamhallticketctlrds.getEligibleStudents);
 app.get("/api/v2/conductexam/hallticket", conductexamhallticketctlrds.getHallTicket);

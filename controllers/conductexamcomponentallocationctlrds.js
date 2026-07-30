@@ -593,14 +593,17 @@ exports.monitoringOptions = async (req, res) => {
   try {
     const colid = numberOrUndefined(req.query.colid);
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
-    const [allocations, examiners] = await Promise.all([
+    const [allocations, marks, courses, examiners] = await Promise.all([
       ComponentAllocation.find({ colid }).select(allocationFields.join(" ")).lean(),
+      ComponentMarks.find({ colid }).select(marksFields.join(" ")).lean(),
+      ConductExamCourse.find({ colid }).select(courseFields.join(" ")).lean(),
       ConductExamExaminer.find({ colid }).sort({ examinername: 1 }).lean()
     ]);
     const fields = ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "examinername", "examineremail", "componenttype", "assessmentcomponent"];
+    const optionRows = [...allocations, ...marks, ...courses, ...examiners];
     res.json({
       success: true,
-      options: Object.fromEntries(fields.map((field) => [field, uniq(allocations.map((row) => row[field]))])),
+      options: Object.fromEntries(fields.map((field) => [field, uniq(optionRows.map((row) => row[field]))])),
       examiners
     });
   } catch (err) {

@@ -216,6 +216,36 @@ const EventPaperSubmissionNew = model("eventnewpapersubmissionds", {
   remarks: String
 });
 
+const EventChecklistConfigNew = model("eventnewchecklistconfigds", {
+  ...base,
+  eventtype: { type: String, index: true },
+  category: String,
+  checklistitem: String,
+  description: String,
+  mandatory: { type: String, default: "Yes" },
+  order: { type: Number, default: 0 },
+  status: { type: String, default: "Active" }
+});
+
+const EventChecklistDetailNew = model("eventnewchecklistdetailds", {
+  ...base,
+  eventid: { type: mongoose.Schema.Types.ObjectId, ref: "eventneweventds", index: true },
+  eventname: String,
+  eventcode: String,
+  eventtype: String,
+  category: String,
+  checklistitem: String,
+  description: String,
+  mandatory: String,
+  order: { type: Number, default: 0 },
+  checkliststatus: { type: String, default: "Pending" },
+  detail: String,
+  responsible: String,
+  targetdate: Date,
+  completeddate: Date,
+  remarks: String
+});
+
 module.exports = {
   EventNew,
   AttendeeNew,
@@ -228,5 +258,7 @@ module.exports = {
   VehicleAllocationNew,
   EventFeedbackNew,
   EventCertificateNew,
-  EventPaperSubmissionNew
+  EventPaperSubmissionNew,
+  EventChecklistConfigNew,
+  EventChecklistDetailNew
 };
