@@ -8,6 +8,7 @@ const RoomResource = require("../Models/roomresourceds");
 const User = require("../Models/user");
 const AcademicCalendar = require("../Models/macadcal");
 const AiConfiguration = require("../Models/aiconfigurationds");
+const InsDetails = require("../Models/insdetails");
 
 const text = (value) => String(value || "").trim();
 const number = (value) => {
@@ -212,6 +213,7 @@ const rollPayload = (body = {}) => ({
   email: text(body.email),
   phone: text(body.phone),
   section: text(body.section),
+  examsection: text(body.examsection || body.examSection || body["Exam Section"]),
   applied: text(body.applied) || "Yes",
   admitcardeligible: text(body.admitcardeligible) || "Yes",
   attended: text(body.attended) || "No",
@@ -292,6 +294,64 @@ const buildFilter = (source = {}, fields = []) => {
   });
   return filter;
 };
+
+const rollListFilterFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "student", "regno", "email", "phone", "section", "examsection", "applied", "admitcardeligible", "attended", "attendance", "fees", "disciplinary", "atkt", "examdate", "examslot", "campus", "building", "examroom", "seatno", "examseatno"];
+const defaultRollListComponents = ["Section-A", "Section-B", "Pr"];
+
+const normalizeExamSection = (value) => {
+  const item = text(value);
+  if (!item) return "";
+  const lower = item.toLowerCase().replace(/\s+/g, "");
+  if (["sectiona", "seca", "a"].includes(lower)) return "Section-A";
+  if (["sectionb", "secb", "b"].includes(lower)) return "Section-B";
+  if (["pr", "practical", "pract"].includes(lower)) return "Pr";
+  return item;
+};
+
+const parseExamSections = (value) => {
+  const raw = text(value);
+  if (!raw) return [...defaultRollListComponents];
+  const parts = raw.split(/[,;|/]+/).map(normalizeExamSection).filter(Boolean);
+  return parts.length ? uniq(parts) : [...defaultRollListComponents];
+};
+
+const parseDynamicFilters = (raw) => {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    return [];
+  }
+};
+
+const addDynamicFiltersToQuery = (query, dynamicFilters = []) => {
+  dynamicFilters.forEach((item) => {
+    const field = text(item.field);
+    if (!rollListFilterFields.includes(field)) return;
+    const values = Array.isArray(item.values)
+      ? item.values.map(text).filter(Boolean)
+      : text(item.value).split(",").map(text).filter(Boolean);
+    if (!values.length) return;
+    query[field] = values.length === 1 ? values[0] : { $in: values };
+  });
+};
+
+const yearLabelFromSemester = (semester) => {
+  const sem = Number(text(semester).replace(/[^0-9]/g, ""));
+  if (!sem) return text(semester);
+  if (sem <= 2) return "First";
+  if (sem <= 4) return "Second";
+  if (sem <= 6) return "Third";
+  if (sem <= 8) return "Fourth";
+  return "Final";
+};
+
+const rollListOptionsFromRows = (rows = []) => rollListFilterFields.reduce((acc, field) => {
+  acc[field] = uniq(rows.map((row) => row[field]));
+  return acc;
+}, {});
 
 const shuffle = (items = []) => {
   const copy = [...items];
@@ -634,10 +694,166 @@ exports.getCourseMapOptions = async (req, res) => {
 
 exports.getExamRolls = async (req, res) => {
   try {
-    const filter = buildFilter(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "student", "regno", "email", "phone", "section", "applied", "admitcardeligible", "attended", "attendance", "fees", "disciplinary", "noofbacklogs", "atkt", "remarks", "examdate", "examslot", "campus", "building", "examroom", "seatno", "examseatno"]);
+    const filter = buildFilter(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "student", "regno", "email", "phone", "section", "examsection", "applied", "admitcardeligible", "attended", "attendance", "fees", "disciplinary", "noofbacklogs", "atkt", "remarks", "examdate", "examslot", "campus", "building", "examroom", "seatno", "examseatno"]);
     if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const data = await ConductExamRoll.find(filter).sort({ program: 1, semester: 1, course: 1, regno: 1 }).lean();
     res.json({ success: true, data: data.map((row) => ({ ...row, examseatno: row.examseatno || String(row._id) })) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getExamRollListReportOptions = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const rows = await ConductExamRoll.find({ colid }).select(rollListFilterFields.join(" ")).lean();
+    const regnos = uniq(rows.map((row) => row.regno));
+    const users = regnos.length
+      ? await User.find({ colid, regno: { $in: regnos } }).select("admissionyear academicyear").lean()
+      : [];
+    const batchOptions = uniq(users.map((user) => user.admissionyear || user.academicyear));
+    res.json({ success: true, options: { ...rollListOptionsFromRows(rows), batch: batchOptions, admissionyear: batchOptions } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getExamRollListReport = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+
+    const filter = { colid };
+    addDynamicFiltersToQuery(filter, parseDynamicFilters(req.query.filters));
+    const rows = await ConductExamRoll.find(filter).sort({ program: 1, semester: 1, coursecode: 1, regno: 1 }).lean();
+    const regnos = uniq(rows.map((row) => row.regno));
+    const users = await User.find({ colid, regno: { $in: regnos } })
+      .select("name regno fathername guardianname admissionyear academicyear rollno section program programcode photo email phone")
+      .lean();
+    const userMap = new Map(users.map((user) => [text(user.regno), user]));
+
+    const courseMap = new Map();
+    const courseComponentMap = new Map();
+    rows.forEach((row) => {
+      const key = text(row.coursecode) || text(row.course);
+      if (!key || courseMap.has(key)) return;
+      courseMap.set(key, {
+        coursecode: text(row.coursecode),
+        course: text(row.course),
+        subject: text(row.subject),
+        type: text(row.type),
+        semester: text(row.semester)
+      });
+    });
+    rows.forEach((row) => {
+      const key = text(row.coursecode) || text(row.course);
+      if (!key) return;
+      if (!courseComponentMap.has(key)) courseComponentMap.set(key, new Set());
+      parseExamSections(row.examsection).forEach((component) => courseComponentMap.get(key).add(component));
+    });
+    const courses = [...courseMap.values()]
+      .map((course) => {
+        const key = text(course.coursecode) || text(course.course);
+        const components = [...(courseComponentMap.get(key) || new Set())];
+        return { ...course, components: components.length ? components : [...defaultRollListComponents] };
+      })
+      .sort((a, b) => text(a.coursecode || a.course).localeCompare(text(b.coursecode || b.course), undefined, { numeric: true }));
+
+    const studentMap = new Map();
+    rows.forEach((row) => {
+      const key = text(row.regno) || text(row.email) || text(row.student);
+      if (!key) return;
+      const user = userMap.get(text(row.regno)) || {};
+      if (!studentMap.has(key)) {
+        studentMap.set(key, {
+          id: key,
+          student: text(row.student || user.name),
+          regno: text(row.regno || user.regno),
+          enrollmentno: text(row.regno || user.regno),
+          rollno: text(user.rollno),
+          fathername: text(user.fathername || user.guardianname),
+          batch: text(user.admissionyear || user.academicyear || row.academicyear),
+          section: text(row.section || user.section),
+          courses: {}
+        });
+      }
+      const courseKey = text(row.coursecode) || text(row.course);
+      const isApplied = text(row.applied).toLowerCase() !== "no";
+      const existing = studentMap.get(key).courses[courseKey] || {};
+      parseExamSections(row.examsection).forEach((component) => {
+        existing[component] = isApplied ? "1" : "";
+      });
+      existing.sectionA = existing["Section-A"] || "";
+      existing.sectionB = existing["Section-B"] || "";
+      existing.practical = existing.Pr || "";
+      studentMap.get(key).courses[courseKey] = existing;
+    });
+
+    const batchFilterValues = parseDynamicFilters(req.query.filters)
+      .filter((item) => ["batch", "admissionyear"].includes(text(item.field)))
+      .flatMap((item) => Array.isArray(item.values) ? item.values.map(text) : [text(item.value)])
+      .filter(Boolean);
+    const students = [...studentMap.values()]
+      .filter((student) => !batchFilterValues.length || batchFilterValues.includes(student.batch))
+      .sort((a, b) => {
+        const batchSort = text(a.batch).localeCompare(text(b.batch), undefined, { numeric: true });
+        if (batchSort) return batchSort;
+        return text(a.enrollmentno || a.student).localeCompare(text(b.enrollmentno || b.student), undefined, { numeric: true });
+      })
+      .map((student, index) => ({ ...student, serial: index + 1 }));
+
+    const totals = courses.map((course) => {
+      const key = text(course.coursecode) || text(course.course);
+      const components = {};
+      (course.components || defaultRollListComponents).forEach((component) => {
+        components[component] = students.filter((student) => student.courses[key]?.[component]).length;
+      });
+      return {
+        coursecode: course.coursecode,
+        components,
+        sectionA: components["Section-A"] || 0,
+        sectionB: components["Section-B"] || 0,
+        practical: components.Pr || 0
+      };
+    });
+
+    const institution = await InsDetails.findOne({ colid }).sort({ _id: -1 }).lean();
+    const first = rows[0] || {};
+    const exam = first.exam || "";
+    const examMaster = first.examcode ? await ConductExam.findOne({ colid, examcode: first.examcode }).lean() : null;
+    const header = {
+      institutionname: text(institution?.institutionname) || "Institution",
+      address: text(institution?.address),
+      logolink: text(institution?.logolink),
+      examName: text(exam || examMaster?.examname),
+      institute: text(req.query.institute || institution?.institutionname),
+      examCentre: text(req.query.examCentre || req.query.examcentre),
+      course: text(first.program || first.programcode),
+      year: yearLabelFromSemester(first.semester),
+      status: text(req.query.statusLabel || examMaster?.type || "Main")
+    };
+
+    const optionRows = await ConductExamRoll.find({ colid }).select(rollListFilterFields.join(" ")).lean();
+    const optionRegnos = uniq(optionRows.map((row) => row.regno));
+    const optionUsers = optionRegnos.length
+      ? await User.find({ colid, regno: { $in: optionRegnos } }).select("admissionyear academicyear").lean()
+      : [];
+    const batchOptions = uniq(optionUsers.map((user) => user.admissionyear || user.academicyear));
+    res.json({
+      success: true,
+      header,
+      courses,
+      students,
+      totals,
+      options: { ...rollListOptionsFromRows(optionRows), batch: batchOptions, admissionyear: batchOptions },
+      summary: {
+        studentCount: students.length,
+        courseCount: courses.length,
+        theoryTotal: totals.reduce((sum, item) => sum + item.sectionA + item.sectionB, 0),
+        practicalTotal: totals.reduce((sum, item) => sum + item.practical, 0)
+      }
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

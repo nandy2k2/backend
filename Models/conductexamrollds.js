@@ -18,6 +18,7 @@ const conductExamRollSchema = new mongoose.Schema({
   email: { type: String, trim: true },
   phone: { type: String, trim: true },
   section: { type: String, trim: true },
+  examsection: { type: String, trim: true },
   applied: { type: String, enum: ["Yes", "No"], default: "Yes" },
   admitcardeligible: { type: String, enum: ["Yes", "No"], default: "Yes" },
   attended: { type: String, enum: ["Yes", "No"], default: "No" },

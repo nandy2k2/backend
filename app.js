@@ -5384,6 +5384,8 @@ app.post("/api/v2/feedback-advanced/analyze-sentiment", feedbackadvancedctlrds.a
 app.post("/api/v2/conductexam/examcourses-autoschedule", conductexamctlrds.autoScheduleExamCourses);
 app.post("/api/v2/conductexam/examcourses-ai-schedule", conductexamctlrds.aiScheduleExamCourses);
 app.get("/api/v2/conductexam/examrolls", conductexamctlrds.getExamRolls);
+app.get("/api/v2/conductexam/examroll-list-report-options", conductexamctlrds.getExamRollListReportOptions);
+app.get("/api/v2/conductexam/examroll-list-report", conductexamctlrds.getExamRollListReport);
 app.post("/api/v2/conductexam/examrolls-generate", conductexamctlrds.generateExamRolls);
 app.post("/api/v2/conductexam/examrolls", conductexamctlrds.saveExamRoll);
 app.post("/api/v2/conductexam/examrolls-delete", conductexamctlrds.deleteExamRoll);
