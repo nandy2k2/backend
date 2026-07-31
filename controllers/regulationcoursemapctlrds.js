@@ -4,7 +4,7 @@ const MPrograms = require("../Models/mprograms");
 const RegulationSubject = require("../Models/regulationsubjectds");
 
 const allowedTypes = new Set(["Major", "Minor", "AEC", "SEC", "VAC", "IDC"]);
-const allowedCourseTypes = new Set(["Theory", "Practical"]);
+const allowedCourseTypes = new Set(["Theory", "Practical", "Tutorial", "Internship", "Project", "Experiential learning"]);
 const allowedDeliveryTypes = new Set(["Compulsory", "Elective"]);
 
 const toNumber = (value) => {
@@ -14,6 +14,11 @@ const toNumber = (value) => {
 };
 
 const text = (value) => String(value || "").trim();
+const normalizeCourseType = (value) => {
+  const item = text(value);
+  if (/^tutotial$/i.test(item)) return "Tutorial";
+  return item;
+};
 
 const cleanPayload = (input = {}) => ({
   academicyear: text(input.academicyear || input.academicYear),
@@ -25,7 +30,7 @@ const cleanPayload = (input = {}) => ({
   programcode: text(input.programcode),
   course: text(input.course),
   coursecode: text(input.coursecode),
-  coursetype: allowedCourseTypes.has(text(input.coursetype || input.courseType)) ? text(input.coursetype || input.courseType) : "Theory",
+  coursetype: allowedCourseTypes.has(normalizeCourseType(input.coursetype || input.courseType)) ? normalizeCourseType(input.coursetype || input.courseType) : "Theory",
   deliverytype: allowedDeliveryTypes.has(text(input.deliverytype || input.deliveryType || input["Delivery Type"])) ? text(input.deliverytype || input.deliveryType || input["Delivery Type"]) : "Compulsory",
   coursemastercode: text(input.coursemastercode || input.courseMasterCode),
   credit: toNumber(input.credit) || 0,

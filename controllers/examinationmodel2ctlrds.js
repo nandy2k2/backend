@@ -374,6 +374,12 @@ exports.save = async (req, res) => {
 
 exports.delete = async (req, res) => {
   try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (ids.length) {
+      const result = await ExamMarks.deleteMany({ _id: { $in: ids }, colid: number(req.body.colid) });
+      if (!result.deletedCount) return res.status(404).json({ success: false, message: "No marks entries found" });
+      return res.json({ success: true, message: "Deleted", deleted: result.deletedCount });
+    }
     const data = await ExamMarks.findOneAndDelete({ _id: req.body.id || req.body._id, colid: number(req.body.colid) });
     if (!data) return res.status(404).json({ success: false, message: "Marks entry not found" });
     res.json({ success: true, message: "Deleted" });

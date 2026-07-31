@@ -3,6 +3,7 @@ const Source = require("../Models/sourceds");
 const PipelineStage = require("../Models/PipelineStageag");
 const User = require("../Models/user");
 const Institution = require("../Models/insdetails");
+const LeadActivity = require("../Models/leadactivityds");
 
 const asNumber = (value) => {
   const parsed = Number(value);
@@ -323,7 +324,124 @@ exports.updateMyLeadStatus = async (req, res) => {
       { new: true }
     );
     if (!row) return res.status(404).json({ success: false, message: "Lead not found for this user" });
+    await LeadActivity.create({
+      lead_id: row._id,
+      colid: asNumber(req.body.colid),
+      activity_type: "Lead Update",
+      activity_date: new Date(),
+      performed_by: assignedto,
+      notes: clean(req.body.comments),
+      outcome: [update.pipeline_stage, update.leadstatus].filter(Boolean).join(" / "),
+      next_action: update.next_followup_date ? "Follow up" : "",
+      next_followup_date: update.next_followup_date
+    });
     res.json({ success: true, data: row });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.dailyInteractionReport = async (req, res) => {
+  try {
+    const colid = asNumber(req.body.colid || req.query.colid);
+    const fromDate = clean(req.body.fromDate || req.query.fromDate);
+    const toDate = clean(req.body.toDate || req.query.toDate);
+    const useremail = clean(req.body.useremail || req.query.useremail);
+    const match = { colid, activity_type: "Lead Update" };
+    if (fromDate || toDate) {
+      match.activity_date = {};
+      if (fromDate) match.activity_date.$gte = new Date(`${fromDate}T00:00:00.000Z`);
+      if (toDate) match.activity_date.$lte = new Date(`${toDate}T23:59:59.999Z`);
+    }
+    if (useremail && useremail !== "All") match.performed_by = useremail;
+    const [activities, users, loggedLeadIds] = await Promise.all([
+      LeadActivity.find(match).populate("lead_id", "name phone email source course_interested pipeline_stage leadstatus").sort({ activity_date: -1 }).lean(),
+      User.find({ colid }).select("name email role department").lean(),
+      LeadActivity.distinct("lead_id", { colid, activity_type: "Lead Update" })
+    ]);
+    const userMap = new Map(users.map((item) => [clean(item.email).toLowerCase(), item]));
+    const activityRows = activities.map((item) => {
+      const user = userMap.get(clean(item.performed_by).toLowerCase()) || {};
+      const lead = item.lead_id || {};
+      return {
+        _id: item._id,
+        activitydate: item.activity_date,
+        activitydateshort: item.activity_date ? new Date(item.activity_date).toISOString().slice(0, 10) : "",
+        user: user.name || item.performed_by,
+        useremail: item.performed_by,
+        nextfollowupdate: item.next_followup_date,
+        nextfollowupdateshort: item.next_followup_date ? new Date(item.next_followup_date).toISOString().slice(0, 10) : "",
+        comments: item.notes || "",
+        outcome: item.outcome || "",
+        lead: lead.name || "",
+        leadphone: lead.phone || "",
+        leademail: lead.email || "",
+        source: lead.source || "",
+        course_interested: lead.course_interested || "",
+        pipeline_stage: lead.pipeline_stage || "",
+        leadstatus: lead.leadstatus || ""
+      };
+    });
+    const legacyLeadQuery = {
+      colid,
+      _id: { $nin: loggedLeadIds },
+      $or: [
+        { comments: { $exists: true, $nin: ["", null] } },
+        { fcomments: { $exists: true, $nin: ["", null] } }
+      ]
+    };
+    if (fromDate || toDate) Object.assign(legacyLeadQuery, dateRange(fromDate, toDate, "updatedAt"));
+    if (useremail && useremail !== "All") legacyLeadQuery.assignedto = useremail;
+    const legacyLeads = await Lead.find(legacyLeadQuery)
+      .select("name phone email source course_interested pipeline_stage leadstatus assignedto comments fcomments next_followup_date updatedAt")
+      .sort({ updatedAt: -1 })
+      .lean();
+    const legacyRows = legacyLeads.map((lead) => {
+      const user = userMap.get(clean(lead.assignedto).toLowerCase()) || {};
+      const commentText = clean(lead.comments) || clean(lead.fcomments);
+      return {
+        _id: `legacy-${lead._id}`,
+        activitydate: lead.updatedAt,
+        activitydateshort: lead.updatedAt ? new Date(lead.updatedAt).toISOString().slice(0, 10) : "",
+        user: user.name || lead.assignedto,
+        useremail: lead.assignedto,
+        nextfollowupdate: lead.next_followup_date,
+        nextfollowupdateshort: lead.next_followup_date ? new Date(lead.next_followup_date).toISOString().slice(0, 10) : "",
+        comments: commentText,
+        outcome: "Legacy My Leads comment",
+        lead: lead.name || "",
+        leadphone: lead.phone || "",
+        leademail: lead.email || "",
+        source: lead.source || "",
+        course_interested: lead.course_interested || "",
+        pipeline_stage: lead.pipeline_stage || "",
+        leadstatus: lead.leadstatus || ""
+      };
+    });
+    const rows = [...activityRows, ...legacyRows].sort((a, b) => new Date(b.activitydate || 0) - new Date(a.activitydate || 0));
+    const byDateMap = new Map();
+    const byUserMap = new Map();
+    rows.forEach((row) => {
+      byDateMap.set(row.activitydateshort, (byDateMap.get(row.activitydateshort) || 0) + 1);
+      byUserMap.set(row.user || row.useremail, (byUserMap.get(row.user || row.useremail) || 0) + 1);
+    });
+    const byDate = Array.from(byDateMap.entries()).map(([date, count]) => ({ date, count })).sort((a, b) => a.date.localeCompare(b.date));
+    const byUser = Array.from(byUserMap.entries()).map(([user, count]) => ({ user, count })).sort((a, b) => b.count - a.count);
+    const today = new Date().toISOString().slice(0, 10);
+    const dueFollowups = rows.filter((row) => row.nextfollowupdateshort && row.nextfollowupdateshort <= today).length;
+    res.json({
+      success: true,
+      data: rows,
+      summary: {
+        total: rows.length,
+        users: byUser.length,
+        dueFollowups,
+        withComments: rows.filter((row) => clean(row.comments)).length,
+        byDate,
+        byUser
+      },
+      users
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

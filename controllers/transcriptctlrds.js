@@ -11,7 +11,7 @@ const TranscriptMeeting = require('../Models/transcriptmeetingds');
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 }
+  limits: { fileSize: 200 * 1024 * 1024 }
 });
 
 exports.uploadAudioMiddleware = upload.single('audio');
@@ -31,7 +31,7 @@ const s3Url = (bucket, region, key) => {
   return `https://${bucket}.s3.${region}.amazonaws.com/${encodedKey}`;
 };
 
-const cleanFilename = (filename) => path.basename(filename || 'recorded-audio.webm').replace(/[^\w.\-() ]/g, '_');
+const cleanFilename = (filename) => path.basename(filename || 'recorded-media.webm').replace(/[^\w.\-() ]/g, '_');
 
 const getSmtpHost = (config = {}) => {
   if (config.smtp) return config.smtp;
@@ -138,7 +138,7 @@ const parseGeminiJson = (value) => {
   }
 };
 
-const buildTranscriptPrompt = (translateToEnglish) => `Analyze the uploaded audio and return only valid JSON with these exact keys:
+const buildTranscriptPrompt = (translateToEnglish) => `Analyze the uploaded audio or video recording and return only valid JSON with these exact keys:
 {
   "transcript": "accurate transcript in the original spoken language",
   "englishTranslation": "${translateToEnglish ? 'English translation of the transcript' : ''}",
@@ -184,7 +184,7 @@ const uploadTranscriptAudioToAws = async ({ colid, file, user }) => {
     Bucket: config.bucket,
     Key: key,
     Body: file.buffer,
-    ContentType: file.mimetype || 'audio/webm'
+    ContentType: file.mimetype || 'application/octet-stream'
   }).promise();
 
   const url = s3Url(config.bucket, config.region, key);
@@ -199,11 +199,11 @@ const uploadTranscriptAudioToAws = async ({ colid, file, user }) => {
     key,
     filename,
     originalname: file.originalname || filename,
-    mimetype: file.mimetype || 'audio/webm',
+    mimetype: file.mimetype || 'application/octet-stream',
     size: file.size,
     url,
     folder,
-    description: 'Transcript recorder audio'
+    description: 'Transcript recorder media'
   });
 };
 
@@ -211,7 +211,7 @@ exports.transcribeWithGemini = async (req, res) => {
   try {
     const colid = toNumber(req.body.colid);
     if (colid === undefined) return res.status(400).json({ success: false, msg: 'colid is required' });
-    if (!req.file?.buffer) return res.status(400).json({ success: false, msg: 'Recorded audio file is required' });
+    if (!req.file?.buffer) return res.status(400).json({ success: false, msg: 'Recorded media file is required' });
 
     const audioFile = await uploadTranscriptAudioToAws({
       colid,
