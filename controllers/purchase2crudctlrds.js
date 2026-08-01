@@ -30,7 +30,9 @@ const models = {
   vendoritemds2: require("../Models/vendoritemds2"),
   vendoritemsds2: require("../Models/vendoritemds2"),
   vendorpayschds: require("../Models/vendorpayschds"),
-  vendorpaymentscheduleds2: require("../Models/vendorpayschds")
+  vendorpaymentscheduleds2: require("../Models/vendorpayschds"),
+  usersignatureds: require("../Models/usersignatureds"),
+  storepoapprovalworkflowds2: require("../Models/storepoapprovalworkflowds2")
 };
 
 function getModel(key) {

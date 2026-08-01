@@ -986,11 +986,26 @@ exports.processGrades = async (req, res) => {
     const skipped = [];
     const preview = [];
     for (const row of rows) {
-      const sourceValue = component === "Theory"
-        ? number(row.theoryobtained)
-        : component === "Practical"
-          ? number(row.practicalmarks)
-          : number(row.overallobtained || (number(row.theoryobtained) + number(row.practicalmarks)));
+      let sourceValue = 0;
+      if (component === "Theory") {
+        const overallTotal = number(row.overalltotalmarks);
+        if (!overallTotal) {
+          skipped.push({ id: row._id, regno: row.regno, coursecode: row.coursecode, marks: number(row.theoryobtained), reason: "Overall total is missing" });
+          continue;
+        }
+        sourceValue = percent(row.theoryobtained, overallTotal);
+        row.theorypercentage = sourceValue;
+      } else if (component === "Practical") {
+        sourceValue = number(row.practicalmarks);
+      } else {
+        const overallTotal = number(row.overalltotalmarks);
+        if (!overallTotal) {
+          skipped.push({ id: row._id, regno: row.regno, coursecode: row.coursecode, marks: number(row.overallobtained), reason: "Overall total is missing" });
+          continue;
+        }
+        sourceValue = percent(row.overallobtained, overallTotal);
+        row.overallpercentage = sourceValue;
+      }
       const gradeRule = details.find((item) => sourceValue >= number(item.frommarks) && sourceValue <= number(item.tomarks));
       if (!gradeRule) {
         skipped.push({ id: row._id, regno: row.regno, coursecode: row.coursecode, marks: sourceValue });

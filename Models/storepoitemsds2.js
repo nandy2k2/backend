@@ -47,6 +47,9 @@ const storepoitemsdsschema = new mongoose.Schema({
     itemname: {
         type: String
     },
+    itemcode: {
+        type: String
+    },
     storeid: {
         type: String
     },
@@ -67,6 +70,15 @@ const storepoitemsdsschema = new mongoose.Schema({
         type: String
     },
     comments: {
+        type: String
+    },
+    make: {
+        type: String
+    },
+    terms: {
+        type: String
+    },
+    warranty: {
         type: String
     },
     storereqid: {

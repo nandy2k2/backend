@@ -26,6 +26,9 @@ const storepoorderdsschema = new mongoose.Schema({
     poid: {
         type: String
     },
+    prnumber: {
+        type: String
+    },
     storeid: {
         type: String
     },
@@ -52,6 +55,11 @@ const storepoorderdsschema = new mongoose.Schema({
     approvalStatus: { type: String, default: 'Pending' },
     doclink: { type: String },
     creatorName: { type: String },
+    creatorEmail: { type: String },
+    creatorSignature: { type: String },
+    terms: { type: String },
+    warranty: { type: String },
+    approvalhistory: { type: Array, default: [] },
 
     // Phase 1 Additions (SAP-Inspired Flow)
     postatus: {
