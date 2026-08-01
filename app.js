@@ -6212,6 +6212,7 @@ const icicipaymentprocessctlrds = require("./controllers/icicipaymentprocessctlr
 const studentonlinepaymentctlrds = require("./controllers/studentonlinepaymentctlrds");
 const librarynewctlrds = require("./controllers/librarynewctlrds");
 const purchase2crudctlrds = require("./controllers/purchase2crudctlrds");
+const prconfigdsctlr2 = require("./controllers/prconfigdsctlr2");
 // Ledger routes
 app.post("/api/v2/addledgerds", ledgerstuddsctlr.addledgerds);
 app.get("/api/v2/getledgersds", ledgerstuddsctlr.getledgersds);
@@ -6359,6 +6360,7 @@ app.post("/api/v2/miscellaneous-amounts-bulk", miscellaneousAmountController.bul
 app.get("/api/v2/miscellaneous-collection/student-options", miscellaneousAmountController.studentOptions);
 app.post("/api/v2/miscellaneous-collection/students", miscellaneousAmountController.searchStudents);
 app.post("/api/v2/miscellaneous-collection/collect", miscellaneousAmountController.collect);
+app.post("/api/v2/miscellaneous-collection/collect-new-student", miscellaneousAmountController.collectNewStudent);
 app.get("/api/v2/studentfeesreceipt", studentfeesreceiptctlr.getFeesReceiptRows);
 app.post("/api/v2/studentfeesreceipt/blockchain-store", studentfeesreceiptctlr.storeFeesReceiptOnBlockchain);
 app.get("/api/v2/public/studentfeesreceipt/blockchain-verify", studentfeesreceiptctlr.verifyFeesReceiptFromBlockchain);
@@ -6415,6 +6417,9 @@ app.get("/api/v2/studentonlinepayment/pending", studentonlinepaymentctlrds.getPe
 app.post("/api/v2/studentonlinepayment/session", studentonlinepaymentctlrds.createStudentPaymentSession);
 app.get("/api/v2/studentonlinepayment", studentonlinepaymentctlrds.getStudentOnlinePayments);
 app.get("/api/v2/studentonlinepayment/options", studentonlinepaymentctlrds.getStudentOnlinePaymentOptions);
+app.post("/api/v2/addprconfigds2", prconfigdsctlr2.addprconfigds2);
+app.get("/api/v2/getprconfigds2", prconfigdsctlr2.getprconfigds2);
+app.post("/api/v2/updateprconfigds2", prconfigdsctlr2.updateprconfigds2);
 app.get("/api/v2/purchase2/:model", purchase2crudctlrds.getPurchase2Rows);
 app.post("/api/v2/purchase2/:model", purchase2crudctlrds.savePurchase2Row);
 app.post("/api/v2/purchase2/:model/delete", purchase2crudctlrds.deletePurchase2Row);

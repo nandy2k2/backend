@@ -131,126 +131,217 @@ exports.searchStudents = async (req, res) => {
   }
 };
 
+const collectPayment = async (body = {}) => {
+  const colid = number(body.colid);
+  const student = body.student || {};
+  const items = Array.isArray(body.items) ? body.items : [];
+  const paiddate = body.paiddate ? new Date(body.paiddate) : new Date();
+  if (!colid || !clean(student.regno)) {
+    const err = new Error("Student is required");
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!items.length) {
+    const err = new Error("Select miscellaneous amounts");
+    err.statusCode = 400;
+    throw err;
+  }
+  const user = await User.findOne({ colid, regno: clean(student.regno), role: /^Student$/i }).lean();
+  if (!user) {
+    const err = new Error("Student not found");
+    err.statusCode = 404;
+    throw err;
+  }
+  const transactionid = txid(colid);
+  const ledgers = [];
+  const txItems = [];
+  for (const item of items) {
+    const amount = Math.max(0, number(item.paidamount ?? item.amount));
+    if (amount <= 0) continue;
+    const ledger = await Ledgerstud.create({
+      name: user.name,
+      user: user.email || user.user || "",
+      feegroup: clean(item.feegroup) || "Miscellaneous",
+      regno: user.regno,
+      student: user.name,
+      feeitem: clean(item.feeitem),
+      amount,
+      paid: amount,
+      concession: 0,
+      balance: 0,
+      cash: clean(body.paymode).toLowerCase() === "cash" ? amount : 0,
+      upi: clean(body.paymode).toLowerCase() === "upi" ? amount : 0,
+      cheque: clean(body.paymode).toLowerCase() === "cheque" ? amount : 0,
+      card: clean(body.paymode).toLowerCase() === "card" ? amount : 0,
+      pg: clean(body.paymode).toLowerCase() === "pg" ? amount : 0,
+      neft: clean(body.paymode).toLowerCase() === "neft" ? amount : 0,
+      feebook: clean(item.feebook),
+      cashbook: clean(item.cashbook),
+      feecounter: clean(body.user),
+      paymode: clean(body.paymode) || "Cash",
+      paydetails: clean(body.paydetails || body.referenceNumber),
+      feecategory: clean(item.feecategory) || "Miscellaneous",
+      feetype: clean(item.feetype) || "Miscellaneous",
+      semester: clean(user.semester),
+      institution: clean(user.institution),
+      type: "Miscellaneous",
+      comments: clean(body.remarks),
+      academicyear: clean(item.academicyear || user.academicyear) || "NA",
+      colid,
+      classdate: new Date(),
+      paiddate,
+      status: "paid",
+      programcode: clean(user.programcode),
+      regulation: clean(user.regulation),
+      major: clean(user.Major || user.major),
+      minor: clean(user.Minor || user.minor),
+      feeid: clean(item._id),
+      admissionyear: clean(user.admissionyear)
+    });
+    ledgers.push(ledger);
+    txItems.push({
+      ledgerid: String(ledger._id),
+      academicyear: ledger.academicyear,
+      admissionyear: ledger.admissionyear,
+      regulation: ledger.regulation,
+      program: clean(user.program),
+      programcode: ledger.programcode,
+      semester: ledger.semester,
+      section: clean(user.section),
+      major: ledger.major,
+      minor: ledger.minor,
+      student: user.name,
+      regno: user.regno,
+      email: clean(user.email || user.user),
+      phone: clean(user.phone),
+      address: clean(user.address),
+      feegroup: ledger.feegroup,
+      feeitem: ledger.feeitem,
+      feecategory: ledger.feecategory,
+      feetype: ledger.feetype,
+      feebook: ledger.feebook,
+      cashbook: ledger.cashbook,
+      amount,
+      previouspaid: 0,
+      previousbalance: amount,
+      paidamount: amount,
+      newpaid: amount,
+      newbalance: 0
+    });
+  }
+  if (!txItems.length) {
+    const err = new Error("No valid amount entered");
+    err.statusCode = 400;
+    throw err;
+  }
+  const first = txItems[0];
+  const totalpaid = txItems.reduce((sum, item) => sum + number(item.paidamount), 0);
+  const transaction = await CounterFee2Transaction.create({
+    colid,
+    transactionid,
+    paiddate,
+    referenceNumber: clean(body.referenceNumber),
+    paymode: clean(body.paymode) || "Cash",
+    paydetails: clean(body.paydetails),
+    remarks: clean(body.remarks),
+    collectedby: clean(body.user),
+    collectedbyname: clean(body.name),
+    totalpaid,
+    academicyear: first.academicyear,
+    admissionyear: first.admissionyear,
+    regulation: first.regulation,
+    program: first.program,
+    programcode: first.programcode,
+    semester: first.semester,
+    section: first.section,
+    major: first.major,
+    minor: first.minor,
+    student: first.student,
+    regno: first.regno,
+    email: first.email,
+    phone: first.phone,
+    address: first.address,
+    items: txItems
+  });
+  const institution = await Institution.findOne({ colid }).lean();
+  return { transactionid, data: transaction, institution: institution || null, ledgers: ledgers.length };
+};
+
+const ensureMiscStudent = async (body = {}) => {
+  const colid = number(body.colid);
+  const student = body.student || {};
+  const name = clean(student.name);
+  const email = clean(student.email).toLowerCase();
+  const regno = clean(student.regno);
+  const academicyear = clean(student.academicyear);
+  const admissionyear = clean(student.admissionyear);
+  const program = clean(student.program);
+  const programcode = clean(student.programcode);
+  if (!colid || !name || !email || !regno || !academicyear || !admissionyear || !programcode) {
+    const err = new Error("Name, email, academic year, admission year, program code and regno are required");
+    err.statusCode = 400;
+    throw err;
+  }
+  const existing = await User.findOne({
+    colid,
+    role: /^Student$/i,
+    $or: [{ regno }, { email }]
+  });
+  if (existing) {
+    existing.name = name || existing.name;
+    existing.email = email || existing.email;
+    existing.user = email || existing.user;
+    existing.academicyear = academicyear || existing.academicyear;
+    existing.admissionyear = admissionyear || existing.admissionyear;
+    existing.program = program || existing.program;
+    existing.programcode = programcode || existing.programcode;
+    existing.phone = clean(student.phone) || existing.phone || regno;
+    existing.department = clean(student.department) || existing.department || program || programcode || "Miscellaneous";
+    existing.status = number(existing.status, 1) || 1;
+    await existing.save();
+    return existing.toObject();
+  }
+  const now = new Date();
+  const random = Math.random().toString(36).slice(2, 10);
+  const created = await User.create({
+    email,
+    user: email,
+    name,
+    phone: clean(student.phone) || regno || email,
+    password: `Misc@${random}`,
+    role: "Student",
+    regno,
+    program,
+    programcode,
+    admissionyear,
+    academicyear,
+    semester: clean(student.semester) || "NA",
+    section: clean(student.section) || "NA",
+    department: clean(student.department) || program || programcode || "Miscellaneous",
+    colid,
+    status: 1,
+    status1: "Active",
+    addedby: clean(body.user),
+    lastlogin: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000)
+  });
+  return created.toObject();
+};
+
 exports.collect = async (req, res) => {
   try {
-    const colid = number(req.body.colid);
-    const student = req.body.student || {};
-    const items = Array.isArray(req.body.items) ? req.body.items : [];
-    const paiddate = req.body.paiddate ? new Date(req.body.paiddate) : new Date();
-    if (!colid || !clean(student.regno)) return res.status(400).json({ success: false, message: "Student is required" });
-    if (!items.length) return res.status(400).json({ success: false, message: "Select miscellaneous amounts" });
-    const user = await User.findOne({ colid, regno: clean(student.regno), role: /^Student$/i }).lean();
-    if (!user) return res.status(404).json({ success: false, message: "Student not found" });
-    const transactionid = txid(colid);
-    const ledgers = [];
-    const txItems = [];
-    for (const item of items) {
-      const amount = Math.max(0, number(item.paidamount ?? item.amount));
-      if (amount <= 0) continue;
-      const ledger = await Ledgerstud.create({
-        name: user.name,
-        user: user.email || user.user || "",
-        feegroup: clean(item.feegroup) || "Miscellaneous",
-        regno: user.regno,
-        student: user.name,
-        feeitem: clean(item.feeitem),
-        amount,
-        paid: amount,
-        concession: 0,
-        balance: 0,
-        cash: clean(req.body.paymode).toLowerCase() === "cash" ? amount : 0,
-        upi: clean(req.body.paymode).toLowerCase() === "upi" ? amount : 0,
-        cheque: clean(req.body.paymode).toLowerCase() === "cheque" ? amount : 0,
-        card: clean(req.body.paymode).toLowerCase() === "card" ? amount : 0,
-        pg: clean(req.body.paymode).toLowerCase() === "pg" ? amount : 0,
-        neft: clean(req.body.paymode).toLowerCase() === "neft" ? amount : 0,
-        feebook: clean(item.feebook),
-        cashbook: clean(item.cashbook),
-        feecounter: clean(req.body.user),
-        paymode: clean(req.body.paymode) || "Cash",
-        paydetails: clean(req.body.paydetails || req.body.referenceNumber),
-        feecategory: clean(item.feecategory) || "Miscellaneous",
-        feetype: clean(item.feetype) || "Miscellaneous",
-        semester: clean(user.semester),
-        institution: clean(user.institution),
-        type: "Miscellaneous",
-        comments: clean(req.body.remarks),
-        academicyear: clean(item.academicyear || user.academicyear) || "NA",
-        colid,
-        classdate: new Date(),
-        paiddate,
-        status: "paid",
-        programcode: clean(user.programcode),
-        regulation: clean(user.regulation),
-        major: clean(user.Major || user.major),
-        minor: clean(user.Minor || user.minor),
-        feeid: clean(item._id),
-        admissionyear: clean(user.admissionyear)
-      });
-      ledgers.push(ledger);
-      txItems.push({
-        ledgerid: String(ledger._id),
-        academicyear: ledger.academicyear,
-        admissionyear: ledger.admissionyear,
-        regulation: ledger.regulation,
-        program: clean(user.program),
-        programcode: ledger.programcode,
-        semester: ledger.semester,
-        section: clean(user.section),
-        major: ledger.major,
-        minor: ledger.minor,
-        student: user.name,
-        regno: user.regno,
-        email: clean(user.email || user.user),
-        phone: clean(user.phone),
-        address: clean(user.address),
-        feegroup: ledger.feegroup,
-        feeitem: ledger.feeitem,
-        feecategory: ledger.feecategory,
-        feetype: ledger.feetype,
-        feebook: ledger.feebook,
-        cashbook: ledger.cashbook,
-        amount,
-        previouspaid: 0,
-        previousbalance: amount,
-        paidamount: amount,
-        newpaid: amount,
-        newbalance: 0
-      });
-    }
-    if (!txItems.length) return res.status(400).json({ success: false, message: "No valid amount entered" });
-    const first = txItems[0];
-    const totalpaid = txItems.reduce((sum, item) => sum + number(item.paidamount), 0);
-    const transaction = await CounterFee2Transaction.create({
-      colid,
-      transactionid,
-      paiddate,
-      referenceNumber: clean(req.body.referenceNumber),
-      paymode: clean(req.body.paymode) || "Cash",
-      paydetails: clean(req.body.paydetails),
-      remarks: clean(req.body.remarks),
-      collectedby: clean(req.body.user),
-      collectedbyname: clean(req.body.name),
-      totalpaid,
-      academicyear: first.academicyear,
-      admissionyear: first.admissionyear,
-      regulation: first.regulation,
-      program: first.program,
-      programcode: first.programcode,
-      semester: first.semester,
-      section: first.section,
-      major: first.major,
-      minor: first.minor,
-      student: first.student,
-      regno: first.regno,
-      email: first.email,
-      phone: first.phone,
-      address: first.address,
-      items: txItems
-    });
-    const institution = await Institution.findOne({ colid }).lean();
-    res.json({ success: true, transactionid, data: transaction, institution: institution || null, ledgers: ledgers.length });
+    const result = await collectPayment(req.body);
+    res.json({ success: true, ...result });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.statusCode || 500).json({ success: false, message: err.message });
+  }
+};
+
+exports.collectNewStudent = async (req, res) => {
+  try {
+    const user = await ensureMiscStudent(req.body);
+    const result = await collectPayment({ ...req.body, student: user });
+    res.json({ success: true, student: user, studentCreatedOrUpdated: true, ...result });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ success: false, message: err.message });
   }
 };

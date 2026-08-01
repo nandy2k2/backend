@@ -1,5 +1,6 @@
 const models = {
-  departmentindentds2: require("../Models/departmentindentds2"),
+  departmentindentds: require("../Models/departmentindentds"),
+  departmentindentds2: require("../Models/departmentindentds"),
   itemmasterds2: require("../Models/itemmasterds2"),
   storecashaccountds2: require("../Models/storecashaccountds2"),
   storeitemds2: require("../Models/storeitemds2"),
@@ -86,6 +87,8 @@ function cleanPayload(body = {}) {
   delete payload.createdAt;
   delete payload.updatedAt;
   if (payload.colid !== undefined) payload.colid = Number(payload.colid);
+  if (payload.department && !payload.departmentname) payload.departmentname = payload.department;
+  delete payload.department;
   if (typeof payload.transactions === "string") {
     try {
       payload.transactions = payload.transactions ? JSON.parse(payload.transactions) : [];
@@ -109,16 +112,16 @@ async function validatePurchase2Payload(Model, modelKey, payload, id = "") {
     }).lean();
     if (duplicate) throw new Error("Duplicate item code is not allowed");
   }
-  if (key === "departmentindentds2") {
-    ["department", "departmentcode"].forEach((field) => {
+  if (key === "departmentindentds" || key === "departmentindentds2") {
+    ["departmentname"].forEach((field) => {
       if (!text(payload[field])) throw new Error(`${field} is required`);
     });
     const duplicate = await Model.findOne({
       colid: Number(payload.colid),
-      departmentcode: { $regex: `^${escapeRegex(payload.departmentcode)}$`, $options: "i" },
+      departmentname: { $regex: `^${escapeRegex(payload.departmentname)}$`, $options: "i" },
       ...(id ? { _id: { $ne: id } } : {})
     }).lean();
-    if (duplicate) throw new Error("Duplicate department code is not allowed");
+    if (duplicate) throw new Error("Duplicate department name is not allowed");
   }
 }
 
@@ -186,12 +189,12 @@ exports.bulkPurchase2Rows = async (req, res) => {
         seen.add(code);
       });
     }
-    if (req.params.model === "departmentindentds2") {
+    if (req.params.model === "departmentindentds" || req.params.model === "departmentindentds2") {
       const seen = new Set();
       prepared.forEach((row) => {
-        const code = text(row.departmentcode).toLowerCase();
-        if (seen.has(code)) throw new Error(`Duplicate department code in upload: ${row.departmentcode}`);
-        seen.add(code);
+        const departmentName = text(row.departmentname || row.department).toLowerCase();
+        if (seen.has(departmentName)) throw new Error(`Duplicate department name in upload: ${row.departmentname || row.department}`);
+        seen.add(departmentName);
       });
     }
     for (const row of prepared) {
