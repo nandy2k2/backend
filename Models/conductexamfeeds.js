@@ -14,6 +14,7 @@ const conductExamFeeSchema = new mongoose.Schema(
     coursecode: { type: String, required: true, trim: true },
     regularfee: { type: Number, default: 0 },
     supplementaryfee: { type: Number, default: 0 },
+    appealfee: { type: Number, default: 0 },
     status: { type: String, trim: true, default: "Active" },
     user: { type: String, trim: true, default: "" }
   },

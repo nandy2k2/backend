@@ -73,6 +73,7 @@ const feePayload = (body) => ({
   coursecode: clean(body.coursecode),
   regularfee: num(body.regularfee),
   supplementaryfee: num(body.supplementaryfee),
+  appealfee: num(body.appealfee),
   status: clean(body.status) || "Active",
   user: clean(body.user)
 });

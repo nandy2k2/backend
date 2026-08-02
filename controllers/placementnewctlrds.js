@@ -11,6 +11,9 @@ const ProjectStage = require("../Models/placementnewprojectstageds");
 const StageEntry = require("../Models/placementnewprojectstageentryds");
 const PlacementStage = require("../Models/placementnewplacementstageds");
 const PlacementStageStudent = require("../Models/placementnewstagestudentds");
+const InternshipStage = require("../Models/placementnewinternshipstageds");
+const SipApplication = require("../Models/placementnewsipapplicationds");
+const PlacementApplication = require("../Models/placementnewplacementapplicationds");
 const User = require("../Models/user");
 const MPrograms = require("../Models/mprograms");
 const VivaMarks = require("../Models/examinationmodel2vivamarksds");
@@ -77,6 +80,9 @@ const modelMap = {
   stage: { Model: ProjectStage, fields: ["assignmentid", "stagename", "stageorder", "description", "status"] },
   entry: { Model: StageEntry, fields: ["assignmentid", "stageid", "stagename", "details", "filelink", "remarks", "entrydate", "student", "studentemail", "regno"] },
   placementstage: { Model: PlacementStage, fields: ["stagename", "stageorder", "description", "status"] },
+  internshipstage: { Model: InternshipStage, fields: ["stagename", "stageorder", "description", "status"] },
+  sipapplication: { Model: SipApplication, fields: ["jobid", "jobtitle", "jobtype", "industry", "company", "companyemail", "student", "studentemail", "phone", "regno", "academicyear", "admissionyear", "program", "programcode", "semester", "section", "applieddate", "stageid", "stagename", "status", "selected", "offerletterlink", "offerlettername", "offeruploadeddate", "remarks"] },
+  placementapplication: { Model: PlacementApplication, fields: ["jobid", "jobtitle", "jobtype", "industry", "company", "companyemail", "student", "studentemail", "phone", "regno", "academicyear", "admissionyear", "program", "programcode", "semester", "section", "applieddate", "stageid", "stagename", "status", "selected", "offerletterlink", "offerlettername", "offeruploadeddate", "remarks"] },
   stagestudent: { Model: PlacementStageStudent, fields: ["jobid", "jobtitle", "jobtype", "company", "companyemail", "student", "studentemail", "regno", "phone", "academicyear", "admissionyear", "program", "programcode", "semester", "section", "stageid", "stagename", "stagedate", "status", "placementstatus", "confirmeddate", "offerletterlink", "offerlettername", "contactdetails", "address", "ctc", "industry", "sector", "comments"] }
 };
 
@@ -95,13 +101,14 @@ const payloadFor = (kind, source = {}) => {
 exports.options = async (req, res) => {
   try {
     const colid = Number(req.query.colid);
-    const [companies, programs, users, internships, sip, placementStages, stageStudents, ollamaConfigs, institution] = await Promise.all([
+    const [companies, programs, users, internships, sip, placementStages, internshipStages, stageStudents, ollamaConfigs, institution] = await Promise.all([
       Company.find({ colid }).sort({ company: 1 }).lean(),
       MPrograms.find({ colid }).sort({ Order: 1, program: 1 }).lean(),
       User.find({ colid }).select("name email user phone role program programcode admissionyear academicyear regno semester section photo skills").sort({ name: 1 }).lean(),
       Internship.find({ colid }).sort({ createdAt: -1 }).lean(),
       SipStudent.find({ colid }).sort({ createdAt: -1 }).lean(),
       PlacementStage.find({ colid }).sort({ stageorder: 1, stagename: 1 }).lean(),
+      InternshipStage.find({ colid }).sort({ stageorder: 1, stagename: 1 }).lean(),
       PlacementStageStudent.find({ colid }).sort({ updatedAt: -1 }).lean(),
       OllamaConfiguration.find({ colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean(),
       Institution.findOne({ colid }).lean()
@@ -117,6 +124,7 @@ exports.options = async (req, res) => {
       internships,
       sip,
       placementStages,
+      internshipStages,
       stageStudents,
       ollamaConfigs,
       geminiModels: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"],
@@ -481,6 +489,249 @@ exports.studentAssignments = async (req, res) => {
     else filter.studentemail = email;
     const data = await SipStudent.find(filter).sort({ createdAt: -1 }).lean();
     res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const applicationModelForType = (type) => /^placement$/i.test(text(type)) ? PlacementApplication : SipApplication;
+const applicationStageListForType = async (colid, type) => /^placement$/i.test(text(type))
+  ? PlacementStage.find({ colid, status: { $not: /^inactive$/i } }).sort({ stageorder: 1, stagename: 1 }).lean()
+  : InternshipStage.find({ colid, status: { $not: /^inactive$/i } }).sort({ stageorder: 1, stagename: 1 }).lean();
+
+const studentIdentityFilter = (source = {}) => {
+  const email = text(source.email || source.user || source.studentemail);
+  const regno = text(source.regno);
+  if (email && regno) return { $or: [{ studentemail: email }, { regno }] };
+  if (regno) return { regno };
+  return { studentemail: email };
+};
+
+exports.studentJobs = async (req, res) => {
+  try {
+    const colid = Number(req.query.colid);
+    const type = /^placement$/i.test(text(req.query.type)) ? "Placement" : "SIP";
+    const student = await User.findOne({ colid, $or: [{ email: text(req.query.email || req.query.user) }, { user: text(req.query.email || req.query.user) }, { regno: text(req.query.regno) }] }).lean();
+    const programcode = text(student?.programcode || req.query.programcode);
+    const now = new Date().toISOString().slice(0, 10);
+    const jobs = await Job.find({
+      colid,
+      type,
+      status: /^active$/i,
+      $and: [
+        { $or: [{ startdate: "" }, { startdate: { $exists: false } }, { startdate: { $lte: now } }] },
+        { $or: [{ enddate: "" }, { enddate: { $exists: false } }, { enddate: { $gte: now } }] }
+      ]
+    }).sort({ createdAt: -1 }).lean();
+    const visibleJobs = jobs.filter((job) => {
+      const programs = Array.isArray(job.programs) ? job.programs : [];
+      if (!programs.length || !programcode) return true;
+      return programs.some((item) => text(item.programcode) === programcode);
+    });
+    const Application = applicationModelForType(type);
+    const applications = await Application.find({ colid, ...studentIdentityFilter({ email: student?.email || req.query.email || req.query.user, regno: student?.regno || req.query.regno }) }).lean();
+    const appMap = new Map(applications.map((item) => [text(item.jobid), item]));
+    const data = visibleJobs.map((job) => ({ ...job, applied: appMap.has(String(job._id)), application: appMap.get(String(job._id)) || null }));
+    res.json({ success: true, data, student });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.applyJob = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const type = /^placement$/i.test(text(req.body.type)) ? "Placement" : "SIP";
+    const job = await Job.findOne({ _id: req.body.jobid, colid, type }).lean();
+    if (!job) return res.status(404).json({ success: false, message: "Job not found" });
+    const student = await User.findOne({ colid, $or: [{ email: text(req.body.email || req.body.user) }, { user: text(req.body.email || req.body.user) }, { regno: text(req.body.regno) }] }).lean();
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+    const stages = await applicationStageListForType(colid, type);
+    const firstStage = stages[0] || {};
+    const Application = applicationModelForType(type);
+    const payload = {
+      jobid: String(job._id),
+      jobtitle: text(job.jobtitle),
+      jobtype: type,
+      industry: text(job.industry),
+      company: text(job.company),
+      companyemail: text(job.companyemail),
+      student: text(student.name),
+      studentemail: text(student.email || student.user),
+      phone: text(student.phone),
+      regno: text(student.regno),
+      academicyear: text(student.academicyear),
+      admissionyear: text(student.admissionyear),
+      program: text(student.program),
+      programcode: text(student.programcode),
+      semester: text(student.semester),
+      section: text(student.section),
+      applieddate: new Date().toISOString().slice(0, 10),
+      stageid: firstStage._id ? String(firstStage._id) : "",
+      stagename: text(firstStage.stagename) || "Applied",
+      status: "Applied",
+      selected: "No",
+      colid,
+      user: text(req.body.user)
+    };
+    const identity = text(student.regno) ? { regno: text(student.regno) } : { studentemail: text(student.email || student.user) };
+    const data = await Application.findOneAndUpdate({ colid, jobid: String(job._id), ...identity }, { $setOnInsert: payload }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.code === 11000 ? "Already applied for this job" : error.message });
+  }
+};
+
+const applicationFilter = (source = {}) => {
+  const filter = { colid: Number(source.colid) };
+  ["jobid", "jobtitle", "company", "industry", "student", "studentemail", "regno", "academicyear", "admissionyear", "program", "programcode", "semester", "section", "stagename", "status", "selected"].forEach((field) => {
+    if (text(source[field])) filter[field] = regex(source[field]);
+  });
+  if (text(source.appliedFrom) || text(source.appliedTo)) {
+    filter.applieddate = {};
+    if (text(source.appliedFrom)) filter.applieddate.$gte = text(source.appliedFrom);
+    if (text(source.appliedTo)) filter.applieddate.$lte = text(source.appliedTo);
+  }
+  return filter;
+};
+
+exports.applicationList = async (req, res) => {
+  try {
+    const type = /^placement$/i.test(text(req.query.type)) ? "Placement" : "SIP";
+    const Application = applicationModelForType(type);
+    const colid = Number(req.query.colid);
+    const [data, stages] = await Promise.all([
+      Application.find(applicationFilter(req.query)).sort({ updatedAt: -1 }).limit(5000).lean(),
+      applicationStageListForType(colid, type)
+    ]);
+    res.json({ success: true, data, stages });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.applicationStatus = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one application" });
+    if (/^yes$/i.test(text(req.body.selected)) && !text(req.body.offerletterlink)) {
+      return res.status(400).json({ success: false, message: "Offer letter upload is required when selected is Yes" });
+    }
+    const type = /^placement$/i.test(text(req.body.type)) ? "Placement" : "SIP";
+    const Application = applicationModelForType(type);
+    const stage = req.body.stage || {};
+    const payload = {
+      status: text(req.body.status) || "Applied",
+      selected: text(req.body.selected) || "No",
+      remarks: text(req.body.remarks),
+      user: text(req.body.user)
+    };
+    if (stage._id) {
+      payload.stageid = String(stage._id);
+      payload.stagename = text(stage.stagename);
+    } else if (text(req.body.stagename)) {
+      payload.stagename = text(req.body.stagename);
+    }
+    if (text(req.body.offerletterlink)) {
+      payload.offerletterlink = text(req.body.offerletterlink);
+      payload.offerlettername = text(req.body.offerlettername);
+      payload.offeruploadeddate = new Date().toISOString().slice(0, 10);
+    }
+    const result = await Application.updateMany({ _id: { $in: ids }, colid: Number(req.body.colid) }, { $set: payload });
+    if (/^yes$/i.test(text(payload.selected))) {
+      const selectedApps = await Application.find({ _id: { $in: ids }, colid: Number(req.body.colid) }).lean();
+      if (type === "SIP") {
+        await Promise.all(selectedApps.map((item) => {
+          const identity = text(item.regno) ? { regno: text(item.regno) } : { studentemail: text(item.studentemail) };
+          return SipStudent.findOneAndUpdate(
+            { colid: Number(req.body.colid), jobid: text(item.jobid), ...identity },
+            {
+              $set: {
+                jobid: text(item.jobid),
+                jobtitle: text(item.jobtitle),
+                type: "SIP",
+                program: text(item.program),
+                programcode: text(item.programcode),
+                student: text(item.student),
+                studentemail: text(item.studentemail),
+                regno: text(item.regno),
+                admissionyear: text(item.admissionyear),
+                academicyear: text(item.academicyear),
+                company: text(item.company),
+                companyemail: text(item.companyemail),
+                project: text(item.jobtitle),
+                startdate: "",
+                enddate: "",
+                companycontact: "",
+                mentor: "",
+                mentoremail: "",
+                status: "Selected",
+                colid: Number(req.body.colid),
+                user: text(req.body.user)
+              }
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+          );
+        }));
+      } else {
+        await Promise.all(selectedApps.map((item) => {
+          const identity = text(item.regno) ? { regno: text(item.regno) } : { studentemail: text(item.studentemail) };
+          return PlacementStageStudent.findOneAndUpdate(
+            { colid: Number(req.body.colid), jobid: text(item.jobid), ...identity },
+            {
+              $set: {
+                jobid: text(item.jobid),
+                jobtitle: text(item.jobtitle),
+                jobtype: "Placement",
+                company: text(item.company),
+                companyemail: text(item.companyemail),
+                student: text(item.student),
+                studentemail: text(item.studentemail),
+                regno: text(item.regno),
+                phone: text(item.phone),
+                academicyear: text(item.academicyear),
+                admissionyear: text(item.admissionyear),
+                program: text(item.program),
+                programcode: text(item.programcode),
+                semester: text(item.semester),
+                section: text(item.section),
+                stageid: text(item.stageid),
+                stagename: text(item.stagename),
+                stagedate: new Date().toISOString().slice(0, 10),
+                status: "Active",
+                placementstatus: "Placed",
+                confirmeddate: new Date().toISOString().slice(0, 10),
+                offerletterlink: text(item.offerletterlink),
+                offerlettername: text(item.offerlettername),
+                industry: text(item.industry),
+                comments: text(item.remarks),
+                colid: Number(req.body.colid),
+                user: text(req.body.user)
+              }
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+          );
+        }));
+      }
+    }
+    res.json({ success: true, modified: result.modifiedCount });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.applicationProfile = async (req, res) => {
+  try {
+    const colid = Number(req.query.colid);
+    const student = await User.findOne({ colid, $or: [{ email: text(req.query.email) }, { user: text(req.query.email) }, { regno: text(req.query.regno) }] }).lean();
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+    const [marks, internships, sipAssignments, institution] = await Promise.all([
+      VivaMarks.find({ colid, $or: [{ regno: text(student.regno) }, { studentemail: text(student.email) }] }).lean(),
+      Internship.find({ colid, $or: [{ regno: text(student.regno) }, { studentemail: text(student.email) }] }).lean(),
+      SipStudent.find({ colid, $or: [{ regno: text(student.regno) }, { studentemail: text(student.email) }] }).lean(),
+      Institution.findOne({ colid }).lean()
+    ]);
+    res.json({ success: true, student, marks, internships, sipAssignments, institution });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

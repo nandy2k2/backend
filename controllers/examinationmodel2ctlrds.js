@@ -27,6 +27,12 @@ const uniqueSorted = (values) => Array.from(new Set(values.map(text).filter(Bool
 const escapeRegex = (value) => text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const percent = (obtained, total) => number(total) ? Number(((number(obtained) / number(total)) * 100).toFixed(2)) : 0;
 const yes = (value) => ["yes", "true", "1", "on"].includes(text(value).toLowerCase()) || value === true;
+const selectedComponentsFrom = (source = {}) => {
+  if (Array.isArray(source.components)) return source.components.map(text).filter(Boolean);
+  if (text(source.components)) return text(source.components).split(",").map(text).filter(Boolean);
+  return ["Theory", "Practical", "Viva"];
+};
+const wantsVivaMarks = (source = {}) => selectedComponentsFrom(source).some((item) => /^viva$/i.test(item));
 const getUGCGrade = (percentage) => {
   const value = number(percentage);
   if (value >= 90) return { grade: "O", gradepoint: 10 };
@@ -1412,8 +1418,9 @@ exports.vivaMarksheet = async (req, res) => {
     const colid = number(req.query.colid);
     const filter = buildVivaFilter(req.query);
     if (!colid || !filter.regno) return res.status(400).json({ success: false, message: "colid and regno are required" });
-    const marks = await ExamVivaMarks.find(filter).sort({ semester: 1, coursecode: 1 }).lean();
-    if (!marks.length) return res.status(404).json({ success: false, message: "No viva marks found for selected student" });
+    const TargetModel = wantsVivaMarks(req.query) ? ExamVivaMarks : ExamMarks;
+    const marks = await TargetModel.find(filter).sort({ semester: 1, coursecode: 1 }).lean();
+    if (!marks.length) return res.status(404).json({ success: false, message: wantsVivaMarks(req.query) ? "No viva marks found for selected student" : "No marks found for selected student" });
     const first = marks[0];
     const [student, program, config, institution] = await Promise.all([
       User.findOne({ colid, $or: [{ regno: first.regno }, { email: first.regno }] }).lean(),
@@ -1425,7 +1432,7 @@ exports.vivaMarksheet = async (req, res) => {
     const creditsAttempted = marks.reduce((sum, row) => sum + number(row.credit), 0);
     const totalGpa = marks.reduce((sum, row) => sum + number(row.gpa), 0);
     const sgpa = creditsAttempted ? Number((totalGpa / creditsAttempted).toFixed(2)) : 0;
-    const allStudentMarks = await ExamVivaMarks.find({
+    const allStudentMarks = await TargetModel.find({
       colid,
       regno: first.regno,
       academicyear: first.academicyear,

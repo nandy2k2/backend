@@ -121,6 +121,24 @@ const crmh1schema = new mongoose.Schema({
         type: String,  // Counsellor email (auto-assigned randomly from category)
         required: true
     },
+    telecaller: {
+        type: String
+    },
+    telecalleremail: {
+        type: String
+    },
+    telecaller_assigned_date: {
+        type: Date
+    },
+    campusvisitcounselor: {
+        type: String
+    },
+    campusvisitcounseloremail: {
+        type: String
+    },
+    campus_visit_assigned_date: {
+        type: Date
+    },
     assigned_date: {
         type: Date,
         default: Date.now
