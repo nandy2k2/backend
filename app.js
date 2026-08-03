@@ -129,6 +129,7 @@ const liveMeetingController = require('./controllers/livemeetingctlrds');
 const userCustomFieldController = require('./controllers/usercustomfielddsctlr');
 const userDataManagementController = require('./controllers/userdatamanagementdsctlr');
 const googleAuthController = require('./controllers/googleauthctlrds');
+const authenticatorController = require('./controllers/authenticatorctlrds');
 const userProfileLayoutController = require('./controllers/userprofilelayoutctlrds');
 const userProfileDisplayLayoutController = require('./controllers/userprofiledisplaylayoutctlrds');
 const userDocumentController = require('./controllers/userdocumentdsctlr');
@@ -609,6 +610,9 @@ app.post('/api/v2/google-auth/registration-links', googleAuthController.createRe
 app.get('/api/v2/google-auth/registration-links', googleAuthController.listRegistrationLinks);
 app.get('/api/v2/google-auth/registration-config', googleAuthController.registrationConfig);
 app.post('/api/v2/google-auth/public-register', googleAuthController.registerWithGoogle);
+app.post('/api/v2/authenticator/setup', authenticatorController.setup);
+app.post('/api/v2/authenticator/verify', authenticatorController.verify);
+app.post('/api/v2/authenticator/admin-update', authenticatorController.adminUpdate);
 app.get('/api/v2/student-data-upload', studentDataUploadController.getStudents);
 app.post('/api/v2/student-data-upload', studentDataUploadController.createStudent);
 app.post('/api/v2/student-data-upload-update', studentDataUploadController.updateStudent);

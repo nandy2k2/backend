@@ -2,6 +2,7 @@ const https = require('https');
 const jwt = require('jsonwebtoken');
 const User = require('../Models/user');
 const GoogleRegistrationLink = require('../Models/googleregistrationlinkds');
+const authenticator = require('./authenticatorctlrds');
 
 const clean = (value) => String(value ?? '').trim();
 const normEmail = (value) => clean(value).toLowerCase();
@@ -50,7 +51,8 @@ const loginResponse = (user) => ({
   department: user.department,
   designation: user.designation,
   statuslog: user.status,
-  token: tokenForUser(user)
+  token: tokenForUser(user),
+  twofa: authenticator.statusForUser(user)
 });
 
 exports.login = async (req, res) => {
@@ -81,7 +83,7 @@ exports.listUsers = async (req, res) => {
     const search = clean(req.query.search);
     const query = { colid };
     if (search) query.$or = ['name', 'email', 'googleemail', 'role', 'department', 'designation'].map((field) => ({ [field]: { $regex: search, $options: 'i' } }));
-    const data = await User.find(query).select('name email googleemail role department designation regno status colid').sort({ name: 1 }).limit(500).lean();
+    const data = await User.find(query).select('name email googleemail role department designation regno status colid authenticator authenticatordate authenticatorsetupdate').sort({ name: 1 }).limit(500).lean();
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

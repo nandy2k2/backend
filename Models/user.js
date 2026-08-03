@@ -9,6 +9,20 @@ const userschema = new mongoose.Schema({
     googleemail: {
         type: String
     },
+    authenticator: {
+        type: String,
+        enum: ['Yes', 'No'],
+        default: 'No'
+    },
+    authenticatordate: {
+        type: Date
+    },
+    authenticatorsecret: {
+        type: String
+    },
+    authenticatorsetupdate: {
+        type: Date
+    },
     name: {
         type: String,
         required: [true,'Please enter name']

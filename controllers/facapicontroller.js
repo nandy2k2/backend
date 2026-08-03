@@ -116,6 +116,7 @@ exports.getworkload= async (req,res) => {
 
 exports.loginapi= async (req,res) => {
     try{
+        const authenticator = require('./authenticatorctlrds');
 
         const email=req.query.email;
         const password=req.query.password;
@@ -150,7 +151,10 @@ exports.loginapi= async (req,res) => {
             category:user.category,
             department:user.department,
             statuslog:user.status,
-            token:token
+            token:token,
+            googleemail:user.googleemail,
+            designation:user.designation,
+            twofa: authenticator.statusForUser(user)
         });
         
     } catch(err) {
@@ -165,6 +169,7 @@ exports.loginapi= async (req,res) => {
 
 exports.loginapif= async (req,res) => {
     try{
+        const authenticator = require('./authenticatorctlrds');
 
         const email=req.query.email;
         // const password=req.query.password;
@@ -201,7 +206,10 @@ exports.loginapif= async (req,res) => {
             statuslog:user.status,
             token:token,
             password:user.password,
-            department:user.department
+            department:user.department,
+            googleemail:user.googleemail,
+            designation:user.designation,
+            twofa: authenticator.statusForUser(user)
         });
         
     } catch(err) {
@@ -8079,4 +8087,3 @@ exports.getsssbyq= async (req,res) => {
 
     }  
 };
-
