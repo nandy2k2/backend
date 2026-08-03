@@ -733,9 +733,13 @@ app.get('/api/v2/institution-policies', institutionPolicyController.getPolicies)
 app.post('/api/v2/institution-policies', institutionPolicyController.uploadMiddleware, institutionPolicyController.savePolicy);
 app.post('/api/v2/institution-policies-delete', institutionPolicyController.deletePolicy);
 app.get('/api/v2/central-tickets/users', centralTicketController.getUsers);
+app.get('/api/v2/central-tickets/all-institutions/users', centralTicketController.getAllInstitutionUsers);
 app.get('/api/v2/central-tickets', centralTicketController.getTickets);
+app.get('/api/v2/central-tickets/all-institutions', centralTicketController.getAllInstitutionTickets);
 app.get('/api/v2/central-tickets/details', centralTicketController.getTicketDetails);
+app.get('/api/v2/central-tickets/all-institutions/details', centralTicketController.getAllInstitutionTicketDetails);
 app.get('/api/v2/central-tickets/report', centralTicketController.getReports);
+app.get('/api/v2/central-tickets/all-institutions/report', centralTicketController.getAllInstitutionReports);
 app.post('/api/v2/central-tickets', centralTicketController.uploadMiddleware, centralTicketController.createTicket);
 app.post('/api/v2/central-tickets/update', centralTicketController.updateTicket);
 app.post('/api/v2/central-tickets/respond', centralTicketController.uploadMiddleware, centralTicketController.respondTicket);

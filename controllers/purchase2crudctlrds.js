@@ -1,6 +1,9 @@
 const models = {
   departmentindentds: require("../Models/departmentindentds"),
   departmentindentds2: require("../Models/departmentindentds"),
+  itemcategoryds2: require("../Models/itemcategoryds2"),
+  itemtypeds2: require("../Models/itemtypeds2"),
+  itemunitds2: require("../Models/itemunitds2"),
   itemmasterds2: require("../Models/itemmasterds2"),
   storecashaccountds2: require("../Models/storecashaccountds2"),
   storeitemds2: require("../Models/storeitemds2"),
@@ -91,6 +94,11 @@ function cleanPayload(body = {}) {
   if (payload.colid !== undefined) payload.colid = Number(payload.colid);
   if (payload.department && !payload.departmentname) payload.departmentname = payload.department;
   delete payload.department;
+  if (payload.type && !payload.itemtype) payload.itemtype = payload.type;
+  if (payload.categoryname && !payload.category) payload.category = payload.categoryname;
+  delete payload.type;
+  if (payload.creatoremail && !payload.creatoruserid) payload.creatoruserid = payload.creatoremail;
+  delete payload.creatoremail;
   if (typeof payload.transactions === "string") {
     try {
       payload.transactions = payload.transactions ? JSON.parse(payload.transactions) : [];
@@ -104,7 +112,7 @@ function cleanPayload(body = {}) {
 async function validatePurchase2Payload(Model, modelKey, payload, id = "") {
   const key = String(modelKey || "").trim();
   if (key === "itemmasterds2") {
-    ["itemname", "itemcode", "category", "unit", "status"].forEach((field) => {
+    ["itemname", "itemcode", "category", "itemtype", "unit", "status"].forEach((field) => {
       if (!text(payload[field])) throw new Error(`${field} is required`);
     });
     const duplicate = await Model.findOne({
@@ -113,6 +121,39 @@ async function validatePurchase2Payload(Model, modelKey, payload, id = "") {
       ...(id ? { _id: { $ne: id } } : {})
     }).lean();
     if (duplicate) throw new Error("Duplicate item code is not allowed");
+  }
+  if (key === "itemunitds2") {
+    ["unitname", "unitcode", "status"].forEach((field) => {
+      if (!text(payload[field])) throw new Error(`${field} is required`);
+    });
+    const duplicate = await Model.findOne({
+      colid: Number(payload.colid),
+      unitcode: { $regex: `^${escapeRegex(payload.unitcode)}$`, $options: "i" },
+      ...(id ? { _id: { $ne: id } } : {})
+    }).lean();
+    if (duplicate) throw new Error("Duplicate unit code is not allowed");
+  }
+  if (key === "itemtypeds2") {
+    ["itemtype", "status"].forEach((field) => {
+      if (!text(payload[field])) throw new Error(`${field} is required`);
+    });
+    const duplicate = await Model.findOne({
+      colid: Number(payload.colid),
+      itemtype: { $regex: `^${escapeRegex(payload.itemtype)}$`, $options: "i" },
+      ...(id ? { _id: { $ne: id } } : {})
+    }).lean();
+    if (duplicate) throw new Error("Duplicate item type is not allowed");
+  }
+  if (key === "itemcategoryds2") {
+    ["categoryname", "status"].forEach((field) => {
+      if (!text(payload[field])) throw new Error(`${field} is required`);
+    });
+    const duplicate = await Model.findOne({
+      colid: Number(payload.colid),
+      categoryname: { $regex: `^${escapeRegex(payload.categoryname)}$`, $options: "i" },
+      ...(id ? { _id: { $ne: id } } : {})
+    }).lean();
+    if (duplicate) throw new Error("Duplicate item category is not allowed");
   }
   if (key === "departmentindentds" || key === "departmentindentds2") {
     ["departmentname"].forEach((field) => {
@@ -183,11 +224,16 @@ exports.bulkPurchase2Rows = async (req, res) => {
       user: row.user || req.body.user || "NA"
     }));
     if (!prepared.length) return res.status(400).json({ success: false, message: "No rows found for upload" });
-    if (req.params.model === "itemmasterds2") {
+    if (["itemmasterds2", "itemunitds2", "itemtypeds2", "itemcategoryds2"].includes(req.params.model)) {
       const seen = new Set();
       prepared.forEach((row) => {
-        const code = text(row.itemcode).toLowerCase();
-        if (seen.has(code)) throw new Error(`Duplicate item code in upload: ${row.itemcode}`);
+        const code = text(
+          req.params.model === "itemunitds2" ? row.unitcode
+            : req.params.model === "itemtypeds2" ? row.itemtype
+              : req.params.model === "itemcategoryds2" ? row.categoryname
+                : row.itemcode
+        ).toLowerCase();
+        if (seen.has(code)) throw new Error(`Duplicate value in upload: ${code}`);
         seen.add(code);
       });
     }

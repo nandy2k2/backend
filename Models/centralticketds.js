@@ -23,6 +23,7 @@ const centralTicketSchema = new mongoose.Schema(
     startdatetime: { type: Date },
     status: { type: String, trim: true, default: "Open", index: true },
     priority: { type: String, trim: true, default: "Normal" },
+    category: { type: String, trim: true, index: true },
     raisedby: { type: String, trim: true },
     raisedbyemail: { type: String, trim: true, index: true },
     raisedbyrole: { type: String, trim: true },

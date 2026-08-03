@@ -5,6 +5,8 @@ const CentralTicket = require("../Models/centralticketds");
 const CentralTicketResponse = require("../Models/centralticketresponseds");
 const Awsconfig = require("../Models/awsconfig");
 const User = require("../Models/user");
+const InsDetails = require("../Models/insdetails");
+const Institution = require("../Models/institutions");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -92,6 +94,31 @@ const bucketKey = (date, mode) => {
   return `${year}-${month}`;
 };
 
+const buildInstitutionMap = async (colids = []) => {
+  const ids = [...new Set(colids.map((id) => Number(id)).filter((id) => Number.isFinite(id)))];
+  if (!ids.length) return {};
+  const [details, institutions] = await Promise.all([
+    InsDetails.find({ colid: { $in: ids } }).sort({ _id: -1 }).lean(),
+    Institution.find({ colid: { $in: ids } }).sort({ _id: -1 }).lean()
+  ]);
+  const map = {};
+  institutions.forEach((item) => {
+    if (!map[item.colid]) map[item.colid] = item.institutionname || item.name || "";
+  });
+  details.forEach((item) => {
+    if (item.institutionname) map[item.colid] = item.institutionname;
+  });
+  return map;
+};
+
+const enrichInstitution = async (tickets = []) => {
+  const institutionMap = await buildInstitutionMap(tickets.map((ticket) => ticket.colid));
+  return tickets.map((ticket) => ({
+    ...ticket,
+    institutionname: institutionMap[ticket.colid] || ""
+  }));
+};
+
 exports.uploadMiddleware = upload.single("file");
 
 exports.getUsers = async (req, res) => {
@@ -116,6 +143,7 @@ exports.createTicket = async (req, res) => {
       startdatetime: req.body.startdatetime ? new Date(req.body.startdatetime) : new Date(),
       status,
       priority: clean(req.body.priority || "Normal"),
+      category: clean(req.body.category),
       raisedby: clean(req.body.raisedby || req.body.name),
       raisedbyemail: clean(req.body.raisedbyemail || req.body.user || req.body.email),
       raisedbyrole: clean(req.body.raisedbyrole || req.body.role),
@@ -149,12 +177,67 @@ exports.getTickets = async (req, res) => {
   }
 };
 
+exports.getAllInstitutionUsers = async (req, res) => {
+  try {
+    const query = {};
+    if (clean(req.query.colid)) query.colid = asNumber(req.query.colid);
+    const users = await User.find(query).select("name email role department colid institution").sort({ colid: 1, name: 1 }).lean();
+    const data = await enrichInstitution(users);
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getAllInstitutionTickets = async (req, res) => {
+  try {
+    const filter = { ...dateRange(req.query.fromDate, req.query.toDate) };
+    if (clean(req.query.colid) && clean(req.query.colid) !== "All") filter.colid = asNumber(req.query.colid);
+    if (clean(req.query.status) && clean(req.query.status) !== "All") filter.status = clean(req.query.status);
+    if (clean(req.query.category)) filter.category = { $regex: clean(req.query.category), $options: "i" };
+    if (clean(req.query.priority)) filter.priority = { $regex: clean(req.query.priority), $options: "i" };
+    if (clean(req.query.institution)) {
+      const regex = new RegExp(clean(req.query.institution), "i");
+      const [details, institutions] = await Promise.all([
+        InsDetails.find({ institutionname: regex }).select("colid").lean(),
+        Institution.find({ $or: [{ institutionname: regex }, { name: regex }] }).select("colid").lean()
+      ]);
+      const ids = [...new Set([...details, ...institutions].map((row) => Number(row.colid)).filter((id) => Number.isFinite(id)))];
+      if (filter.colid) {
+        filter.colid = ids.includes(Number(filter.colid)) ? filter.colid : -1;
+      } else {
+        filter.colid = { $in: ids.length ? ids : [-1] };
+      }
+    }
+    if (clean(req.query.search)) {
+      const regex = new RegExp(clean(req.query.search), "i");
+      filter.$or = [{ ticketno: regex }, { title: regex }, { details: regex }, { raisedby: regex }, { raisedbyemail: regex }, { assignedtoemail: regex }, { category: regex }];
+    }
+    const rows = await CentralTicket.find(filter).sort({ createdAt: -1 }).limit(2000).lean();
+    res.json({ success: true, data: await enrichInstitution(rows) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 exports.getTicketDetails = async (req, res) => {
   try {
     const ticket = await CentralTicket.findOne({ _id: req.query.id, colid: asNumber(req.query.colid) }).lean();
     if (!ticket) return res.status(404).json({ success: false, message: "Ticket not found" });
     const responses = await CentralTicketResponse.find({ ticketid: ticket._id, colid: ticket.colid }).sort({ createdAt: 1 }).lean();
     res.json({ success: true, data: ticket, responses });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getAllInstitutionTicketDetails = async (req, res) => {
+  try {
+    const ticket = await CentralTicket.findOne({ _id: req.query.id }).lean();
+    if (!ticket) return res.status(404).json({ success: false, message: "Ticket not found" });
+    const [enriched] = await enrichInstitution([ticket]);
+    const responses = await CentralTicketResponse.find({ ticketid: ticket._id, colid: ticket.colid }).sort({ createdAt: 1 }).lean();
+    res.json({ success: true, data: enriched, responses });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -253,6 +336,75 @@ exports.getReports = async (req, res) => {
       monthwise: build("month"),
       avgCloseTime,
       byStatus,
+      details: tickets
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getAllInstitutionReports = async (req, res) => {
+  try {
+    const filter = { ...dateRange(req.query.fromDate, req.query.toDate) };
+    if (clean(req.query.colid) && clean(req.query.colid) !== "All") filter.colid = asNumber(req.query.colid);
+    if (clean(req.query.status) && clean(req.query.status) !== "All") filter.status = clean(req.query.status);
+    if (clean(req.query.category)) filter.category = { $regex: clean(req.query.category), $options: "i" };
+    if (clean(req.query.search)) {
+      const regex = new RegExp(clean(req.query.search), "i");
+      filter.$or = [{ ticketno: regex }, { title: regex }, { details: regex }, { raisedby: regex }, { raisedbyemail: regex }, { assignedtoemail: regex }, { category: regex }];
+    }
+    if (clean(req.query.institution)) {
+      const regex = new RegExp(clean(req.query.institution), "i");
+      const [details, institutions] = await Promise.all([
+        InsDetails.find({ institutionname: regex }).select("colid").lean(),
+        Institution.find({ $or: [{ institutionname: regex }, { name: regex }] }).select("colid").lean()
+      ]);
+      const ids = [...new Set([...details, ...institutions].map((row) => Number(row.colid)).filter((id) => Number.isFinite(id)))];
+      if (filter.colid) {
+        filter.colid = ids.includes(Number(filter.colid)) ? filter.colid : -1;
+      } else {
+        filter.colid = { $in: ids.length ? ids : [-1] };
+      }
+    }
+    const rawTickets = await CentralTicket.find(filter).sort({ createdAt: -1 }).lean();
+    const tickets = await enrichInstitution(rawTickets);
+    const build = (mode) => {
+      const map = {};
+      tickets.forEach((ticket) => {
+        const key = bucketKey(ticket.createdAt, mode);
+        if (!map[key]) map[key] = { period: key, raised: 0, solved: 0 };
+        map[key].raised += 1;
+        if (/^closed$/i.test(clean(ticket.status))) map[key].solved += 1;
+      });
+      return Object.values(map).sort((a, b) => String(a.period).localeCompare(String(b.period)));
+    };
+    const closeMap = {};
+    tickets.filter((ticket) => ticket.closedat).forEach((ticket) => {
+      const key = bucketKey(ticket.closedat, "week");
+      if (!closeMap[key]) closeMap[key] = { period: key, totalHours: 0, closed: 0 };
+      closeMap[key].totalHours += (new Date(ticket.closedat) - new Date(ticket.createdAt)) / 3600000;
+      closeMap[key].closed += 1;
+    });
+    const avgCloseTime = Object.values(closeMap).map((row) => ({
+      period: row.period,
+      closed: row.closed,
+      averageHoursToClose: row.closed ? Number((row.totalHours / row.closed).toFixed(2)) : 0
+    })).sort((a, b) => String(a.period).localeCompare(String(b.period)));
+    const byStatus = ["Open", "Pending", "Closed"].map((status) => ({ status, count: tickets.filter((ticket) => clean(ticket.status).toLowerCase() === status.toLowerCase()).length }));
+    const byInstitutionMap = {};
+    tickets.forEach((ticket) => {
+      const label = `${ticket.colid || "-"} - ${ticket.institutionname || "Institution"}`;
+      byInstitutionMap[label] = (byInstitutionMap[label] || 0) + 1;
+    });
+    res.json({
+      success: true,
+      summary: { total: tickets.length, open: byStatus[0].count, pending: byStatus[1].count, closed: byStatus[2].count },
+      daywise: build("day"),
+      weekwise: build("week"),
+      monthwise: build("month"),
+      avgCloseTime,
+      byStatus,
+      byInstitution: Object.entries(byInstitutionMap).map(([institution, count]) => ({ institution, count })),
       details: tickets
     });
   } catch (err) {

@@ -10,10 +10,19 @@ const storerequisationschema = new mongoose.Schema({
     itemname: { type: String },
     store: { type: String },
     storeid: { type: String },
+    storename: { type: String },
     reqdate: { type: Date },
+    requestdate: { type: Date },
+    reqid: { type: String },
+    requestno: { type: String },
+    requestedby: { type: String },
+    requestedbyemail: { type: String },
+    creatoruserid: { type: String },
+    departmentname: { type: String },
     quantity: { type: Number },
     orderedQuantity: { type: Number, default: 0 },
     reqstatus: { type: String },
+    approvalStatus: { type: String },
     poid: { type: String },
     prnumber: { type: String },
     assignedTo: { type: String },       // Email of PE/SPE assigned
@@ -21,7 +30,11 @@ const storerequisationschema = new mongoose.Schema({
     unit: { type: String },             // e.g. 'Nos', 'Kg', 'Box'
     itemid: { type: String },           // Master item _id reference
     category: { type: String },
-    itemtype: { type: String }
+    itemtype: { type: String },
+    remarks: { type: String },
+    allotdate: { type: Date },
+    allottedby: { type: String },
+    allottedbyemail: { type: String }
 });
 
 const storerequisationds2 = mongoose.model('storerequisationds2', storerequisationschema);

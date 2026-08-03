@@ -643,6 +643,8 @@ const applicationPayload = (body) => {
   programapplied: body.programapplied,
   programcode: body.programcode,
   applicationstatus: body.applicationstatus || 'Applied',
+  enrollmentstatus: body.enrollmentstatus || '',
+  applicationcomments: body.applicationcomments || '',
   validationstatus: body.validationstatus || '',
   validationcomments: body.validationcomments || '',
   tenthsubjectmarks: body.tenthsubjectmarks || [],
