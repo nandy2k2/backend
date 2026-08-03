@@ -164,6 +164,7 @@ const applicationPayload = (body = {}) => {
     password: clean(body.password),
     status: clean(body.status || 'Submitted'),
     photourl: clean(body.photourl),
+    resumelink: clean(body.resumelink || body.resume || body.resumeLink),
     approvalstatus: clean(body.approvalstatus || 'Pending'),
     approvallevel: numberOrZero(body.approvallevel),
     customfields: body.customfields || {},

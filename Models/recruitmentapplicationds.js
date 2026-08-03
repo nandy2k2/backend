@@ -12,6 +12,7 @@ const RecruitmentApplicationSchema = new mongoose.Schema({
   password: { type: String, default: '' },
   status: { type: String, default: 'Submitted' },
   photourl: { type: String, default: '' },
+  resumelink: { type: String, default: '' },
   approvalstatus: { type: String, default: 'Pending' },
   approvallevel: { type: Number, default: 0 },
   approvalhistory: { type: [mongoose.Schema.Types.Mixed], default: [] },
