@@ -322,6 +322,7 @@ app.post("/api/v2/placement-new/stage-students/shift", placementnewctlrds.shiftS
 app.post("/api/v2/placement-new/stage-students/confirm", placementnewctlrds.confirmPlacement);
 app.get("/api/v2/placement-new/stage-report", placementnewctlrds.placementStageReport);
 app.post("/api/v2/placement-new/unemployed-students", placementnewctlrds.unemployedStudents);
+app.get("/api/v2/placement-new/placement-dashboard", placementnewctlrds.placementDashboard);
 app.get("/api/v2/placement-new/:kind", placementnewctlrds.list);
 app.post("/api/v2/placement-new/:kind", placementnewctlrds.save);
 app.post("/api/v2/placement-new/:kind/delete", placementnewctlrds.deleteOne);
@@ -612,6 +613,7 @@ app.get('/api/v2/google-auth/registration-config', googleAuthController.registra
 app.post('/api/v2/google-auth/public-register', googleAuthController.registerWithGoogle);
 app.post('/api/v2/authenticator/setup', authenticatorController.setup);
 app.post('/api/v2/authenticator/verify', authenticatorController.verify);
+app.post('/api/v2/authenticator/trust-check', authenticatorController.trustCheck);
 app.post('/api/v2/authenticator/admin-update', authenticatorController.adminUpdate);
 app.get('/api/v2/student-data-upload', studentDataUploadController.getStudents);
 app.post('/api/v2/student-data-upload', studentDataUploadController.createStudent);
@@ -694,6 +696,7 @@ app.get('/api/v2/examination-model2/marksheet', examinationModel2Controller.mark
 app.post('/api/v2/examination-model2/marksheet-blockchain-store', examinationModel2Controller.storeMarksheetBlockchain);
 app.get('/api/v2/examination-model2/viva-marksheet', examinationModel2Controller.vivaMarksheet);
 app.post('/api/v2/examination-model2/viva-marksheet-blockchain-store', examinationModel2Controller.storeVivaMarksheetBlockchain);
+app.get('/api/v2/examination-model2/tr-report', examinationModel2Controller.trReport);
 app.get('/api/v2/public/examination-model2/marksheet-blockchain-verify', examinationModel2Controller.verifyMarksheetBlockchain);
 app.get('/api/v2/casnew/options', casNewController.options);
 app.get('/api/v2/casnew/workloads', casNewController.getWorkloads);
@@ -5131,6 +5134,7 @@ const studentdemographicdashboardctlrds = require("./controllers/studentdemograp
 const lmsdirectordashboardctlrds = require("./controllers/lmsdirectordashboardctlrds");
 const examdashboardctlrds = require("./controllers/examdashboardctlrds");
 const hrattendancedashboardctlrds = require("./controllers/hrattendancedashboardctlrds");
+const institutionActivityDashboardCtlr = require("./controllers/institutionactivitydashboardctlrds");
 
 
 app.get("/api/v2/management-dashboard/options", managementdashboardctlrds.options);
@@ -5153,6 +5157,24 @@ app.get("/api/v2/hr-attendance-dashboard/options", hrattendancedashboardctlrds.d
 app.get("/api/v2/hr-attendance-dashboard/summary", hrattendancedashboardctlrds.departmentDashboard);
 app.post("/api/v2/hr-attendance-dummy/generate", hrattendancedashboardctlrds.generateDummyAttendance);
 app.get("/api/v2/hr-team-attendance-report/summary", hrattendancedashboardctlrds.teamReport);
+app.get("/api/v2/student-activities/options", institutionActivityDashboardCtlr.activityOptions);
+app.get("/api/v2/student-activities/student", institutionActivityDashboardCtlr.studentActivities);
+app.get("/api/v2/student-activities/cultural", institutionActivityDashboardCtlr.listActivities("cultural"));
+app.post("/api/v2/student-activities/cultural", institutionActivityDashboardCtlr.saveActivity("cultural"));
+app.post("/api/v2/student-activities/cultural-delete", institutionActivityDashboardCtlr.deleteActivities("cultural"));
+app.post("/api/v2/student-activities/cultural-bulk", institutionActivityDashboardCtlr.bulkActivities("cultural"));
+app.get("/api/v2/student-activities/sports", institutionActivityDashboardCtlr.listActivities("sports"));
+app.post("/api/v2/student-activities/sports", institutionActivityDashboardCtlr.saveActivity("sports"));
+app.post("/api/v2/student-activities/sports-delete", institutionActivityDashboardCtlr.deleteActivities("sports"));
+app.post("/api/v2/student-activities/sports-bulk", institutionActivityDashboardCtlr.bulkActivities("sports"));
+app.get("/api/v2/cultural-dashboard/summary", institutionActivityDashboardCtlr.activityDashboard("cultural"));
+app.get("/api/v2/sports-dashboard/summary", institutionActivityDashboardCtlr.activityDashboard("sports"));
+app.get("/api/v2/asset-dashboard/summary", institutionActivityDashboardCtlr.assetDashboard);
+app.get("/api/v2/purchase-new-dashboard/summary", institutionActivityDashboardCtlr.purchaseNewDashboard);
+app.get("/api/v2/purchase2-dashboard/summary", institutionActivityDashboardCtlr.purchase2Dashboard);
+app.get("/api/v2/hr-leave-dashboard/summary", institutionActivityDashboardCtlr.hrLeaveDashboard);
+app.get("/api/v2/salary-dashboard/summary", institutionActivityDashboardCtlr.salaryDashboard);
+app.post("/api/v2/institution-dashboard-dummy/generate", institutionActivityDashboardCtlr.generateDummy);
 app.get("/api/v2/ds1getcounsellors", ds1userctlr.ds1getcounsellors);
 app.get("/api/v2/user-joining-date/options", userjoiningdatectlrds.options);
 app.get("/api/v2/user-joining-date", userjoiningdatectlrds.getUsers);
@@ -6391,6 +6413,8 @@ app.post("/api/v2/librarynew/photocopy-request/reject", librarynewctlrds.rejectP
 app.post("/api/v2/librarynew/photocopy-request/upload", librarynewctlrds.uploadMiddleware, librarynewctlrds.uploadPhotocopy);
 app.get("/api/v2/librarynew/scan", librarynewctlrds.scanBook);
 app.get("/api/v2/librarynew/reports", librarynewctlrds.reports);
+app.get("/api/v2/librarynew/dashboard", librarynewctlrds.dashboard);
+app.post("/api/v2/librarynew/dummy-data", librarynewctlrds.generateDummyData);
 app.get("/api/v2/librarynew/transfers", librarynewctlrds.transfers);
 app.post("/api/v2/librarynew/transfers", librarynewctlrds.createTransfer);
 app.post("/api/v2/librarynew/transfers/approve", librarynewctlrds.approveTransfer);

@@ -8,6 +8,8 @@ const ExamMarks2 = require("../Models/exammarks2ds");
 const ExamModel2Marks = require("../Models/examinationmodel2marksds");
 const HomeVisit = require("../Models/mentoringhomevisitds");
 const MentoringSession = require("../Models/mentoringsessionds");
+const CulturalActivity = require("../Models/mentoringculturalactivityds");
+const SportsActivity = require("../Models/mentoringsportsactivityds");
 
 const text = (value) => String(value || "").trim();
 const number = (value) => {
@@ -137,11 +139,13 @@ exports.studentReadonly = async (req, res) => {
     const query = {};
     if (colid !== undefined) query.colid = colid;
     if (regno) query.regno = new RegExp(`^${escapeRegex(regno)}$`, "i");
-    const [homeVisits, sessions] = await Promise.all([
+    const [homeVisits, sessions, cultural, sports] = await Promise.all([
       HomeVisit.find(query).sort({ activitydate: -1 }).lean(),
-      MentoringSession.find(query).sort({ activitydate: -1 }).lean()
+      MentoringSession.find(query).sort({ activitydate: -1 }).lean(),
+      CulturalActivity.find(query).sort({ activitydate: -1 }).lean(),
+      SportsActivity.find(query).sort({ activitydate: -1 }).lean()
     ]);
-    res.json({ success: true, homeVisits, sessions });
+    res.json({ success: true, homeVisits, sessions, cultural, sports });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -166,7 +170,7 @@ exports.studentProfile = async (req, res) => {
         ...(regno ? [{ regno: new RegExp(`^${escapeRegex(regno)}$`, "i") }] : [])
       ]
     };
-    const [institution, layout, customFields, admissions, examMarks1, examMarks2, examModel2, homeVisits, sessions] = await Promise.all([
+    const [institution, layout, customFields, admissions, examMarks1, examMarks2, examModel2, homeVisits, sessions, cultural, sports] = await Promise.all([
       InsDetails.findOne(baseQuery).sort({ _id: -1 }).lean(),
       UserProfileDisplayLayout.find({ ...baseQuery, role: /^Student$/i, visible: /^Yes$/i }).sort({ sectionorder: 1, order: 1 }).lean(),
       UserCustomField.find({ ...baseQuery, isactive: /^Yes$/i }).sort({ page: 1, section: 1, order: 1 }).lean(),
@@ -175,9 +179,11 @@ exports.studentProfile = async (req, res) => {
       ExamMarks2.find(studentMatch.$or.length ? studentMatch : baseQuery).sort({ year: -1, semester: 1 }).lean(),
       ExamModel2Marks.find({ ...baseQuery, ...(regno ? { regno: new RegExp(`^${escapeRegex(regno)}$`, "i") } : {}) }).sort({ academicyear: -1, semester: 1, course: 1 }).lean(),
       HomeVisit.find({ ...baseQuery, ...(regno ? { regno: new RegExp(`^${escapeRegex(regno)}$`, "i") } : {}) }).sort({ activitydate: -1 }).lean(),
-      MentoringSession.find({ ...baseQuery, ...(regno ? { regno: new RegExp(`^${escapeRegex(regno)}$`, "i") } : {}) }).sort({ activitydate: -1 }).lean()
+      MentoringSession.find({ ...baseQuery, ...(regno ? { regno: new RegExp(`^${escapeRegex(regno)}$`, "i") } : {}) }).sort({ activitydate: -1 }).lean(),
+      CulturalActivity.find({ ...baseQuery, ...(regno ? { regno: new RegExp(`^${escapeRegex(regno)}$`, "i") } : {}) }).sort({ activitydate: -1 }).lean(),
+      SportsActivity.find({ ...baseQuery, ...(regno ? { regno: new RegExp(`^${escapeRegex(regno)}$`, "i") } : {}) }).sort({ activitydate: -1 }).lean()
     ]);
-    res.json({ success: true, student, institution, layout, customFields, admissions, examMarks1, examMarks2, examModel2, homeVisits, sessions });
+    res.json({ success: true, student, institution, layout, customFields, admissions, examMarks1, examMarks2, examModel2, homeVisits, sessions, cultural, sports });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

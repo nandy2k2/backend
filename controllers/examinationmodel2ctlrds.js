@@ -15,6 +15,7 @@ const ComponentMarks = require("../Models/exammodel2componentmarksds");
 const ComponentAllocation = require("../Models/conductexamcomponentallocationds");
 const GradeConfiguration = require("../Models/gradeconfigurationds");
 const PassMarksConfiguration = require("../Models/passmarksconfigurationds");
+const ConductExamRoll = require("../Models/conductexamrollds");
 const { appendBlock } = require("./blockchainledgerctlrds");
 
 const text = (value) => String(value ?? "").trim();
@@ -231,21 +232,22 @@ exports.options = async (req, res) => {
   try {
     const colid = number(req.query.colid);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
-    const [marks, programs, courses, exams] = await Promise.all([
+    const [marks, vivaMarks, programs, courses, exams] = await Promise.all([
       ExamMarks.find({ colid }).select(markFields.join(" ")).lean(),
+      ExamVivaMarks.find({ colid }).select(vivaMarkFields.join(" ")).lean(),
       MPrograms.find({ colid }).select("year program programcode totalcredits").lean(),
       RegulationCourseMap.find({ colid }).select("academicyear regulation program programcode semester course coursecode credit").lean(),
       ConductExam.find({ colid }).select("academicyear examname exam examcode").lean()
     ]);
     const examCourseRows = await ConductExamCourse.find({ colid }).select("academicyear regulation program programcode semester course coursecode exam examcode examdate").lean().catch(() => []);
-    const combined = [...marks, ...courses, ...examCourseRows];
+    const combined = [...marks, ...vivaMarks, ...courses, ...examCourseRows];
     res.json({
       success: true,
       options: {
         academicyear: uniqueSorted([...combined.map((x) => x.academicyear), ...programs.map((x) => x.year), ...exams.map((x) => x.academicyear)]),
         regulation: uniqueSorted(combined.map((x) => x.regulation)),
-        exam: uniqueSorted([...marks.map((x) => x.exam), ...exams.map((x) => x.exam || x.examname), ...examCourseRows.map((x) => x.exam)]),
-        examcode: uniqueSorted([...marks.map((x) => x.examcode), ...exams.map((x) => x.examcode), ...examCourseRows.map((x) => x.examcode)]),
+        exam: uniqueSorted([...marks.map((x) => x.exam), ...vivaMarks.map((x) => x.exam), ...exams.map((x) => x.exam || x.examname), ...examCourseRows.map((x) => x.exam)]),
+        examcode: uniqueSorted([...marks.map((x) => x.examcode), ...vivaMarks.map((x) => x.examcode), ...exams.map((x) => x.examcode), ...examCourseRows.map((x) => x.examcode)]),
         program: uniqueSorted([...combined.map((x) => x.program), ...programs.map((x) => x.program)]),
         programcode: uniqueSorted([...combined.map((x) => x.programcode), ...programs.map((x) => x.programcode)]),
         semester: uniqueSorted(combined.map((x) => x.semester)),
@@ -1476,6 +1478,185 @@ exports.vivaMarksheet = async (req, res) => {
       },
       marksheetconfiguration: config || {},
       institution: institution || {}
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.trReport = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const filter = { colid };
+    ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "semester", "type"].forEach((field) => {
+      if (text(req.query[field])) filter[field] = text(req.query[field]);
+    });
+    if (!filter.academicyear || !filter.examcode || !filter.programcode || !filter.semester) {
+      return res.status(400).json({ success: false, message: "Academic year, exam code, program code and semester are required" });
+    }
+
+    const useModel = /^marks$/i.test(text(req.query.model)) ? "marks" : "viva";
+    let TargetModel = useModel === "marks" ? ExamMarks : ExamVivaMarks;
+    let marks = await TargetModel.find(filter).sort({ regno: 1, coursecode: 1, attempt: 1 }).lean();
+    if (!marks.length && useModel !== "marks") {
+      TargetModel = ExamMarks;
+      marks = await TargetModel.find(filter).sort({ regno: 1, coursecode: 1, attempt: 1 }).lean();
+    }
+    if (!marks.length) return res.status(404).json({ success: false, message: "No marks found for selected TR filters" });
+
+    const first = marks[0];
+    const regnos = uniqueSorted(marks.map((row) => row.regno));
+    const coursecodes = uniqueSorted(marks.map((row) => row.coursecode));
+    const rollFilter = {
+      colid,
+      academicyear: first.academicyear,
+      examcode: first.examcode,
+      programcode: first.programcode,
+      semester: first.semester,
+      regno: { $in: regnos },
+      coursecode: { $in: coursecodes }
+    };
+    if (text(first.regulation)) rollFilter.regulation = text(first.regulation);
+    const [users, rolls, program, exam, institution] = await Promise.all([
+      User.find({ colid, regno: { $in: regnos } }).select("name regno email phone photo fathername mothername gender admissionyear academicyear program programcode semester section category abcid").lean(),
+      ConductExamRoll.find(rollFilter).select("regno coursecode examsection section seatno examseatno attended admitcardeligible remarks").lean().catch(() => []),
+      MPrograms.findOne({ colid, year: first.academicyear, programcode: first.programcode }).sort({ _id: -1 }).lean(),
+      ConductExam.findOne({ colid, academicyear: first.academicyear, examcode: first.examcode }).lean(),
+      getInstitution(colid)
+    ]);
+
+    const userMap = new Map(users.map((row) => [text(row.regno), row]));
+    const rollMap = new Map(rolls.map((row) => [`${text(row.regno)}||${text(row.coursecode)}`, row]));
+    const courseMap = new Map();
+    marks.forEach((row) => {
+      if (!courseMap.has(text(row.coursecode))) {
+        courseMap.set(text(row.coursecode), {
+          course: row.course,
+          coursecode: row.coursecode,
+          credit: number(row.credit),
+          theorymarks: number(row.theorymarks),
+          practicaltotal: number(row.practicaltotal),
+          vivatotal: number(row.vivatotal),
+          overalltotalmarks: number(row.overalltotalmarks)
+        });
+      }
+    });
+
+    const studentRows = regnos.map((regno, index) => {
+      const studentMarks = marks.filter((row) => text(row.regno) === regno);
+      const user = userMap.get(regno) || {};
+      const aggregateObtained = studentMarks.reduce((sum, row) => sum + number(row.overallobtained), 0);
+      const aggregateMax = studentMarks.reduce((sum, row) => sum + number(row.overalltotalmarks), 0);
+      const failedCodes = studentMarks.filter((row) => /^fail$/i.test(text(row.status)) || /^f$/i.test(text(row.overallgrade))).map((row) => row.coursecode);
+      const courseRows = studentMarks.map((row) => {
+        const roll = rollMap.get(`${regno}||${text(row.coursecode)}`) || {};
+        return {
+          _id: row._id,
+          course: row.course,
+          coursecode: row.coursecode,
+          credit: number(row.credit),
+          theorymax: number(row.theorymarks),
+          theoryobtained: number(row.theoryobtained),
+          theorypercentage: number(row.theorypercentage),
+          theorygrade: row.theorygrade,
+          theorystatus: row.theorystatus || "",
+          practicalmax: number(row.practicaltotal),
+          practicalobtained: number(row.practicalmarks),
+          practicalpercentage: number(row.practicalpercentage),
+          practicalgrade: row.practicalgrade,
+          practicalstatus: row.practicalstatus || "",
+          vivamax: number(row.vivatotal),
+          vivaobtained: number(row.vivaobtained),
+          vivapercentage: number(row.vivapercentage),
+          vivagrade: row.vivagrade || "",
+          overallmax: number(row.overalltotalmarks),
+          overallobtained: number(row.overallobtained),
+          overallpercentage: number(row.overallpercentage),
+          overallgrade: row.overallgrade,
+          gradepoint: number(row.overallgradepoint),
+          gpa: number(row.gpa),
+          status: row.status,
+          attempt: number(row.attempt, 1),
+          type: row.type,
+          examdate: row.examdate,
+          resultprocessdate: row.resultprocessdate,
+          examsection: roll.examsection || roll.section || "",
+          seatno: roll.seatno || roll.examseatno || "",
+          attended: roll.attended || ""
+        };
+      });
+      return {
+        srno: index + 1,
+        enrolmentno: regno,
+        regno,
+        abcid: studentMarks.find((row) => text(row.abcid))?.abcid || user.abcid || "",
+        name: user.name || studentMarks[0]?.student || "",
+        fathername: user.fathername || "",
+        mothername: user.mothername || "",
+        gender: user.gender || "",
+        studentstatus: studentMarks[0]?.type || "",
+        batch: user.admissionyear || "",
+        branchname: studentMarks[0]?.program || program?.program || "",
+        program: studentMarks[0]?.program || program?.program || "",
+        programcode: studentMarks[0]?.programcode || program?.programcode || "",
+        section: user.section || "",
+        courses: courseRows,
+        aggregate: {
+          obtained: Number(aggregateObtained.toFixed(2)),
+          max: Number(aggregateMax.toFixed(2)),
+          percentage: aggregateMax ? Number(((aggregateObtained / aggregateMax) * 100).toFixed(2)) : 0,
+          result: failedCodes.length ? "Fail" : "Pass",
+          remarks: failedCodes.length ? `Fail in Paper Code: ${failedCodes.join(", ")}` : "",
+          attempt: Math.max(...studentMarks.map((row) => number(row.attempt, 1)), 1)
+        }
+      };
+    });
+
+    const genderSummary = ["M", "F", "Other"].map((gender) => {
+      const rows = studentRows.filter((row) => {
+        const value = text(row.gender).toLowerCase();
+        if (gender === "M") return value === "m" || value === "male";
+        if (gender === "F") return value === "f" || value === "female";
+        return value && !["m", "male", "f", "female"].includes(value);
+      });
+      return {
+        gender,
+        appeared: rows.length,
+        passed: rows.filter((row) => row.aggregate.result === "Pass").length,
+        failed: rows.filter((row) => row.aggregate.result === "Fail").length
+      };
+    });
+    const totalSummary = {
+      appeared: studentRows.length,
+      passed: studentRows.filter((row) => row.aggregate.result === "Pass").length,
+      failed: studentRows.filter((row) => row.aggregate.result === "Fail").length
+    };
+
+    res.json({
+      success: true,
+      source: TargetModel.modelName,
+      filters: {
+        academicyear: first.academicyear,
+        regulation: first.regulation,
+        exam: first.exam || exam?.examname || exam?.exam || "",
+        examcode: first.examcode,
+        program: first.program || program?.program || "",
+        programcode: first.programcode,
+        semester: first.semester,
+        type: first.type || exam?.type || ""
+      },
+      institution: institution || {},
+      program: program || {},
+      courses: [...courseMap.values()],
+      students: studentRows,
+      summary: { genderwise: genderSummary, total: totalSummary },
+      missingMappings: [
+        "Internal assessment split for theory/practical is not available in exammodel2 marks.",
+        "Section A / Section B question-wise marks are not available in exammodel2 marks.",
+        "Grace mark detail is not stored separately in exammodel2 marks.",
+        "Division is not stored separately in exammodel2 marks."
+      ]
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

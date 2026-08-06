@@ -16,6 +16,7 @@ const nepLmsLessonContentSchema = new mongoose.Schema(
     sequence: { type: Number, default: 1 },
     contenttype: { type: String, trim: true, required: true },
     title: { type: String, trim: true, required: true },
+    section: { type: String, trim: true },
     description: { type: String, trim: true },
     topics: { type: String, trim: true },
     filelink: { type: String, trim: true },

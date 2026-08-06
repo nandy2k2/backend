@@ -16,6 +16,7 @@ const nepLmsResourceSchema = new mongoose.Schema(
     faculty: { type: String, trim: true },
     facultyemail: { type: String, trim: true },
     title: { type: String, trim: true },
+    section: { type: String, trim: true },
     module: { type: String, trim: true },
     topic: { type: String, trim: true },
     description: { type: String, trim: true },

@@ -59,6 +59,7 @@ const resourcePayload = (body = {}) => ({
   ...coursePayload(body),
   resourcetype: text(body.resourcetype),
   title: text(body.title),
+  section: text(body.section),
   module: text(body.module),
   topic: text(body.topic),
   description: text(body.description),

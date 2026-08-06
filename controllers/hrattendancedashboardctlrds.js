@@ -1,6 +1,7 @@
 const User = require("../Models/user");
 const HrEmployeeAttendance = require("../Models/hremployeeattendanceds");
 const OrganizationHierarchy = require("../Models/organizationhierarchyds");
+const Institution = require("../Models/insdetails");
 
 const text = (value) => String(value ?? "").trim();
 const num = (value) => {
@@ -16,6 +17,7 @@ const iso = (date) => date.toISOString().slice(0, 10);
 const monthName = (date) => date.toLocaleString("en-US", { month: "long" });
 const uniqueSorted = (values = []) => [...new Set(values.map(text).filter(Boolean))]
   .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+const getInstitution = (colid) => Institution.findOne({ colid }).sort({ _id: -1 }).lean();
 
 const dateRange = (from, to) => {
   const start = new Date(from);
@@ -116,9 +118,10 @@ exports.departmentDashboard = async (req, res) => {
   try {
     const built = baseDateQuery(req.query);
     if (built.error) return res.status(400).json({ success: false, message: built.error });
-    const [attendanceRows, users] = await Promise.all([
+    const [attendanceRows, users, institution] = await Promise.all([
       HrEmployeeAttendance.find(built.query).lean(),
-      User.find({ colid: built.colid, role: { $not: /^Student$/i } }).select("name email user role department").lean()
+      User.find({ colid: built.colid, role: { $not: /^Student$/i } }).select("name email user role department").lean(),
+      getInstitution(built.colid)
     ]);
     const userMap = new Map(users.map((user) => [text(user.email || user.user).toLowerCase(), user]));
     const map = new Map();
@@ -159,7 +162,8 @@ exports.departmentDashboard = async (req, res) => {
             { label: "Present", count: totals.present },
             { label: "Absent", count: totals.absent }
           ]
-        }
+        },
+        institution: institution || {}
       }
     });
   } catch (error) {
@@ -179,8 +183,14 @@ exports.teamReport = async (req, res) => {
       status: { $ne: "Inactive" }
     }).lean();
     const emails = uniqueSorted(mappings.map((row) => row.employeeemail));
-    if (!emails.length) return res.json({ success: true, data: { cards: [], table: [], daily: [], charts: { userwise: [], presentAbsent: [] } } });
-    const rows = await HrEmployeeAttendance.find({ ...built.query, employeeemail: { $in: emails } }).lean();
+    if (!emails.length) {
+      const institution = await getInstitution(built.colid);
+      return res.json({ success: true, data: { cards: [], table: [], daily: [], charts: { userwise: [], presentAbsent: [] }, institution: institution || {} } });
+    }
+    const [rows, institution] = await Promise.all([
+      HrEmployeeAttendance.find({ ...built.query, employeeemail: { $in: emails } }).lean(),
+      getInstitution(built.colid)
+    ]);
     const rowMap = new Map(rows.map((row) => [`${text(row.employeeemail).toLowerCase()}||${text(row.date)}`, row]));
     const table = [];
     const userSummary = new Map();
@@ -233,7 +243,8 @@ exports.teamReport = async (req, res) => {
             { label: "Present", count: totals.present },
             { label: "Absent", count: totals.absent }
           ]
-        }
+        },
+        institution: institution || {}
       }
     });
   } catch (error) {

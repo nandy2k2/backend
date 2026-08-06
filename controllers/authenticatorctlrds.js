@@ -3,6 +3,7 @@ const User = require("../Models/user");
 
 const GLOBAL_MANDATORY_DATE = new Date("2026-08-15T00:00:00.000Z");
 const NEW_ACCOUNT_GRACE_DAYS = 5;
+const TRUST_DEVICE_DAYS = 3;
 const STEP_SECONDS = 30;
 const DIGITS = 6;
 
@@ -67,6 +68,55 @@ function verifyTotp(secret, token) {
     if (hotp(secret, counter + drift) === code) return true;
   }
   return false;
+}
+
+function signingKey(user) {
+  return crypto
+    .createHash("sha256")
+    .update(`${process.env.JWT_SECRET || "campus-technology"}:${user.authenticatorsecret || ""}:${user.authenticatorsetupdate ? new Date(user.authenticatorsetupdate).getTime() : ""}`)
+    .digest();
+}
+
+function signPayload(payload, user) {
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const sig = crypto.createHmac("sha256", signingKey(user)).update(body).digest("base64url");
+  return `${body}.${sig}`;
+}
+
+function readSignedPayload(token, user) {
+  const [body, sig] = clean(token).split(".");
+  if (!body || !sig) return null;
+  const expected = crypto.createHmac("sha256", signingKey(user)).update(body).digest("base64url");
+  const given = Buffer.from(sig);
+  const target = Buffer.from(expected);
+  if (given.length !== target.length || !crypto.timingSafeEqual(given, target)) return null;
+  try {
+    return JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function createTrustToken(user, deviceId) {
+  const now = Date.now();
+  return signPayload({
+    sub: String(user._id),
+    colid: Number(user.colid),
+    email: normEmail(user.email),
+    deviceId: clean(deviceId),
+    iat: now,
+    exp: now + TRUST_DEVICE_DAYS * 24 * 60 * 60 * 1000
+  }, user);
+}
+
+function verifyTrustToken(user, token, deviceId) {
+  const payload = readSignedPayload(token, user);
+  if (!payload) return false;
+  return String(payload.sub) === String(user._id)
+    && Number(payload.colid) === Number(user.colid)
+    && normEmail(payload.email) === normEmail(user.email)
+    && clean(payload.deviceId) === clean(deviceId)
+    && Number(payload.exp || 0) > Date.now();
 }
 
 function accountCreatedAt(user) {
@@ -157,12 +207,34 @@ exports.verify = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid authenticator code" });
     }
     user.authenticator = "Yes";
-    user.authenticatorsetupdate = new Date();
+    if (!user.authenticatorsetupdate) user.authenticatorsetupdate = new Date();
     if (!user.authenticatordate) user.authenticatordate = new Date();
     await user.save();
-    res.json({ success: true, twofa: buildTwoFactorStatus(user) });
+    const trustDevice = req.body.trustDevice === true || clean(req.body.trustDevice).toLowerCase() === "yes";
+    const deviceId = clean(req.body.deviceId);
+    const trustToken = trustDevice && deviceId ? createTrustToken(user, deviceId) : "";
+    res.json({
+      success: true,
+      twofa: buildTwoFactorStatus(user),
+      trustToken,
+      trustedUntil: trustToken ? new Date(Date.now() + TRUST_DEVICE_DAYS * 24 * 60 * 60 * 1000) : null
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.trustCheck = async (req, res) => {
+  try {
+    const user = await findUser(req.body);
+    if (!user) return res.status(404).json({ success: false, trusted: false, message: "User not found" });
+    if (isStudent(user)) return res.json({ success: true, trusted: true, twofa: buildTwoFactorStatus(user) });
+    const twofa = buildTwoFactorStatus(user);
+    if (!twofa.applicable || !twofa.setupComplete) return res.json({ success: true, trusted: false, twofa });
+    const trusted = verifyTrustToken(user, req.body.trustToken, req.body.deviceId);
+    res.json({ success: true, trusted, twofa });
+  } catch (err) {
+    res.status(500).json({ success: false, trusted: false, message: err.message });
   }
 };
 

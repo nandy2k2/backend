@@ -127,6 +127,7 @@ const contentPayload = async (body = {}) => {
     sequence: number(body.sequence, 1),
     contenttype: text(body.contenttype),
     title: text(body.title),
+    section: text(body.section),
     description: text(body.description),
     topics: text(body.topics),
     filelink: text(body.filelink),
@@ -142,7 +143,7 @@ const contentPayload = async (body = {}) => {
 
 const buildFilter = (source = {}) => {
   const filter = { colid: Number(source.colid) };
-  ["lessonresourceid", "academicyear", "semester", "coursecode", "coursegroup", "facultyemail", "contenttype", "status"].forEach((field) => {
+  ["lessonresourceid", "academicyear", "semester", "coursecode", "coursegroup", "facultyemail", "contenttype", "section", "status"].forEach((field) => {
     if (text(source[field])) filter[field] = source[field];
   });
   return filter;
@@ -532,6 +533,7 @@ exports.completeContent = async (req, res) => {
         lessonplantitle: content.lessonplantitle,
         contenttitle: content.title,
         contenttype: content.contenttype,
+        section: content.section,
         sequence: content.sequence,
         totalsteps,
         completedsteps,

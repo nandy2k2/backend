@@ -37,6 +37,7 @@ const roleMaxDaysFields = ["role", "bookcategory", "noofdays"];
 const ledgerFields = ["academicyear", "program", "programcode", "regulation", "semester", "student", "regno", "feegroup", "feeitem", "status"];
 const userFields = ["name", "email", "user", "role", "department", "phone"];
 const photocopyFields = ["libraryname", "student", "regno", "email", "programcode", "semester", "title", "accessionno", "status"];
+const issueTypes = ["Regular", "Reference", "Reading Room", "Faculty Issue", "Special"];
 const geminiModels = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash"];
 
 function text(value) {
@@ -325,6 +326,34 @@ function group(rows, field, valueField = "count") {
     map.set(key, current);
   });
   return Array.from(map.values()).sort((a, b) => number(b[valueField], 0) - number(a[valueField], 0));
+}
+
+function monthKey(value) {
+  const parsed = date(value);
+  if (!parsed) return "Not specified";
+  return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function groupByMonth(rows, field) {
+  const map = new Map();
+  rows.forEach((row) => {
+    const key = monthKey(row[field] || row.createdAt);
+    const current = map.get(key) || { label: key, count: 0 };
+    current.count += 1;
+    map.set(key, current);
+  });
+  return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function randomPick(list = [], index = 0) {
+  if (!list.length) return null;
+  return list[index % list.length];
+}
+
+function addDays(base, days) {
+  const value = new Date(base);
+  value.setDate(value.getDate() + days);
+  return value;
 }
 
 exports.libraries = async (req, res) => {
@@ -1277,6 +1306,272 @@ exports.reports = async (req, res) => {
         status: group(rows, "status", "count"),
         programcode: group(rows, "programcode", "count"),
         issuetype: group(rows, "issuetype", "count")
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.dashboard = async (req, res) => {
+  try {
+    const colid = number(req.query.colid, undefined);
+    const from = dayStart(req.query.fromdate);
+    const to = dayEnd(req.query.todate);
+    const scoped = { colid };
+    await applyLibraryAccess(scoped, colid, req.query);
+    if (text(req.query.libraryid)) scoped.libraryid = text(req.query.libraryid);
+    const issueQuery = { ...scoped };
+    const returnQuery = { ...scoped, status: /^Returned$/i };
+    const photocopyQuery = { ...scoped };
+    const bookQuery = { ...scoped };
+    if (from || to) {
+      issueQuery.issuedate = { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) };
+      returnQuery.returndate = { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) };
+      photocopyQuery.requestdate = { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) };
+      bookQuery.createdAt = { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) };
+    }
+    const [booksAll, newBooks, issues, returns, requests, photocopies, users, institution, libraries] = await Promise.all([
+      LibraryBook.find(scoped).sort({ createdAt: -1 }).limit(10000).lean(),
+      LibraryBook.find(bookQuery).sort({ createdAt: -1 }).limit(10000).lean(),
+      LibraryIssue.find(issueQuery).sort({ issuedate: -1 }).limit(10000).lean(),
+      LibraryIssue.find(returnQuery).sort({ returndate: -1 }).limit(10000).lean(),
+      LibraryRequest.find(scoped).sort({ requestdate: -1 }).limit(5000).lean(),
+      LibraryPhotocopyRequest.find(photocopyQuery).sort({ requestdate: -1 }).limit(5000).lean(),
+      User.find({ colid }).select("name email user regno role program programcode department").lean(),
+      Institution.findOne({ colid }).lean(),
+      accessibleLibraries(colid, req.query.user || req.query.email, /^all$/i.test(text(req.query.role)))
+    ]);
+    const userByReg = new Map();
+    const userByEmail = new Map();
+    users.forEach((user) => {
+      if (text(user.regno)) userByReg.set(text(user.regno).toLowerCase(), user);
+      if (text(user.email || user.user)) userByEmail.set(text(user.email || user.user).toLowerCase(), user);
+    });
+    const enrichedIssues = issues.map((row) => {
+      const profile = userByReg.get(text(row.regno).toLowerCase()) || userByEmail.get(text(row.email).toLowerCase()) || {};
+      return { ...row, usertype: text(row.role || profile.role) || "Not specified", department: text(profile.department || row.department) };
+    });
+    const issueRows = enrichedIssues.filter((row) => /^Issued$/i.test(row.status || ""));
+    const returnedRows = enrichedIssues.filter((row) => /^Returned$/i.test(row.status || ""));
+    const activeIssuedAll = booksAll.filter((book) => /^Issued$/i.test(book.status || "")).length;
+    const totalFine = returns.reduce((sum, row) => sum + number(row.fineamount, 0), 0);
+    const topBooksMap = new Map();
+    enrichedIssues.forEach((row) => {
+      const key = text(row.accessionno) || text(row.title) || "Not specified";
+      const current = topBooksMap.get(key) || { accessionno: row.accessionno, title: row.title, category: row.category, count: 0 };
+      current.count += 1;
+      topBooksMap.set(key, current);
+    });
+    const dashboard = {
+      success: true,
+      institution,
+      libraries,
+      cards: {
+        totalBooks: booksAll.length,
+        availableBooks: booksAll.filter((row) => /^Available$/i.test(row.status || "")).length,
+        activeIssued: activeIssuedAll,
+        issuedInRange: issueRows.length,
+        returnedInRange: returns.length || returnedRows.length,
+        pendingBookRequests: requests.filter((row) => /^Requested$/i.test(row.status || "")).length,
+        photocopyRequests: photocopies.length,
+        pendingPhotocopy: photocopies.filter((row) => /^Requested$/i.test(row.status || "")).length,
+        fineAmount: totalFine,
+        newAdditions: newBooks.length
+      },
+      charts: {
+        issueReturn: [
+          { label: "Issued", count: issueRows.length },
+          { label: "Returned", count: returns.length || returnedRows.length }
+        ],
+        categoryInterests: group(enrichedIssues, "category", "count").slice(0, 12),
+        userTypeCirculation: group(enrichedIssues, "usertype", "count"),
+        photocopyTrend: groupByMonth(photocopies, "requestdate"),
+        categorywiseBooks: group(booksAll, "category", "count").slice(0, 15),
+        newAdditionsMonthwise: groupByMonth(newBooks.length ? newBooks : booksAll, "createdAt"),
+        librarywiseBooks: group(booksAll, "libraryname", "count"),
+        statuswiseBooks: group(booksAll, "status", "count"),
+        programwiseCirculation: group(enrichedIssues, "programcode", "count")
+      },
+      details: {
+        issues: enrichedIssues,
+        books: booksAll,
+        newBooks,
+        requests,
+        photocopies,
+        topBooks: Array.from(topBooksMap.values()).sort((a, b) => b.count - a.count).slice(0, 25)
+      }
+    };
+    res.json(dashboard);
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.generateDummyData = async (req, res) => {
+  try {
+    const colid = number(req.body.colid, undefined);
+    const count = Math.max(1, Math.min(number(req.body.count, 50), 500));
+    const userEmail = text(req.body.user);
+    const existingUsers = await User.find({ colid }).select("name email user regno role phone program programcode academicyear semester section department").limit(1000).lean();
+    if (!existingUsers.length) return res.status(400).json({ success: false, message: "No users found for this institution. Create users first." });
+    const libraryNames = ["Central Library", "Health Sciences Library", "Digital Learning Library"];
+    const libraries = [];
+    for (const [index, libraryname] of libraryNames.entries()) {
+      const library = await LibraryMaster.findOneAndUpdate(
+        { colid, libraryname },
+        { colid, libraryname, description: `${libraryname} dummy data`, type: index === 0 ? "University" : index === 1 ? "Departmental" : "Special", status: "Active", user: userEmail },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      libraries.push(library);
+    }
+    const categories = ["Orthodontics", "Oral Surgery", "Biochemistry", "Research Methods", "Public Health", "Prosthodontics", "Anatomy", "Periodontics"];
+    const subjects = ["Clinical Dentistry", "Basic Science", "Research", "Community Care", "Lab Practice"];
+    const books = [];
+    for (let i = 0; i < count; i += 1) {
+      const library = randomPick(libraries, i);
+      const category = randomPick(categories, i);
+      const title = `${category} Reference ${String(i + 1).padStart(3, "0")}`;
+      const accessionno = `LIB-${String(colid).padStart(3, "0")}-${String(i + 1).padStart(5, "0")}`;
+      const purchasedate = addDays(new Date(), -1 * (i % 360));
+      const book = await LibraryBook.findOneAndUpdate(
+        { colid, libraryid: String(library._id), accessionno },
+        {
+          colid,
+          ...libraryPayload(library),
+          accessionno,
+          title,
+          author: `Author ${String.fromCharCode(65 + (i % 26))}`,
+          classification: `${category.slice(0, 3).toUpperCase()}-${100 + i}`,
+          publisher: "Academic Press",
+          publisheraddress: "Institutional Book Supplier",
+          isbn: `978-81-${String(1000000 + i)}`,
+          category,
+          subject: randomPick(subjects, i),
+          edition: `${(i % 5) + 1}`,
+          publicationyear: String(2018 + (i % 9)),
+          language: "English",
+          rackno: `R${(i % 8) + 1}`,
+          shelfno: `S${(i % 12) + 1}`,
+          location: "Main Stack",
+          supplier: "Demo Supplier",
+          invoiceno: `INV-${String(i + 1).padStart(4, "0")}`,
+          invoicedate: purchasedate,
+          keywords: `${category}, learning, reference`,
+          purchasedate,
+          price: 500 + (i % 30) * 75,
+          pages: 120 + (i % 40) * 8,
+          status: "Available",
+          remarks: "Generated dummy library book",
+          user: userEmail
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      books.push(book);
+    }
+    const circulationUsers = existingUsers.filter((user) => text(user.regno) || text(user.email || user.user));
+    const issueCount = Math.min(count * 2, books.length * 2);
+    let createdIssues = 0;
+    let createdRequests = 0;
+    let createdPhotocopies = 0;
+    for (let i = 0; i < issueCount; i += 1) {
+      const book = randomPick(books, i);
+      const profile = randomPick(circulationUsers, i + 3);
+      if (!book || !profile) continue;
+      const issuedate = addDays(new Date(), -1 * ((i % 150) + 1));
+      const returned = i % 3 !== 0;
+      const duedate = addDays(issuedate, 14 + (i % 15));
+      const issuePayload = {
+        colid,
+        ...libraryPayload(book),
+        accessionno: book.accessionno,
+        bookid: String(book._id),
+        title: book.title,
+        author: book.author,
+        classification: book.classification,
+        publisher: book.publisher,
+        publisheraddress: book.publisheraddress,
+        invoiceno: book.invoiceno,
+        invoicedate: book.invoicedate,
+        keywords: book.keywords,
+        category: book.category,
+        ...studentPayload(profile),
+        regno: text(profile.regno) || text(profile.email || profile.user),
+        issuetype: randomPick(issueTypes, i),
+        issuedate,
+        duedate,
+        returndate: returned ? addDays(issuedate, 7 + (i % 28)) : undefined,
+        status: returned ? "Returned" : "Issued",
+        fineamount: returned && i % 7 === 0 ? 20 + (i % 5) * 10 : 0,
+        remarks: "Generated dummy circulation",
+        issuedby: userEmail,
+        returnedby: returned ? userEmail : "",
+        user: userEmail
+      };
+      const existing = await LibraryIssue.findOne({ colid, accessionno: issuePayload.accessionno, regno: issuePayload.regno, issuedate });
+      if (!existing) {
+        await LibraryIssue.create(issuePayload);
+        createdIssues += 1;
+      }
+      if (!returned) await LibraryBook.findOneAndUpdate({ _id: book._id, colid }, { status: "Issued" });
+      if (i % 4 === 0) {
+        await LibraryRequest.create({
+          colid,
+          ...libraryPayload(book),
+          accessionno: book.accessionno,
+          bookid: String(book._id),
+          title: book.title,
+          author: book.author,
+          classification: book.classification,
+          publisher: book.publisher,
+          publisheraddress: book.publisheraddress,
+          invoiceno: book.invoiceno,
+          invoicedate: book.invoicedate,
+          keywords: book.keywords,
+          category: book.category,
+          ...studentPayload(profile),
+          regno: text(profile.regno) || text(profile.email || profile.user),
+          requestdate: addDays(new Date(), -1 * (i % 90)),
+          status: i % 8 === 0 ? "Issued" : "Requested",
+          remarks: "Generated dummy request",
+          user: userEmail
+        });
+        createdRequests += 1;
+      }
+      if (i % 5 === 0) {
+        await LibraryPhotocopyRequest.create({
+          colid,
+          ...libraryPayload(book),
+          accessionno: book.accessionno,
+          bookid: String(book._id),
+          title: book.title,
+          author: book.author,
+          classification: book.classification,
+          publisher: book.publisher,
+          category: book.category,
+          frompage: 5 + (i % 30),
+          topage: 12 + (i % 35),
+          ...studentPayload(profile),
+          regno: text(profile.regno) || text(profile.email || profile.user),
+          requestdate: addDays(new Date(), -1 * (i % 120)),
+          status: i % 10 === 0 ? "Uploaded" : "Requested",
+          documentlink: i % 10 === 0 ? "https://example.com/dummy-photocopy.pdf" : "",
+          remarks: "Generated dummy photocopy request",
+          user: userEmail
+        });
+        createdPhotocopies += 1;
+      }
+    }
+    res.json({
+      success: true,
+      message: "Dummy library data generated",
+      summary: {
+        libraries: libraries.length,
+        books: books.length,
+        circulation: createdIssues,
+        requests: createdRequests,
+        photocopyRequests: createdPhotocopies,
+        usersConsidered: circulationUsers.length
       }
     });
   } catch (error) {

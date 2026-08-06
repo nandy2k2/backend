@@ -14,6 +14,7 @@ const PlacementStageStudent = require("../Models/placementnewstagestudentds");
 const InternshipStage = require("../Models/placementnewinternshipstageds");
 const SipApplication = require("../Models/placementnewsipapplicationds");
 const PlacementApplication = require("../Models/placementnewplacementapplicationds");
+const PlacementRecord = require("../Models/placementnewrecordds");
 const User = require("../Models/user");
 const MPrograms = require("../Models/mprograms");
 const VivaMarks = require("../Models/examinationmodel2vivamarksds");
@@ -83,7 +84,8 @@ const modelMap = {
   internshipstage: { Model: InternshipStage, fields: ["stagename", "stageorder", "description", "status"] },
   sipapplication: { Model: SipApplication, fields: ["jobid", "jobtitle", "jobtype", "industry", "company", "companyemail", "student", "studentemail", "phone", "regno", "academicyear", "admissionyear", "program", "programcode", "semester", "section", "applieddate", "stageid", "stagename", "status", "selected", "offerletterlink", "offerlettername", "offeruploadeddate", "remarks"] },
   placementapplication: { Model: PlacementApplication, fields: ["jobid", "jobtitle", "jobtype", "industry", "company", "companyemail", "student", "studentemail", "phone", "regno", "academicyear", "admissionyear", "program", "programcode", "semester", "section", "applieddate", "stageid", "stagename", "status", "selected", "offerletterlink", "offerlettername", "offeruploadeddate", "remarks"] },
-  stagestudent: { Model: PlacementStageStudent, fields: ["jobid", "jobtitle", "jobtype", "company", "companyemail", "student", "studentemail", "regno", "phone", "academicyear", "admissionyear", "program", "programcode", "semester", "section", "stageid", "stagename", "stagedate", "status", "placementstatus", "confirmeddate", "offerletterlink", "offerlettername", "contactdetails", "address", "ctc", "industry", "sector", "comments"] }
+  stagestudent: { Model: PlacementStageStudent, fields: ["jobid", "jobtitle", "jobtype", "company", "companyemail", "student", "studentemail", "regno", "phone", "academicyear", "admissionyear", "program", "programcode", "semester", "section", "stageid", "stagename", "stagedate", "status", "placementstatus", "confirmeddate", "offerletterlink", "offerlettername", "contactdetails", "address", "ctc", "industry", "sector", "comments"] },
+  record: { Model: PlacementRecord, fields: ["academicyear", "program", "programcode", "student", "regno", "industry", "sector", "role", "company", "address", "companymail", "companyemail", "salary", "department", "status"] }
 };
 
 const payloadFor = (kind, source = {}) => {
@@ -101,7 +103,7 @@ const payloadFor = (kind, source = {}) => {
 exports.options = async (req, res) => {
   try {
     const colid = Number(req.query.colid);
-    const [companies, programs, users, internships, sip, placementStages, internshipStages, stageStudents, ollamaConfigs, institution] = await Promise.all([
+    const [companies, programs, users, internships, sip, placementStages, internshipStages, stageStudents, placementRecords, ollamaConfigs, institution] = await Promise.all([
       Company.find({ colid }).sort({ company: 1 }).lean(),
       MPrograms.find({ colid }).sort({ Order: 1, program: 1 }).lean(),
       User.find({ colid }).select("name email user phone role program programcode admissionyear academicyear regno semester section photo skills").sort({ name: 1 }).lean(),
@@ -110,6 +112,7 @@ exports.options = async (req, res) => {
       PlacementStage.find({ colid }).sort({ stageorder: 1, stagename: 1 }).lean(),
       InternshipStage.find({ colid }).sort({ stageorder: 1, stagename: 1 }).lean(),
       PlacementStageStudent.find({ colid }).sort({ updatedAt: -1 }).lean(),
+      PlacementRecord.find({ colid }).sort({ updatedAt: -1 }).lean(),
       OllamaConfiguration.find({ colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean(),
       Institution.findOne({ colid }).lean()
     ]);
@@ -126,6 +129,10 @@ exports.options = async (req, res) => {
       placementStages,
       internshipStages,
       stageStudents,
+      placementRecords,
+      academicyears: uniqueSorted([...users.map((item) => item.academicyear), ...placementRecords.map((item) => item.academicyear)]),
+      sectors: uniqueSorted(placementRecords.map((item) => item.sector)),
+      recordIndustries: uniqueSorted(placementRecords.map((item) => item.industry)),
       ollamaConfigs,
       geminiModels: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"],
       institution
@@ -224,6 +231,82 @@ exports.updateSkills = async (req, res) => {
     const data = await User.findOneAndUpdate(filter, { skills: text(req.body.skills) }, { new: true });
     if (!data) return res.status(404).json({ success: false, message: "Student not found" });
     res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const countBy = (rows = [], keyFn) => Object.values(rows.reduce((acc, item) => {
+  const key = text(keyFn(item)) || "Not specified";
+  acc[key] = acc[key] || { name: key, count: 0 };
+  acc[key].count += 1;
+  return acc;
+}, {})).sort((a, b) => b.count - a.count);
+
+exports.placementDashboard = async (req, res) => {
+  try {
+    const colid = Number(req.query.colid);
+    const academicyear = text(req.query.academicyear);
+    const recordFilter = { colid };
+    const studentFilter = { colid, role: /^Student$/i };
+    if (academicyear) {
+      recordFilter.academicyear = academicyear;
+      studentFilter.academicyear = academicyear;
+    }
+    const [records, students, institution] = await Promise.all([
+      PlacementRecord.find(recordFilter).sort({ updatedAt: -1 }).lean(),
+      User.find(studentFilter).select("name email regno academicyear program programcode department status role").lean(),
+      Institution.findOne({ colid }).lean()
+    ]);
+
+    const activeStudents = students.filter((item) => {
+      const status = text(item.status);
+      return !status || status === "1" || /^active$/i.test(status);
+    });
+    const denominatorStudents = activeStudents.length ? activeStudents : students;
+    const placementRows = records.filter((item) => !/^inactive$/i.test(text(item.status)));
+    const placedKeys = new Set(placementRows.map((item) => text(item.regno) || `${text(item.student)}-${text(item.programcode)}`).filter(Boolean));
+    const totalSalary = placementRows.reduce((sum, item) => sum + num(item.salary), 0);
+    const programMap = {};
+    denominatorStudents.forEach((student) => {
+      const key = text(student.programcode) || text(student.program) || "Not specified";
+      programMap[key] = programMap[key] || { name: key, program: text(student.program), programcode: text(student.programcode), eligible: 0, placed: 0, percentage: 0 };
+      programMap[key].eligible += 1;
+    });
+    const placedByProgramRegno = new Set();
+    placementRows.forEach((record) => {
+      const key = text(record.programcode) || text(record.program) || "Not specified";
+      programMap[key] = programMap[key] || { name: key, program: text(record.program), programcode: text(record.programcode), eligible: 0, placed: 0, percentage: 0 };
+      const identity = `${key}-${text(record.regno) || text(record.student)}`;
+      if (!placedByProgramRegno.has(identity)) {
+        programMap[key].placed += 1;
+        placedByProgramRegno.add(identity);
+      }
+    });
+    const programwise = Object.values(programMap).map((item) => ({
+      ...item,
+      percentage: item.eligible ? Number(((item.placed / item.eligible) * 100).toFixed(2)) : 0
+    })).sort((a, b) => a.name.localeCompare(b.name));
+    const academicyears = uniqueSorted([...records.map((item) => item.academicyear), ...students.map((item) => item.academicyear)]);
+
+    res.json({
+      success: true,
+      institution,
+      records,
+      students: denominatorStudents,
+      academicyears,
+      sectorwise: countBy(placementRows, (item) => item.sector || item.industry),
+      industrywise: countBy(placementRows, (item) => item.industry),
+      programwise,
+      summary: {
+        placementRecords: placementRows.length,
+        placedStudents: placedKeys.size,
+        eligibleStudents: denominatorStudents.length,
+        placementPercentage: denominatorStudents.length ? Number(((placedKeys.size / denominatorStudents.length) * 100).toFixed(2)) : 0,
+        averageSalary: placementRows.length ? Number((totalSalary / placementRows.length).toFixed(2)) : 0,
+        highestSalary: placementRows.reduce((max, item) => Math.max(max, num(item.salary)), 0)
+      }
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

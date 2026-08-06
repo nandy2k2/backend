@@ -1,5 +1,6 @@
 const ConductExamRoll = require("../Models/conductexamrollds");
 const ExamVivaMarks = require("../Models/examinationmodel2vivamarksds");
+const Institution = require("../Models/insdetails");
 
 const text = (value) => String(value ?? "").trim();
 const num = (value) => {
@@ -25,6 +26,7 @@ const yes = (value) => ["yes", "y", "1", "true", "present"].includes(text(value)
 const fail = (value) => text(value).toLowerCase() === "fail" || text(value).toUpperCase() === "F";
 
 const filterFields = ["program", "programcode", "exam", "examcode", "regulation", "semester"];
+const getInstitution = (colid) => Institution.findOne({ colid }).sort({ _id: -1 }).lean();
 
 const buildQuery = (source = {}) => {
   const colid = toNumber(source.colid);
@@ -128,9 +130,10 @@ exports.summary = async (req, res) => {
     const built = buildQuery(req.query);
     if (built.error) return res.status(400).json({ success: false, message: built.error });
 
-    const [rollRows, markRows] = await Promise.all([
+    const [rollRows, markRows, institution] = await Promise.all([
       ConductExamRoll.find(built.query).lean(),
-      ExamVivaMarks.find(built.query).lean()
+      ExamVivaMarks.find(built.query).lean(),
+      getInstitution(built.colid)
     ]);
 
     const map = new Map();
@@ -218,7 +221,8 @@ exports.summary = async (req, res) => {
             { label: "Appeared", count: totals.appeared }
           ]
         },
-        table
+        table,
+        institution: institution || {}
       }
     });
   } catch (error) {
@@ -241,9 +245,10 @@ exports.summaryStudentwise = async (req, res) => {
     if (built.error) return res.status(400).json({ success: false, message: built.error });
     const failRule = text(req.query.failrule || "any").toLowerCase() === "all" ? "all" : "any";
 
-    const [rollRows, markRows] = await Promise.all([
+    const [rollRows, markRows, institution] = await Promise.all([
       ConductExamRoll.find(built.query).lean(),
-      ExamVivaMarks.find(built.query).lean()
+      ExamVivaMarks.find(built.query).lean(),
+      getInstitution(built.colid)
     ]);
 
     const studentMap = new Map();
@@ -390,7 +395,8 @@ exports.summaryStudentwise = async (req, res) => {
             { label: "Appeared", count: totals.appeared }
           ]
         },
-        table
+        table,
+        institution: institution || {}
       }
     });
   } catch (error) {

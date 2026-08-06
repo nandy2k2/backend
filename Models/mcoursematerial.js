@@ -29,6 +29,9 @@ type: Number
 title: {
 type: String
 },
+section: {
+type: String
+},
 description: {
 type: String
 },
@@ -58,4 +61,3 @@ status1: {
 const mcoursematerial=mongoose.model('mcoursematerial',mcoursematerialschema);
 
 module.exports=mcoursematerial;
-
