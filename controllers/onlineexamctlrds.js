@@ -5,6 +5,8 @@ const OnlineExam = require("../Models/onlineexamds");
 const OnlineExamAttempt = require("../Models/onlineexamattemptds");
 const User = require("../Models/user");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
+const Syllabus = require("../Models/syllabusds");
+const CourseOutcome = require("../Models/courseoutcomeds");
 const Awsconfig = require("../Models/awsconfig");
 const AiConfiguration = require("../Models/aiconfigurationds");
 const OllamaConfiguration = require("../Models/ollamaconfigurationds");
@@ -19,6 +21,7 @@ const num = (value, fallback = 0) => {
 };
 const esc = (value) => text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const uniq = (arr) => [...new Set((arr || []).map(text).filter(Boolean))].sort();
+const arr = (value) => Array.isArray(value) ? value.map(text).filter(Boolean) : text(value) ? [text(value)] : [];
 const s3Url = (bucket, region, key) => region === "us-east-1"
   ? `https://${bucket}.s3.amazonaws.com/${key.split("/").map(encodeURIComponent).join("/")}`
   : `https://${bucket}.s3.${region}.amazonaws.com/${key.split("/").map(encodeURIComponent).join("/")}`;
@@ -152,6 +155,43 @@ exports.options = async (req, res) => {
   }
 };
 
+exports.questionOptions = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const query = { colid };
+    ["academicyear", "program", "programcode", "course", "coursecode", "semester", "regulation"].forEach((field) => {
+      if (text(req.query[field])) query[field] = text(req.query[field]);
+    });
+    let [syllabus, outcomes] = await Promise.all([
+      Syllabus.find(query).select("module syllabus").sort({ module: 1, syllabus: 1 }).lean(),
+      CourseOutcome.find(query).select("conumber co bloomlevels").sort({ conumber: 1 }).lean()
+    ]);
+    if ((!syllabus.length || !outcomes.length) && text(req.query.coursecode)) {
+      const fallbackQuery = { colid, coursecode: text(req.query.coursecode) };
+      if (text(req.query.academicyear)) fallbackQuery.academicyear = text(req.query.academicyear);
+      const [fallbackSyllabus, fallbackOutcomes] = await Promise.all([
+        Syllabus.find(fallbackQuery).select("module syllabus").sort({ module: 1, syllabus: 1 }).lean(),
+        CourseOutcome.find(fallbackQuery).select("conumber co bloomlevels").sort({ conumber: 1 }).lean()
+      ]);
+      if (!syllabus.length) syllabus = fallbackSyllabus;
+      if (!outcomes.length) outcomes = fallbackOutcomes;
+    }
+    const coOptions = outcomes.map((row) => [row.conumber, row.co].filter(Boolean).join(" - ")).filter(Boolean);
+    res.json({
+      success: true,
+      modules: uniq(syllabus.map((row) => row.module)),
+      topics: uniq(syllabus.map((row) => row.syllabus)),
+      cos: uniq(coOptions),
+      bloomlevels: uniq([
+        ...outcomes.flatMap((row) => row.bloomlevels || []),
+        "Remember", "Understand", "Apply", "Analyze", "Evaluate", "Create"
+      ])
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.listExams = async (req, res) => {
   try {
     const rows = await OnlineExam.find(dynamicQuery(req.query)).sort({ createdAt: -1 }).limit(1000).lean();
@@ -218,6 +258,10 @@ exports.saveQuestion = async (req, res) => {
       questiontext: text(req.body.questiontext),
       questiontype: text(req.body.questiontype || section.sectiontype),
       marks: num(req.body.marks, 1),
+      modules: arr(req.body.modules || req.body.module),
+      topics: arr(req.body.topics || req.body.topic),
+      cos: arr(req.body.cos || req.body.co),
+      bloomlevels: arr(req.body.bloomlevels || req.body.blooms),
       options: Array.isArray(req.body.options) ? req.body.options.map((o) => ({ optiontext: text(o.optiontext), iscorrect: !!o.iscorrect })).filter((o) => o.optiontext) : [],
       imageurl: text(req.body.imageurl),
       fileurl: text(req.body.fileurl),
@@ -270,20 +314,39 @@ exports.uploadFile = async (req, res) => {
 
 exports.generateQuestions = async (req, res) => {
   try {
+    const modules = arr(req.body.modules || req.body.module);
+    const topics = arr(req.body.topics || req.body.topic);
+    const cos = arr(req.body.cos || req.body.co);
+    const bloomlevels = arr(req.body.bloomlevels || req.body.blooms);
+    const mappingInstruction = /^yes|true|1$/i.test(text(req.body.mapWithAi || req.body.useAgentMapping))
+      ? "Also verify each generated question and map it to the most suitable modules, topics, COs and Bloom taxonomy levels from the selected lists. Return those mappings in modules, topics, cos and bloomlevels arrays for every question."
+      : "Include the selected modules, topics, COs and Bloom taxonomy levels in modules, topics, cos and bloomlevels arrays for every question.";
     const prompt = `Return ONLY JSON array of questions for an online examination.
 Question type: ${text(req.body.questiontype || "MCQ")}
 Course: ${text(req.body.course)} (${text(req.body.coursecode)})
-Topic/context: ${text(req.body.topic || req.body.prompt)}
+Selected modules: ${modules.join(", ") || "Not specified"}
+Selected topics: ${topics.join(", ") || "Not specified"}
+Selected COs: ${cos.join(", ") || "Not specified"}
+Selected Bloom taxonomy levels: ${bloomlevels.join(", ") || "Not specified"}
+Topic/context/additional prompt: ${text(req.body.prompt || req.body.topic)}
 Number of questions: ${num(req.body.count, 5)}
 Language: ${text(req.body.language || "English")}
 Difficulty: ${text(req.body.difficulty || "Medium")}
-For MCQ return [{"questiontext":"","marks":1,"options":[{"optiontext":"","iscorrect":true},{"optiontext":"","iscorrect":false}]}].
-For descriptive return [{"questiontext":"","marks":5,"options":[]}].`;
+${mappingInstruction}
+For MCQ return [{"questiontext":"","marks":1,"modules":[],"topics":[],"cos":[],"bloomlevels":[],"options":[{"optiontext":"","iscorrect":true},{"optiontext":"","iscorrect":false}]}].
+For descriptive return [{"questiontext":"","marks":5,"modules":[],"topics":[],"cos":[],"bloomlevels":[],"options":[]}].`;
     const raw = /^ollama$/i.test(text(req.body.provider))
       ? await callOllama(req.body.colid, prompt, req.body.ollamaConfigId)
       : await callGemini(req.body.colid, prompt, req.body.geminiModel);
     const data = parseJsonFromText(raw);
-    res.json({ success: true, data: Array.isArray(data) ? data : data.questions || [], raw });
+    const questions = (Array.isArray(data) ? data : data.questions || []).map((question) => ({
+      ...question,
+      modules: arr(question.modules || modules),
+      topics: arr(question.topics || topics),
+      cos: arr(question.cos || question.co || cos),
+      bloomlevels: arr(question.bloomlevels || question.blooms || bloomlevels)
+    }));
+    res.json({ success: true, data: questions, raw });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

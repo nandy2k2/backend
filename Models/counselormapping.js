@@ -16,7 +16,7 @@ const counselorMappingSchema = new mongoose.Schema(
 );
 
 counselorMappingSchema.index(
-  { colid: 1, academicyear: 1, regulation: 1, programcode: 1 },
+  { colid: 1, academicyear: 1, regulation: 1, programcode: 1, counseloremail: 1 },
   { unique: true }
 );
 

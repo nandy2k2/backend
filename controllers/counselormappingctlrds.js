@@ -10,6 +10,25 @@ const toNumber = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 const uniq = (rows) => [...new Set(rows.filter(Boolean))].sort((a, b) => String(a).localeCompare(String(b)));
+let oldIndexDropAttempted = false;
+
+const ensureMultipleCounselorIndex = async () => {
+  if (oldIndexDropAttempted) return;
+  oldIndexDropAttempted = true;
+  try {
+    await CounselorMapping.collection.dropIndex("colid_1_academicyear_1_regulation_1_programcode_1");
+  } catch {
+    // The old one-counselor-per-program index may not exist on newer databases.
+  }
+  try {
+    await CounselorMapping.collection.createIndex(
+      { colid: 1, academicyear: 1, regulation: 1, programcode: 1, counseloremail: 1 },
+      { unique: true, name: "colid_1_academicyear_1_regulation_1_programcode_1_counseloremail_1" }
+    );
+  } catch {
+    // If the index already exists, MongoDB will ignore this path in practice.
+  }
+};
 
 const payload = (body = {}) => ({
   colid: toNumber(body.colid),
@@ -79,6 +98,7 @@ exports.getCounselorMappingOptions = async (req, res) => {
 
 exports.getCounselorMappings = async (req, res) => {
   try {
+    await ensureMultipleCounselorIndex();
     const colid = toNumber(req.query.colid || req.body.colid);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
     const query = { colid };
@@ -94,13 +114,56 @@ exports.getCounselorMappings = async (req, res) => {
 
 exports.saveCounselorMapping = async (req, res) => {
   try {
+    await ensureMultipleCounselorIndex();
     const data = payload(req.body);
-    if (!data.colid || !data.academicyear || !data.regulation || !data.program || !data.programcode || !data.counselorname || !data.counseloremail) {
+    const counselors = Array.isArray(req.body.counselors)
+      ? req.body.counselors.map((item) => ({
+        counselorname: text(item.name || item.counselorname || item.email || item.counseloremail),
+        counseloremail: text(item.email || item.counseloremail)
+      })).filter((item) => item.counseloremail)
+      : [];
+
+    if (!data.colid || !data.academicyear || !data.regulation || !data.program || !data.programcode || (!data.counseloremail && !counselors.length)) {
       return res.status(400).json({ success: false, message: "Academic year, regulation, program and counselor are required" });
+    }
+
+    if (!req.body.id && counselors.length) {
+      const operations = counselors.map((counselor) => ({
+        updateOne: {
+          filter: {
+            colid: data.colid,
+            academicyear: data.academicyear,
+            regulation: data.regulation,
+            programcode: data.programcode,
+            counseloremail: counselor.counseloremail
+          },
+          update: {
+            $set: {
+              ...data,
+              counselorname: counselor.counselorname,
+              counseloremail: counselor.counseloremail
+            }
+          },
+          upsert: true
+        }
+      }));
+      await CounselorMapping.bulkWrite(operations, { ordered: false });
+      const rows = await CounselorMapping.find({
+        colid: data.colid,
+        academicyear: data.academicyear,
+        regulation: data.regulation,
+        programcode: data.programcode,
+        counseloremail: { $in: counselors.map((item) => item.counseloremail) }
+      }).sort({ counselorname: 1 }).lean();
+      return res.json({ success: true, data: rows, count: rows.length });
+    }
+
+    if (!data.counselorname || !data.counseloremail) {
+      return res.status(400).json({ success: false, message: "Counselor is required" });
     }
     const filter = req.body.id
       ? { _id: req.body.id, colid: data.colid }
-      : { colid: data.colid, academicyear: data.academicyear, regulation: data.regulation, programcode: data.programcode };
+      : { colid: data.colid, academicyear: data.academicyear, regulation: data.regulation, programcode: data.programcode, counseloremail: data.counseloremail };
     const row = await CounselorMapping.findOneAndUpdate(filter, data, { new: true, upsert: !req.body.id, runValidators: true });
     res.json({ success: true, data: row });
   } catch (error) {
