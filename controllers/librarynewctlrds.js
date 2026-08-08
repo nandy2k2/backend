@@ -290,6 +290,21 @@ async function issueEligibility(colid, profile, book) {
   };
 }
 
+async function renewalPlanForIssue(colid, issue) {
+  const role = text(issue.role) || "Student";
+  const category = text(issue.category) || "General";
+  const dayRule = await findRoleMaxDays(colid, role, category);
+  const noofdays = number(dayRule?.noofdays, 14);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const currentDue = issue.duedate ? new Date(issue.duedate) : today;
+  currentDue.setHours(0, 0, 0, 0);
+  const base = currentDue > today ? currentDue : today;
+  const newDueDate = new Date(base);
+  newDueDate.setDate(newDueDate.getDate() + noofdays);
+  return { noofdays, previousDueDate: issue.duedate || null, newDueDate };
+}
+
 async function fineForIssue(issue, returndate) {
   const fineRule = await LibraryFine.findOne({ colid: issue.colid, category: issue.category, status: /^Active$/i }).lean();
   const due = issue.duedate ? new Date(issue.duedate) : null;
@@ -937,6 +952,32 @@ exports.counterReturnBook = async (req, res) => {
     if (issue.libraryid) bookQuery.libraryid = issue.libraryid;
     await LibraryBook.findOneAndUpdate(bookQuery, { status: "Available" });
     res.json({ success: true, data: issue, fineamount: fine, latedays: lateDays });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.counterRenewBook = async (req, res) => {
+  try {
+    const colid = number(req.body.colid, undefined);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [req.body.id].filter(Boolean);
+    if (colid === undefined || !ids.length) return res.status(400).json({ success: false, message: "Issue id is required" });
+    const issues = await LibraryIssue.find({ _id: { $in: ids }, colid, status: /^Issued$/i });
+    if (!issues.length) return res.status(404).json({ success: false, message: "No active issue record found for renewal" });
+    const renewed = [];
+    for (const issue of issues) {
+      const plan = await renewalPlanForIssue(colid, issue);
+      issue.previousduedate = plan.previousDueDate;
+      issue.duedate = plan.newDueDate;
+      issue.lastrenewaldate = new Date();
+      issue.renewalcount = number(issue.renewalcount, 0) + 1;
+      issue.renewedby = text(req.body.user);
+      const note = `Renewed on ${new Date().toISOString().slice(0, 10)} for ${plan.noofdays} day(s); previous due ${plan.previousDueDate ? new Date(plan.previousDueDate).toISOString().slice(0, 10) : "NA"}.`;
+      issue.remarks = text(issue.remarks) ? `${issue.remarks}\n${note}` : note;
+      await issue.save();
+      renewed.push(issue.toObject());
+    }
+    res.json({ success: true, count: renewed.length, data: renewed });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

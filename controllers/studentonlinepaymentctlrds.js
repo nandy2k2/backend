@@ -1,6 +1,7 @@
 const Ledgerstud = require("../Models/ledgerstud");
 const MasterGateway = require("../Models/mastergatewayds");
 const StudentOnlinePayment = require("../Models/studentonlinepaymentds");
+const IciciPayment = require("../Models/icicipaymentds");
 
 function text(value) {
   return String(value || "").trim();
@@ -39,7 +40,11 @@ function feeItemSnapshot(row, payingAmount) {
 
 function isSuccessfulGatewayPayment(payment = {}) {
   const status = text(payment.status).toUpperCase();
-  return ["SUCCESS", "SUCCESSFUL", "PAID", "CAPTURED"].includes(status);
+  return ["SUCCESS", "SUCCESSFUL", "PAID"].includes(status);
+}
+
+function isSettledOnlineStatus(status) {
+  return ["SUCCESS", "PAID"].includes(text(status).toUpperCase());
 }
 
 function reportQuery(source = {}) {
@@ -67,6 +72,7 @@ exports.getPendingStudentFees = async (req, res) => {
     const colid = Number(req.query.colid);
     const regno = text(req.query.regno);
     if (!colid || !regno) return res.status(400).json({ success: false, message: "colid and regno are required" });
+    await exports.reconcileSuccessfulStudentOnlinePayments({ colid, regno });
     const rows = await Ledgerstud.find({ colid, regno, balance: { $gt: 0 } }).sort({ academicyear: 1, feegroup: 1, feeitem: 1 }).lean();
     res.json({ success: true, data: rows });
   } catch (error) {
@@ -152,7 +158,7 @@ exports.settleSuccessfulStudentOnlinePayment = async (payment, gatewayParams = {
     _id: sourceId,
     colid: Number(payment.colid)
   });
-  if (!onlinePayment || onlinePayment.paymentstatus === "Success") return onlinePayment;
+  if (!onlinePayment || isSettledOnlineStatus(onlinePayment.paymentstatus)) return onlinePayment;
 
   const paiddate = new Date();
   const updatedItems = [];
@@ -182,7 +188,7 @@ exports.settleSuccessfulStudentOnlinePayment = async (payment, gatewayParams = {
     });
   }
 
-  onlinePayment.paymentstatus = "Success";
+  onlinePayment.paymentstatus = "Paid";
   onlinePayment.paiddate = paiddate;
   onlinePayment.paidamount = number(payment.paidamount || onlinePayment.totalamount);
   onlinePayment.gatewayrefno = text(payment.refno || payment.txnid || payment.merchantTxnNo);
@@ -192,6 +198,27 @@ exports.settleSuccessfulStudentOnlinePayment = async (payment, gatewayParams = {
   return onlinePayment;
 };
 
+exports.reconcileSuccessfulStudentOnlinePayments = async ({ colid, regno, id } = {}) => {
+  const query = {
+    colid: Number(colid),
+    status: { $in: ["SUCCESS", "SUCCESSFUL", "PAID"] },
+    $or: [
+      { source: "StudentFeesOnline" },
+      { studentonlinepaymentid: { $exists: true, $ne: "" } },
+      { sourceid: { $exists: true, $ne: "" } }
+    ]
+  };
+  if (text(regno)) query.regno = text(regno);
+  if (text(id)) query.$or = [{ studentonlinepaymentid: text(id) }, { sourceid: text(id) }];
+  const payments = await IciciPayment.find(query).sort({ paiddate: -1, updatedAt: -1 }).limit(50).lean();
+  const settled = [];
+  for (const payment of payments) {
+    const result = await exports.settleSuccessfulStudentOnlinePayment(payment, payment.gatewayresponse?.callbackResponse || payment.gatewayresponse || {});
+    if (result) settled.push(result);
+  }
+  return settled;
+};
+
 exports.markFailedStudentOnlinePayment = async (payment, gatewayParams = {}) => {
   const sourceId = text(payment?.studentonlinepaymentid || payment?.sourceid);
   if (!sourceId && text(payment?.source) !== "StudentFeesOnline") return null;
@@ -199,7 +226,7 @@ exports.markFailedStudentOnlinePayment = async (payment, gatewayParams = {}) => 
     _id: sourceId,
     colid: Number(payment.colid)
   });
-  if (!onlinePayment || onlinePayment.paymentstatus === "Success") return onlinePayment;
+  if (!onlinePayment || isSettledOnlineStatus(onlinePayment.paymentstatus)) return onlinePayment;
 
   onlinePayment.paymentstatus = "Failed";
   onlinePayment.paidamount = 0;
@@ -213,6 +240,7 @@ exports.getStudentOnlinePayments = async (req, res) => {
   try {
     const colid = Number(req.query.colid);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    await exports.reconcileSuccessfulStudentOnlinePayments({ colid, regno: req.query.regno });
     const data = await StudentOnlinePayment.find(reportQuery(req.query)).sort({ paiddate: -1, initiationdate: -1 }).lean();
     res.json({ success: true, data });
   } catch (error) {

@@ -27,6 +27,8 @@ const inboundApiCrmController = require("./controllers/inboundapicrmctlrds");
 inboundApiCrmController.registerCrmAiAgentProcessor();
 const continuousFeedbackController = require("./controllers/continuousfeedbackctlrds");
 const academicAuditController = require("./controllers/academicauditctlrds");
+const personalDataAgentController = require("./controllers/personaldataagentctlrds");
+personalDataAgentController.registerPersonalDataAgentScheduler();
 
 const DB=process.env.DATABASE.replace('<PASSWORD>',process.env.DATABASE_PASSWORD);
 const DB1=process.env.DATABASE2;
@@ -230,6 +232,12 @@ app.post('/api/v2/visitor-management/action', visitorManagementController.action
 app.post('/api/v2/visitor-management/delete', visitorManagementController.deleteMany);
 app.post('/api/v2/visitor-management/bulkupload', visitorManagementController.bulkUpload);
 app.post('/api/v2/visitor-management/report', visitorManagementController.report);
+app.get('/api/v2/personal-data-agent/options', personalDataAgentController.options);
+app.get('/api/v2/personal-data-agent/list', personalDataAgentController.list);
+app.post('/api/v2/personal-data-agent/save', personalDataAgentController.save);
+app.post('/api/v2/personal-data-agent/delete', personalDataAgentController.deleteMany);
+app.post('/api/v2/personal-data-agent/run-now', personalDataAgentController.runNow);
+app.get('/api/v2/personal-data-agent/logs', personalDataAgentController.logs);
 app.post('/api/v2/estate-management/contracts/upload', estateManagementController.uploadMiddleware, estateManagementController.uploadContractDocument);
 app.post('/api/v2/estate-management/allocations/bulk-users', estateManagementController.bulkAllocateUsers);
 app.post('/api/v2/estate-management/rosters/generate', estateManagementController.generateRoster);
@@ -841,6 +849,7 @@ app.post('/api/v2/event-management-new/public/register', eventManagementNewContr
 app.post('/api/v2/event-management-new/public/feedback', eventManagementNewController.submitFeedback);
 app.get('/api/v2/event-management-new/public/certificate', eventManagementNewController.certificate);
 app.post('/api/v2/event-management-new/attendees/approve', eventManagementNewController.approveAttendees);
+app.post('/api/v2/event-management-new/attendees/certificate', eventManagementNewController.generateCertificate);
 app.post('/api/v2/event-management-new/guesthouse/availability', eventManagementNewController.roomAvailability);
 app.post('/api/v2/event-management-new/guesthouse/allocate', eventManagementNewController.allocateGuestHouse);
 app.post('/api/v2/event-management-new/vehicles/allocate', eventManagementNewController.allocateVehicles);
@@ -6443,6 +6452,7 @@ app.get("/api/v2/librarynew/counter/user", librarynewctlrds.counterFindUser);
 app.get("/api/v2/librarynew/counter/book", librarynewctlrds.counterLoadBook);
 app.post("/api/v2/librarynew/counter/issue", librarynewctlrds.counterIssueBook);
 app.post("/api/v2/librarynew/counter/return", librarynewctlrds.counterReturnBook);
+app.post("/api/v2/librarynew/counter/renew", librarynewctlrds.counterRenewBook);
 app.get("/api/v2/librarynew/opac", librarynewctlrds.opac);
 app.get("/api/v2/librarynew/ai-options", librarynewctlrds.aiOptions);
 app.post("/api/v2/librarynew/book-summary", librarynewctlrds.summarizeBook);
@@ -6545,6 +6555,7 @@ app.post("/api/v2/easebuzzpayment/callback", easebuzzpaymentprocessctlrds.handle
 app.get("/api/v2/easebuzzpayment/callback", easebuzzpaymentprocessctlrds.handleEasebuzzPaymentCallback);
 app.get("/api/v2/icicipayment", icicipaymentprocessctlrds.getIciciPayments);
 app.post("/api/v2/icicipayment/initiate", icicipaymentprocessctlrds.initiateIciciPayment);
+app.post("/api/v2/icicipayment/manual-success", icicipaymentprocessctlrds.markIciciPaymentsManualSuccess);
 app.post("/api/v2/icicipayment/callback", icicipaymentprocessctlrds.handleIciciPaymentCallback);
 app.get("/api/v2/icicipayment/callback", icicipaymentprocessctlrds.handleIciciPaymentCallback);
 app.get("/api/v2/studentonlinepayment/pending", studentonlinepaymentctlrds.getPendingStudentFees);

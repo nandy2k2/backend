@@ -248,6 +248,36 @@ exports.approveAttendees = async (req, res) => {
   }
 };
 
+exports.generateCertificate = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const attendee = await AttendeeNew.findOne({ _id: oid(req.body.attendeeid), colid }).lean();
+    if (!attendee) return res.status(404).json({ success: false, message: "Attendee not found" });
+    const existing = await EventCertificateNew.findOne({ colid, attendeeid: String(attendee._id) }).sort({ _id: -1 });
+    if (existing) return res.json({ success: true, data: existing });
+    const certno = `EVT-${attendee.eventcode || "CERT"}-${String(Date.now()).slice(-8)}`;
+    const certificatehtml = `<h1>Certificate of Participation</h1><p>This is to certify that <strong>${attendee.attendee}</strong> participated in <strong>${attendee.eventname}</strong>.</p><p>Certificate No: ${certno}</p>`;
+    const data = await EventCertificateNew.create({
+      colid,
+      user: req.body.user || attendee.user || "",
+      name: req.body.name || attendee.name || "",
+      eventid: attendee.eventid,
+      attendeeid: String(attendee._id),
+      eventname: attendee.eventname,
+      eventcode: attendee.eventcode,
+      attendee: attendee.attendee,
+      email: attendee.email,
+      certificateno: certno,
+      issuedate: new Date(),
+      certificatehtml,
+      status: "Issued"
+    });
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 exports.roomAvailability = async (req, res) => {
   try {
     const colid = num(req.body.colid);

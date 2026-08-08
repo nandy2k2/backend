@@ -67,9 +67,11 @@ function buildHandler(config) {
 }
 
 function normalizeStatus(params = {}) {
-  const responseCode = text(params.responseCode || params.txnResponseCode || params.respCode);
-  const txnStatus = text(params.txnStatus || params.status).toUpperCase();
-  if (["000", "0000", "0000/000"].includes(responseCode) || ["SUC", "SUCCESS"].includes(txnStatus)) return "SUCCESS";
+  const responseCode = text(params.responseCode || params.txnResponseCode || params.respCode || params.ResponseCode || params.code);
+  const responseMessage = text(params.respDescription || params.responseMessage || params.message || params.txnMessage).toUpperCase();
+  const txnStatus = text(params.txnStatus || params.status || params.txn_status || params.paymentStatus).toUpperCase();
+  if (["SUCCESS", "SUCCESSFUL", "PAID"].includes(txnStatus) || responseMessage.includes("SUCCESS")) return "SUCCESS";
+  if (["P", "PENDING", "INITIATED", "INPROCESS", "IN PROCESS"].includes(txnStatus) || ["PENDING"].includes(responseCode.toUpperCase())) return "PENDING";
   if (responseCode || txnStatus) return "FAILED";
   return "PENDING";
 }
@@ -222,7 +224,7 @@ exports.handleIciciPaymentCallback = async (req, res) => {
     if (payment.source === "StudentFeesOnline" || payment.studentonlinepaymentid) {
       if (payment.status === "SUCCESS") {
         await studentOnlinePaymentController.settleSuccessfulStudentOnlinePayment(payment, params);
-      } else {
+      } else if (payment.status === "FAILED") {
         await studentOnlinePaymentController.markFailedStudentOnlinePayment(payment, params);
       }
     }
@@ -243,6 +245,45 @@ exports.getIciciPayments = async (req, res) => {
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
     const data = await IciciPayment.find(queryFrom(req.query)).sort({ initiationdate: -1 }).lean();
     res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.markIciciPaymentsManualSuccess = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(text).filter(Boolean) : [];
+    if (!colid || !ids.length) return res.status(400).json({ success: false, message: "colid and selected payments are required" });
+    const payments = await IciciPayment.find({
+      _id: { $in: ids },
+      colid,
+      status: { $in: ["INITIATED", "FAILED", "Initiated", "Failed"] }
+    });
+    if (!payments.length) return res.status(400).json({ success: false, message: "Only INITIATED and FAILED transactions can be manually marked as SUCCESS" });
+
+    const updated = [];
+    for (const payment of payments) {
+      payment.status = "SUCCESS";
+      payment.paiddate = new Date();
+      payment.paidamount = amount(payment.amount);
+      payment.gatewayresponse = {
+        ...(payment.gatewayresponse || {}),
+        manualSuccess: {
+          user: text(req.body.user),
+          name: text(req.body.name),
+          date: new Date(),
+          remarks: text(req.body.remarks) || "Manual success update from ICICI payment manual success page"
+        }
+      };
+      await payment.save();
+      if (payment.source === "StudentFeesOnline" || payment.studentonlinepaymentid) {
+        await studentOnlinePaymentController.settleSuccessfulStudentOnlinePayment(payment, payment.gatewayresponse.manualSuccess);
+      }
+      await updateAdmissionPayment(payment, payment.gatewayresponse.manualSuccess);
+      updated.push(payment.toObject());
+    }
+    res.json({ success: true, count: updated.length, data: updated });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
