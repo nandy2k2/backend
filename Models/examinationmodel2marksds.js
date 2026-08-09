@@ -16,6 +16,8 @@ const examinationModel2MarksSchema = new mongoose.Schema(
     student: { type: String, trim: true },
     regno: { type: String, trim: true, required: true },
     abcid: { type: String, trim: true },
+    examrollno: { type: String, trim: true },
+    examseatno: { type: String, trim: true },
     theorymarks: { type: Number, default: 0 },
     theoryobtained: { type: Number, default: 0 },
     theorypercentage: { type: Number, default: 0 },

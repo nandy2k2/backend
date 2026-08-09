@@ -58,6 +58,80 @@ const normalizeCustomFields = (customFields) => {
 
 const colidOnlyFilter = (colid) => ({ colid: Number(colid) });
 
+const staffListFields = [
+  'name',
+  'email',
+  'phone',
+  'password',
+  'role',
+  'department',
+  'designation',
+  'joiningdate',
+  'googleemail',
+  'institution',
+  'gender',
+  'state',
+  'city',
+  'district',
+  'pincode',
+  'address',
+  'pan',
+  'photo',
+  'skills',
+  'status'
+];
+
+const studentOnlyFields = new Set([
+  'semester', 'admissionyear', 'section', 'regulation', 'program', 'programcode',
+  'major', 'minor', 'vac', 'nidc', 'idc', 'aec', 'sec', 'mdc', 'mdcsub',
+  'Major', 'Minor', 'VAC', 'IDC', 'AEC', 'SEC', 'MDC', 'minorsub',
+  'vocationalsub', 'othersub', 'scholarnumber', 'abcid', 'rollno'
+]);
+
+const staffRequiredDefaults = {
+  regno: 'NA',
+  programcode: 'NA',
+  admissionyear: 'NA',
+  semester: 'NA',
+  section: 'NA',
+  status: 1
+};
+
+const normalizeStaffStatus = (value) => {
+  if (value === undefined || value === null || value === '') return 1;
+  if (/^active$/i.test(String(value))) return 1;
+  if (/^inactive$/i.test(String(value))) return 0;
+  return Number(value || 0);
+};
+
+const staffPayload = (row, colid, actor) => {
+  const payload = {};
+  staffListFields.forEach((field) => {
+    if (row[field] !== undefined && !studentOnlyFields.has(field)) {
+      payload[field] = field === 'status' ? normalizeStaffStatus(row[field]) : cleanValue(row[field]);
+    }
+  });
+
+  Object.entries(row || {}).forEach(([field]) => {
+    if (studentOnlyFields.has(field)) delete payload[field];
+  });
+
+  payload.colid = Number(colid);
+  payload.user = actor || row.user || '';
+  payload.role = payload.role || 'Faculty';
+  payload.status = normalizeStaffStatus(payload.status);
+  payload.password = payload.password || 'Password@123';
+  payload.phone = payload.phone || 'NA';
+  payload.department = payload.department || 'NA';
+  payload.name = payload.name || payload.email || '';
+  payload.institution = payload.institution || row.institution || '';
+  payload.lastlogin = hasDemoText(payload) ? dateAfterDays(3) : dateAfterDays(365);
+  Object.entries(staffRequiredDefaults).forEach(([field, value]) => {
+    if (payload[field] === undefined || payload[field] === null || payload[field] === '') payload[field] = value;
+  });
+  return payload;
+};
+
 const encodeS3Key = (key) => String(key || '').split('/').map(encodeURIComponent).join('/');
 
 const s3Url = (bucket, region, key) => {
@@ -169,6 +243,77 @@ exports.getOptions = async (req, res) => {
     const values = await User.distinct(field, colidOnlyFilter(colid));
     res.json(values.filter((item) => item !== undefined && item !== null && String(item).trim() !== '').sort());
   } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+exports.getStaffList = async (req, res) => {
+  try {
+    const colid = Number(req.query.colid);
+    if (!colid) return res.status(400).json({ msg: 'College id is required' });
+    const search = String(req.query.search || '').trim();
+    const filter = {
+      colid,
+      $nor: [{ role: /^student$/i }]
+    };
+
+    if (search) {
+      filter.$or = staffListFields
+        .filter((field) => field !== 'status')
+        .map((field) => ({ [field]: { $regex: search, $options: 'i' } }));
+    }
+
+    const data = await User.find(filter)
+      .select([...staffListFields, 'colid'].join(' '))
+      .sort({ name: 1, email: 1 })
+      .lean();
+
+    res.json({ data, fields: staffListFields });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+exports.bulkStaffList = async (req, res) => {
+  try {
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    const colid = Number(req.body.colid);
+    if (!colid) return res.status(400).json({ msg: 'College id is required' });
+    if (items.length === 0) return res.status(400).json({ msg: 'No rows received' });
+
+    const errors = [];
+    let saved = 0;
+
+    for (let index = 0; index < items.length; index += 1) {
+      const row = items[index] || {};
+      const rowNumber = row.rowNumber || index + 2;
+      const role = String(row.role || '').trim();
+      if (/^student$/i.test(role)) {
+        errors.push({ rowNumber, msg: 'Student role is not allowed in Staff list upload' });
+        continue;
+      }
+
+      const payload = staffPayload(row, colid, req.body.user);
+      if (!payload.email) {
+        errors.push({ rowNumber, msg: 'Email is required' });
+        continue;
+      }
+
+      try {
+        await User.findOneAndUpdate(
+          { email: payload.email },
+          payload,
+          { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+        );
+        saved += 1;
+      } catch (err) {
+        errors.push({ rowNumber, msg: err.message });
+      }
+    }
+
+    res.json({ saved, errors });
+  } catch (err) {
+    if (err.code === 11000) return res.status(400).json({ msg: 'Duplicate email is not allowed' });
     res.status(500).json({ msg: err.message });
   }
 };

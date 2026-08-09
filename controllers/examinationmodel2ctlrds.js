@@ -61,7 +61,7 @@ const passStatusFromRule = (component, obtained, total, rules = []) => {
 
 const markFields = [
   "academicyear", "regulation", "exam", "examcode", "program", "programcode", "semester", "course", "coursecode",
-  "credit", "student", "regno", "abcid", "theorymarks", "theoryobtained", "theorypercentage", "theorygradepoint", "theorygrade",
+  "credit", "student", "regno", "abcid", "examrollno", "examseatno", "theorymarks", "theoryobtained", "theorypercentage", "theorygradepoint", "theorygrade",
   "practicalmarks", "practicaltotal", "practicalpercentage", "practicalgradepoint", "practicalgrade", "overalltotalmarks", "overallobtained", "overallgradepoint", "overallgrade",
   "overallpercentage", "gpa", "status", "attempt", "type", "examdate", "resultprocessdate"
 ];
@@ -137,6 +137,8 @@ const payloadFrom = (body = {}) => {
     student: text(body.student),
     regno: text(body.regno),
     abcid: text(body.abcid),
+    examrollno: text(body.examrollno),
+    examseatno: text(body.examseatno),
     theorymarks,
     theoryobtained,
     theorypercentage: body.theorypercentage === "" || body.theorypercentage === undefined ? percent(theoryobtained, theorymarks) : number(body.theorypercentage),
@@ -391,6 +393,74 @@ exports.delete = async (req, res) => {
     const data = await ExamMarks.findOneAndDelete({ _id: req.body.id || req.body._id, colid: number(req.body.colid) });
     if (!data) return res.status(404).json({ success: false, message: "Marks entry not found" });
     res.json({ success: true, message: "Deleted" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkUpdateExamName = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    const exam = text(req.body.exam);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select one or more marks entries" });
+    if (!exam) return res.status(400).json({ success: false, message: "Exam name is required" });
+    const result = await ExamMarks.updateMany(
+      { _id: { $in: ids }, colid },
+      { $set: { exam, user: text(req.body.user) } },
+      { runValidators: true }
+    );
+    res.json({ success: true, updated: result.modifiedCount || result.matchedCount || 0 });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkUpdateRollSeat = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!rows.length) return res.status(400).json({ success: false, message: "No rows found for update" });
+    let updated = 0;
+    const errors = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index] || {};
+      const examrollno = text(row.examrollno || row.examroll || row["Exam Roll No"] || row["Exam Roll No."]);
+      const examseatno = text(row.examseatno || row.examseat || row["Exam Seat No"] || row["Exam Seat No."]);
+      if (!examrollno && !examseatno) {
+        errors.push({ row: index + 2, message: "examrollno or examseatno is required" });
+        continue;
+      }
+      const filter = { colid };
+      if (text(row._id || row.id)) {
+        filter._id = text(row._id || row.id);
+      } else {
+        ["academicyear", "examcode", "programcode", "semester", "coursecode", "regno"].forEach((field) => {
+          if (text(row[field])) filter[field] = text(row[field]);
+        });
+        filter.attempt = text(row.attempt) ? number(row.attempt, 1) : 1;
+      }
+      const missingKey = !filter._id && ["academicyear", "examcode", "programcode", "semester", "coursecode", "regno"].some((field) => !filter[field]);
+      if (missingKey) {
+        errors.push({ row: index + 2, message: "Provide _id or academic year, exam code, program code, semester, course code and regno" });
+        continue;
+      }
+      try {
+        const result = await ExamMarks.updateMany(
+          filter,
+          { $set: { examrollno, examseatno, user: text(req.body.user || row.user) } },
+          { runValidators: true }
+        );
+        const count = result.modifiedCount || result.matchedCount || 0;
+        if (!count) errors.push({ row: index + 2, message: "No matching marks entry found" });
+        updated += count;
+      } catch (error) {
+        errors.push({ row: index + 2, message: error.message });
+      }
+    }
+    res.json({ success: true, updated, errors });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

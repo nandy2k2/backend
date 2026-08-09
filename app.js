@@ -89,7 +89,10 @@ const app=express();
 
 app.use(function(req, res, next) {
   res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization, x-auth-token, X-Auth-Token");
+  res.header("Access-Control-Max-Age", "86400");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
@@ -649,6 +652,8 @@ app.get('/api/v2/user-profile-display-profile', userProfileDisplayLayoutControll
 app.post('/api/v2/user-profile-approval-status', userProfileApprovalController.updateUserApprovalStatus);
 app.get('/api/v2/user-data/meta', userDataManagementController.getMeta);
 app.get('/api/v2/user-data/options', userDataManagementController.getOptions);
+app.get('/api/v2/staff-list', userDataManagementController.getStaffList);
+app.post('/api/v2/staff-list-bulk', userDataManagementController.bulkStaffList);
 app.post('/api/v2/user-data/search', userDataManagementController.search);
 app.post('/api/v2/user-data', userDataManagementController.create);
 app.post('/api/v2/user-data-update', userDataManagementController.update);
@@ -662,6 +667,7 @@ app.post('/api/v2/google-auth/registration-links', googleAuthController.createRe
 app.get('/api/v2/google-auth/registration-links', googleAuthController.listRegistrationLinks);
 app.get('/api/v2/google-auth/registration-config', googleAuthController.registrationConfig);
 app.post('/api/v2/google-auth/public-register', googleAuthController.registerWithGoogle);
+app.get('/api/v2/authenticator/users', authenticatorController.listManagedUsers);
 app.post('/api/v2/authenticator/setup', authenticatorController.setup);
 app.post('/api/v2/authenticator/verify', authenticatorController.verify);
 app.post('/api/v2/authenticator/trust-check', authenticatorController.trustCheck);
@@ -693,6 +699,8 @@ app.get('/api/v2/examination-model2/viva-students', examinationModel2Controller.
 app.get('/api/v2/examination-model2/marks', examinationModel2Controller.list);
 app.post('/api/v2/examination-model2/marks', examinationModel2Controller.save);
 app.post('/api/v2/examination-model2/marks-delete', examinationModel2Controller.delete);
+app.post('/api/v2/examination-model2/marks-bulk-update-exam', examinationModel2Controller.bulkUpdateExamName);
+app.post('/api/v2/examination-model2/marks-bulk-update-roll-seat', examinationModel2Controller.bulkUpdateRollSeat);
 app.post('/api/v2/examination-model2/marks-bulk', examinationModel2Controller.bulk);
 app.get('/api/v2/examination-model2/component-allocation-options', conductExamComponentAllocationController.options);
 app.get('/api/v2/examination-model2/component-allocation-students', conductExamComponentAllocationController.presentStudents);

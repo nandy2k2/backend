@@ -169,6 +169,17 @@ async function findUser(bodyOrQuery = {}) {
   return User.findOne({ colid, email: new RegExp(`^${escapeRegex(email)}$`, "i") });
 }
 
+async function findManagedUser(bodyOrQuery = {}) {
+  const colid = Number(bodyOrQuery.colid);
+  const id = clean(bodyOrQuery.id);
+  if (!id || !colid) return null;
+  return User.findOne({
+    _id: id,
+    colid,
+    $nor: [{ role: /^student$/i }]
+  });
+}
+
 function otpauthUrl(user, secret) {
   const issuer = encodeURIComponent("CampusTechnology");
   const label = encodeURIComponent(`CampusTechnology:${user.email}`);
@@ -176,6 +187,32 @@ function otpauthUrl(user, secret) {
 }
 
 exports.statusForUser = buildTwoFactorStatus;
+
+exports.listManagedUsers = async (req, res) => {
+  try {
+    const colid = Number(req.query.colid);
+    if (!colid) return res.status(400).json({ success: false, message: "College id is required" });
+    const search = clean(req.query.search);
+    const query = {
+      colid,
+      $nor: [{ role: /^student$/i }]
+    };
+    if (search) {
+      query.$and = [{
+        $or: ["name", "email", "googleemail", "role", "department", "designation"].map((field) => ({
+          [field]: { $regex: search, $options: "i" }
+        }))
+      }];
+    }
+    const data = await User.find(query)
+      .select("name email googleemail role department designation regno status colid authenticator authenticatordate authenticatorsetupdate")
+      .sort({ role: 1, name: 1, email: 1 })
+      .lean();
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
 
 exports.setup = async (req, res) => {
   try {
@@ -240,7 +277,7 @@ exports.trustCheck = async (req, res) => {
 
 exports.adminUpdate = async (req, res) => {
   try {
-    const user = await findUser(req.body);
+    const user = await findUser(req.body) || await findManagedUser(req.body);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
     user.authenticator = clean(req.body.authenticator || user.authenticator || "No") === "Yes" ? "Yes" : "No";
     user.authenticatordate = req.body.authenticatordate ? new Date(req.body.authenticatordate) : undefined;
