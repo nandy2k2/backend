@@ -5,6 +5,9 @@ const AssessmentComponent = require("../Models/assessmentcomponentds");
 const ComponentAllocation = require("../Models/conductexamcomponentallocationds");
 const ComponentMarks = require("../Models/exammodel2componentmarksds");
 const Institution = require("../Models/insdetails");
+const OnlineExam = require("../Models/onlineexamds");
+const OnlineExamAttempt = require("../Models/onlineexamattemptds");
+const ExamVivaMarks = require("../Models/examinationmodel2vivamarksds");
 
 const text = (value) => String(value ?? "").trim();
 const number = (value, fallback = 0) => {
@@ -27,6 +30,7 @@ const dateInsideWindow = (startdate, enddate, date = todayString()) => {
   if (end && date > end) return false;
   return true;
 };
+const percent = (obtained, total) => number(total) ? Number(((number(obtained) / number(total)) * 100).toFixed(2)) : 0;
 const institutionFor = async (colid) => {
   const item = await Institution.findOne({ colid }).lean();
   return item ? {
@@ -586,6 +590,307 @@ exports.bulkMarks = async (req, res) => {
     res.json({ success: true, saved, errors });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.onlineExamSources = async (req, res) => {
+  try {
+    const colid = numberOrUndefined(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const filter = {
+      colid,
+      status: /^Published$/i
+    };
+    ["academicyear", "program", "programcode", "course", "coursecode"].forEach((field) => {
+      if (text(req.query[field])) filter[field] = text(req.query[field]);
+    });
+    const data = await OnlineExam.find(filter)
+      .select("academicyear program programcode course coursecode examname examcode durationminutes starttime endtime timezone status")
+      .sort({ starttime: -1, examname: 1 })
+      .lean();
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.onlineExamAttemptMarks = async (req, res) => {
+  try {
+    const colid = numberOrUndefined(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const examid = text(req.query.onlineexamid || req.query.examid);
+    if (!examid) return res.status(400).json({ success: false, message: "onlineexamid is required" });
+    const attempts = await OnlineExamAttempt.find({ colid, examid, submittime: { $ne: null } })
+      .select("examid examname examcode academicyear program programcode course coursecode student email regno submittime status totalmarks marksobtained grade comments")
+      .sort({ regno: 1, student: 1 })
+      .lean();
+    let existing = [];
+    if (text(req.query.academicyear) && text(req.query.examcode) && text(req.query.programcode) && text(req.query.coursecode) && text(req.query.componenttype) && text(req.query.assessmentcomponent)) {
+      existing = await ComponentMarks.find({
+        colid,
+        academicyear: text(req.query.academicyear),
+        examcode: text(req.query.examcode),
+        regulation: text(req.query.regulation),
+        programcode: text(req.query.programcode),
+        coursecode: text(req.query.coursecode),
+        componenttype: text(req.query.componenttype),
+        assessmentgroup: text(req.query.assessmentgroup),
+        assessmentcomponent: text(req.query.assessmentcomponent)
+      }).select("regno marksobtained maxmarks submissionstatus").lean();
+    }
+    const existingMap = new Map(existing.map((row) => [text(row.regno), row]));
+    res.json({
+      success: true,
+      data: attempts.map((row) => ({
+        ...row,
+        existingmark: existingMap.get(text(row.regno))?.marksobtained,
+        existingstatus: existingMap.get(text(row.regno))?.submissionstatus || ""
+      }))
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.transferOnlineExamMarks = async (req, res) => {
+  try {
+    const colid = numberOrUndefined(req.body.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const onlineexamid = text(req.body.onlineexamid || req.body.examid);
+    const attemptids = Array.isArray(req.body.attemptids) ? req.body.attemptids.map(text).filter(Boolean) : [];
+    if (!onlineexamid) return res.status(400).json({ success: false, message: "Select an online exam" });
+    if (!attemptids.length) return res.status(400).json({ success: false, message: "Select at least one student" });
+    const target = {
+      colid,
+      academicyear: text(req.body.academicyear),
+      exam: text(req.body.exam),
+      examcode: text(req.body.examcode),
+      regulation: text(req.body.regulation),
+      program: text(req.body.program),
+      programcode: text(req.body.programcode),
+      course: text(req.body.course),
+      coursecode: text(req.body.coursecode),
+      componenttype: text(req.body.componenttype),
+      scoretype: text(req.body.scoretype),
+      assessmentgroup: text(req.body.assessmentgroup),
+      assessmentgrouptype: text(req.body.assessmentgrouptype || req.body.grouptype),
+      assessmentcomponent: text(req.body.assessmentcomponent),
+      maxmarks: number(req.body.maxmarks),
+      credits: number(req.body.credits),
+      examinername: text(req.body.examinername || "Online Exam"),
+      examineremail: text(req.body.examineremail || req.body.user),
+      user: text(req.body.user)
+    };
+    for (const field of ["academicyear", "examcode", "programcode", "coursecode", "componenttype", "assessmentcomponent"]) {
+      if (!target[field]) return res.status(400).json({ success: false, message: `${field} is required` });
+    }
+    const [onlineExam, attempts] = await Promise.all([
+      OnlineExam.findOne({ _id: onlineexamid, colid }).lean(),
+      OnlineExamAttempt.find({ _id: { $in: attemptids }, colid, examid: onlineexamid, submittime: { $ne: null } }).lean()
+    ]);
+    if (!onlineExam) return res.status(404).json({ success: false, message: "Online exam not found" });
+    if (!attempts.length) return res.status(400).json({ success: false, message: "No submitted online exam attempts found for selected students" });
+    const regnos = attempts.map((row) => text(row.regno)).filter(Boolean);
+    const rolls = await ConductExamRoll.find({
+      colid,
+      academicyear: target.academicyear,
+      examcode: target.examcode,
+      regulation: target.regulation,
+      programcode: target.programcode,
+      coursecode: target.coursecode,
+      regno: { $in: regnos }
+    }).lean();
+    const rollMap = new Map(rolls.map((row) => [text(row.regno), row]));
+    const errors = [];
+    const ops = [];
+    for (const attempt of attempts) {
+      const existing = await ComponentMarks.findOne({
+        colid,
+        academicyear: target.academicyear,
+        examcode: target.examcode,
+        regulation: target.regulation,
+        programcode: target.programcode,
+        coursecode: target.coursecode,
+        regno: text(attempt.regno),
+        componenttype: target.componenttype,
+        assessmentgroup: target.assessmentgroup,
+        assessmentcomponent: target.assessmentcomponent
+      }).select("submissionstatus").lean();
+      if (existing?.submissionstatus === "Submitted") {
+        errors.push({ regno: attempt.regno, message: "Existing component mark is already submitted" });
+        continue;
+      }
+      const roll = rollMap.get(text(attempt.regno));
+      const item = {
+        ...target,
+        student: text(attempt.student),
+        regno: text(attempt.regno),
+        examrollno: roll ? String(roll._id) : "",
+        marksobtained: number(attempt.marksobtained),
+        submissionstatus: "Draft",
+        submitteddate: "",
+        submittedby: ""
+      };
+      ops.push({
+        updateOne: {
+          filter: {
+            colid,
+            academicyear: target.academicyear,
+            examcode: target.examcode,
+            regulation: target.regulation,
+            programcode: target.programcode,
+            coursecode: target.coursecode,
+            regno: item.regno,
+            componenttype: target.componenttype,
+            assessmentgroup: target.assessmentgroup,
+            assessmentcomponent: target.assessmentcomponent
+          },
+          update: { $set: item },
+          upsert: true
+        }
+      });
+    }
+    let transferred = 0;
+    if (ops.length) {
+      const result = await ComponentMarks.bulkWrite(ops, { ordered: false });
+      transferred = (result.upsertedCount || 0) + (result.modifiedCount || 0) + (result.matchedCount || 0);
+    }
+    res.json({ success: true, transferred, errors });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.transferOnlineExamMarksToViva = async (req, res) => {
+  try {
+    const colid = numberOrUndefined(req.body.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const onlineexamid = text(req.body.onlineexamid || req.body.examid);
+    const attemptids = Array.isArray(req.body.attemptids) ? req.body.attemptids.map(text).filter(Boolean) : [];
+    if (!onlineexamid) return res.status(400).json({ success: false, message: "Select an online exam" });
+    if (!attemptids.length) return res.status(400).json({ success: false, message: "Select at least one student" });
+    const target = {
+      colid,
+      academicyear: text(req.body.academicyear),
+      regulation: text(req.body.regulation),
+      exam: text(req.body.exam),
+      examcode: text(req.body.examcode),
+      program: text(req.body.program),
+      programcode: text(req.body.programcode),
+      semester: text(req.body.semester),
+      course: text(req.body.course),
+      coursecode: text(req.body.coursecode),
+      credit: number(req.body.credits ?? req.body.credit),
+      componenttype: text(req.body.componenttype),
+      maxmarks: number(req.body.maxmarks),
+      user: text(req.body.user)
+    };
+    for (const field of ["academicyear", "examcode", "programcode", "semester", "coursecode", "componenttype"]) {
+      if (!target[field]) return res.status(400).json({ success: false, message: `${field} is required` });
+    }
+    const [onlineExam, attempts] = await Promise.all([
+      OnlineExam.findOne({ _id: onlineexamid, colid }).lean(),
+      OnlineExamAttempt.find({ _id: { $in: attemptids }, colid, examid: onlineexamid, submittime: { $ne: null } }).lean()
+    ]);
+    if (!onlineExam) return res.status(404).json({ success: false, message: "Online exam not found" });
+    if (!attempts.length) return res.status(400).json({ success: false, message: "No submitted online exam attempts found for selected students" });
+
+    let transferred = 0;
+    const errors = [];
+    for (const attempt of attempts) {
+      const regno = text(attempt.regno);
+      if (!regno) {
+        errors.push({ regno: "", message: "Attempt has no regno" });
+        continue;
+      }
+      const existing = await ExamVivaMarks.findOne({
+        colid,
+        academicyear: target.academicyear,
+        examcode: target.examcode,
+        programcode: target.programcode,
+        semester: target.semester,
+        coursecode: target.coursecode,
+        regno,
+        attempt: 1
+      }).lean();
+      const payload = {
+        colid,
+        academicyear: target.academicyear,
+        regulation: target.regulation,
+        exam: target.exam,
+        examcode: target.examcode,
+        program: target.program,
+        programcode: target.programcode,
+        semester: target.semester,
+        course: target.course,
+        coursecode: target.coursecode,
+        credit: target.credit,
+        student: text(attempt.student),
+        regno,
+        abcid: text(existing?.abcid),
+        theorymarks: number(existing?.theorymarks),
+        theoryobtained: number(existing?.theoryobtained),
+        theorygradepoint: number(existing?.theorygradepoint),
+        theorygrade: text(existing?.theorygrade),
+        theorystatus: text(existing?.theorystatus) || "Pass",
+        practicalmarks: number(existing?.practicalmarks),
+        practicaltotal: number(existing?.practicaltotal),
+        practicalgradepoint: number(existing?.practicalgradepoint),
+        practicalgrade: text(existing?.practicalgrade),
+        practicalstatus: text(existing?.practicalstatus) || "Pass",
+        vivatotal: number(existing?.vivatotal),
+        vivaobtained: number(existing?.vivaobtained),
+        vivagpa: number(existing?.vivagpa),
+        vivagrade: text(existing?.vivagrade),
+        overallgradepoint: number(existing?.overallgradepoint),
+        overallgrade: text(existing?.overallgrade),
+        status: text(existing?.status) || "Pass",
+        attempt: 1,
+        type: text(existing?.type) || "Regular",
+        examdate: text(existing?.examdate),
+        resultprocessdate: text(existing?.resultprocessdate),
+        user: target.user
+      };
+      if (/^theory$/i.test(target.componenttype)) {
+        payload.theorymarks = target.maxmarks;
+        payload.theoryobtained = number(attempt.marksobtained);
+      } else if (/^practical$/i.test(target.componenttype)) {
+        payload.practicaltotal = target.maxmarks;
+        payload.practicalmarks = number(attempt.marksobtained);
+      } else if (/^viva$/i.test(target.componenttype)) {
+        payload.vivatotal = target.maxmarks;
+        payload.vivaobtained = number(attempt.marksobtained);
+      } else {
+        errors.push({ regno, message: `Unsupported component type ${target.componenttype}` });
+        continue;
+      }
+      payload.theorypercentage = percent(payload.theoryobtained, payload.theorymarks);
+      payload.practicalpercentage = percent(payload.practicalmarks, payload.practicaltotal);
+      payload.vivapercentage = percent(payload.vivaobtained, payload.vivatotal);
+      payload.overalltotalmarks = number(payload.theorymarks) + number(payload.practicaltotal) + number(payload.vivatotal);
+      payload.overallobtained = number(payload.theoryobtained) + number(payload.practicalmarks) + number(payload.vivaobtained);
+      payload.overallpercentage = percent(payload.overallobtained, payload.overalltotalmarks);
+      payload.gpa = Number((number(payload.credit) * number(payload.overallgradepoint)).toFixed(2));
+
+      await ExamVivaMarks.findOneAndUpdate(
+        {
+          colid,
+          academicyear: target.academicyear,
+          examcode: target.examcode,
+          programcode: target.programcode,
+          semester: target.semester,
+          coursecode: target.coursecode,
+          regno,
+          attempt: 1
+        },
+        payload,
+        { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+      );
+      transferred += 1;
+    }
+    res.json({ success: true, transferred, errors });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.code === 11000 ? "Duplicate viva marks entry for this student, course, exam and attempt" : err.message });
   }
 };
 

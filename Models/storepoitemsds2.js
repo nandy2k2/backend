@@ -61,6 +61,7 @@ const storepoitemsdsschema = new mongoose.Schema({
     itemtype: { type: String }, // This field already exists, keeping its original definition.
     unit: { type: String },
     gst: { type: Number },      // Tax %
+    discount: { type: Number },
     sgst: { type: Number },
     cgst: { type: Number },
     igst: { type: Number },

@@ -1,6 +1,7 @@
 const path = require("path");
 const multer = require("multer");
 const AWS = require("aws-sdk");
+const pptxgen = require("pptxgenjs");
 const Awsconfig = require("../Models/awsconfig");
 const AiConfiguration = require("../Models/aiconfigurationds");
 const OllamaConfiguration = require("../Models/ollamaconfigurationds");
@@ -147,9 +148,255 @@ const safeHtml = (value) => String(value || "").replace(/[&<>"']/g, (char) => ({
 }[char]));
 const stripCodeFence = (content) => text(content)
   .replace(/^```html\s*/i, "")
+  .replace(/^```json\s*/i, "")
   .replace(/^```\s*/i, "")
   .replace(/```$/i, "")
   .trim();
+
+const truncateText = (value, limit = 900) => {
+  const clean = text(value).replace(/\s+/g, " ");
+  return clean.length > limit ? `${clean.slice(0, limit - 3)}...` : clean;
+};
+
+const listFromValue = (value, limit = 6, charLimit = 150) => {
+  const source = Array.isArray(value) ? value : String(value || "").split(/\n+|;+/);
+  return source.map((item) => truncateText(item, charLimit)).filter(Boolean).slice(0, limit);
+};
+
+const parseSlidesFromAi = (content, fallbackBody, rows) => {
+  const clean = stripCodeFence(content);
+  try {
+    const parsed = JSON.parse(clean);
+    const slides = Array.isArray(parsed) ? parsed : parsed.slides;
+    if (Array.isArray(slides) && slides.length) {
+      return slides.map((slide, index) => ({
+        title: truncateText(slide.title || `Slide ${index + 1}`, 90),
+        subtitle: truncateText(slide.subtitle || slide.objective || "", 130),
+        content: truncateText(slide.content || slide.explanation || slide.teachingContent || slide.notes || "", 900),
+        example: truncateText(slide.example || slide.application || slide.caseExample || "", 420),
+        bullets: listFromValue(slide.bullets || slide.keypoints || slide.keyPoints || slide.content, 6, 170),
+        diagramType: text(slide.diagramType || slide.visualType || slide.diagram || ""),
+        diagramItems: listFromValue(slide.diagramItems || slide.visualItems || slide.steps || slide.components || slide.flow, 5, 90),
+        notes: truncateText(slide.notes || "", 500)
+      })).filter((slide) => slide.title || slide.bullets.length);
+    }
+  } catch (error) {
+    // Fall through to deterministic syllabus-based slides.
+  }
+  return [
+    {
+      title: fallbackBody.title || `${fallbackBody.course || "Course"} Presentation`,
+      bullets: [
+        `Course: ${fallbackBody.course || ""} (${fallbackBody.coursecode || ""})`,
+        `Program: ${fallbackBody.program || ""} (${fallbackBody.programcode || ""})`,
+        `Semester: ${fallbackBody.semester || ""}`,
+        `Generated using ${fallbackBody.provider || "AI"}`
+      ].filter(Boolean)
+    },
+    ...rows.slice(0, 18).map((row) => ({
+      title: row.module || "Module",
+      content: row.syllabus,
+      diagramType: "cards",
+      diagramItems: listFromValue(row.syllabus, 5, 80),
+      bullets: [
+        `Core content: ${row.syllabus}`,
+        fallbackBody.additionalprompt || fallbackBody.prompt || "Discuss concepts, examples, applications and recap questions."
+      ].filter(Boolean)
+    }))
+  ];
+};
+
+const addDiagram = (pptx, slide, slideData, index) => {
+  const colors = ["DBEAFE", "DCFCE7", "FEF3C7", "FCE7F3", "E0E7FF"];
+  const borderColors = ["2563EB", "16A34A", "D97706", "DB2777", "4F46E5"];
+  const items = (slideData.diagramItems?.length ? slideData.diagramItems : slideData.bullets || []).slice(0, 5);
+  if (!items.length) return;
+  const type = text(slideData.diagramType).toLowerCase();
+  if (type.includes("cycle")) {
+    const positions = [
+      [7.1, 1.72], [8.17, 2.72], [7.72, 4.08], [6.47, 4.08], [6.02, 2.72]
+    ];
+    items.forEach((item, i) => {
+      const [x, y] = positions[i] || positions[0];
+      slide.addShape(pptx.ShapeType.ellipse, {
+        x, y, w: 1.25, h: 0.72,
+        fill: { color: colors[i % colors.length] },
+        line: { color: borderColors[i % borderColors.length], width: 1.2 }
+      });
+      slide.addText(item, { x: x + 0.08, y: y + 0.11, w: 1.1, h: 0.45, fontSize: 8.5, bold: true, color: "0F172A", align: "center", valign: "mid", fit: "shrink", margin: 0.02 });
+    });
+    return;
+  }
+  if (type.includes("process") || type.includes("flow") || index % 3 === 1) {
+    items.slice(0, 4).forEach((item, i) => {
+      const y = 1.65 + i * 1.04;
+      slide.addShape(pptx.ShapeType.roundRect, {
+        x: 6.45, y, w: 2.85, h: 0.72,
+        rectRadius: 0.08,
+        fill: { color: colors[i % colors.length] },
+        line: { color: borderColors[i % borderColors.length], width: 1 }
+      });
+      slide.addText(`${i + 1}. ${item}`, { x: 6.58, y: y + 0.12, w: 2.58, h: 0.42, fontSize: 9, bold: true, color: "0F172A", fit: "shrink", margin: 0.02 });
+      if (i < Math.min(items.length, 4) - 1) {
+        slide.addShape(pptx.ShapeType.downArrow, { x: 7.62, y: y + 0.75, w: 0.36, h: 0.28, fill: { color: "64748B" }, line: { color: "64748B" } });
+      }
+    });
+    return;
+  }
+  items.slice(0, 4).forEach((item, i) => {
+    const x = 6.28 + (i % 2) * 1.62;
+    const y = 1.72 + Math.floor(i / 2) * 1.52;
+    slide.addShape(pptx.ShapeType.roundRect, {
+      x, y, w: 1.45, h: 1.12,
+      rectRadius: 0.08,
+      fill: { color: colors[i % colors.length] },
+      line: { color: borderColors[i % borderColors.length], width: 1 }
+    });
+    slide.addText(item, { x: x + 0.09, y: y + 0.17, w: 1.27, h: 0.72, fontSize: 8.5, bold: true, color: "0F172A", align: "center", valign: "mid", fit: "shrink", margin: 0.02 });
+  });
+};
+
+const buildPptxBuffer = async ({ slides, meta }) => {
+  const pptx = new pptxgen();
+  pptx.defineLayout({ name: "COURSE_4X3", width: 10, height: 7.5 });
+  pptx.layout = "COURSE_4X3";
+  pptx.author = meta.faculty || meta.user || "Campus Technology";
+  pptx.company = "Campus Technology";
+  pptx.subject = `${meta.course || "Course"} ${meta.coursecode || ""}`.trim();
+  pptx.title = meta.title || meta.course || "AI PPT";
+  pptx.lang = "en-US";
+  pptx.theme = {
+    headFontFace: "Aptos Display",
+    bodyFontFace: "Aptos",
+    lang: "en-US"
+  };
+
+  const safeSlides = slides.length ? slides : [{ title: meta.title || meta.course || "Presentation", bullets: ["Generated presentation"] }];
+  safeSlides.forEach((slideData, index) => {
+    const slide = pptx.addSlide();
+    const isTitle = index === 0;
+    slide.background = { color: isTitle ? "EFF6FF" : "FFFFFF" };
+    slide.addShape(pptx.ShapeType.rect, {
+      x: 0,
+      y: 0,
+      w: 10,
+      h: 0.18,
+      fill: { color: isTitle ? "2563EB" : "0EA5E9" },
+      line: { color: isTitle ? "2563EB" : "0EA5E9" }
+    });
+    slide.addText(truncateText(slideData.title || `Slide ${index + 1}`, 90), {
+      x: 0.45,
+      y: 0.42,
+      w: 9.1,
+      h: isTitle ? 0.95 : 0.72,
+      fontFace: "Aptos Display",
+      fontSize: isTitle ? 27 : 22,
+      bold: true,
+      color: "0F172A",
+      margin: 0.08,
+      breakLine: false,
+      fit: "shrink"
+    });
+    const bullets = (slideData.bullets || [])
+      .map((item) => truncateText(item, 220))
+      .filter(Boolean)
+      .slice(0, 5);
+    if (slideData.subtitle) {
+      slide.addText(slideData.subtitle, {
+        x: 0.48,
+        y: isTitle ? 1.2 : 1.05,
+        w: 5.8,
+        h: 0.34,
+        fontFace: "Aptos",
+        fontSize: 10.5,
+        italic: true,
+        color: "475569",
+        fit: "shrink",
+        margin: 0
+      });
+    }
+    const content = truncateText(slideData.content || slideData.notes || bullets.join(". "), 780);
+    slide.addText(content || "Presentation content", {
+      x: 0.65,
+      y: isTitle ? 1.62 : 1.38,
+      w: 5.35,
+      h: 2.15,
+      fontFace: "Aptos",
+      fontSize: isTitle ? 14.5 : 12.2,
+      color: "111827",
+      valign: "top",
+      margin: 0.12,
+      fit: "shrink",
+      breakLine: true
+    });
+    if (bullets.length) {
+      slide.addText(bullets.map((item) => `• ${item}`).join("\n"), {
+        x: 0.78,
+        y: isTitle ? 3.92 : 3.72,
+        w: 5.1,
+        h: 1.4,
+        fontFace: "Aptos",
+        fontSize: 10.5,
+        color: "1F2937",
+        fit: "shrink",
+        margin: 0.08,
+        breakLine: true
+      });
+    }
+    if (slideData.example) {
+      slide.addShape(pptx.ShapeType.roundRect, { x: 0.65, y: 5.42, w: 5.45, h: 0.82, rectRadius: 0.08, fill: { color: "F8FAFC" }, line: { color: "CBD5E1", width: 0.8 } });
+      slide.addText(`Example: ${slideData.example}`, { x: 0.82, y: 5.56, w: 5.1, h: 0.5, fontSize: 9.2, color: "334155", fit: "shrink", margin: 0.02 });
+    }
+    slide.addShape(pptx.ShapeType.roundRect, { x: 6.18, y: 1.28, w: 3.35, h: 5.0, rectRadius: 0.08, fill: { color: isTitle ? "F8FAFC" : "F1F5F9", transparency: 4 }, line: { color: "CBD5E1", width: 0.8 } });
+    slide.addText("Visual Map", { x: 6.38, y: 1.38, w: 2.9, h: 0.25, fontSize: 9.5, bold: true, color: "334155", margin: 0 });
+    addDiagram(pptx, slide, slideData, index);
+    slide.addText(`${meta.coursecode || ""} | ${meta.academicyear || ""} | Slide ${index + 1} of ${safeSlides.length}`, {
+      x: 0.65,
+      y: 7.02,
+      w: 8.8,
+      h: 0.25,
+      fontFace: "Aptos",
+      fontSize: 8.5,
+      color: "475569",
+      margin: 0
+    });
+  });
+
+  const output = await pptx.write({ outputType: "nodebuffer" });
+  return Buffer.isBuffer(output) ? output : Buffer.from(output);
+};
+
+const buildAiPptPrompt = ({ body, rows }) => {
+  const selectedText = rows.map((row, index) => `${index + 1}. Module: ${row.module}\nTopic: ${row.syllabus}`).join("\n\n");
+  return `Create a professional classroom PowerPoint deck as JSON only.
+
+Return JSON in this exact shape:
+{"slides":[{"title":"short title","subtitle":"learning objective or framing line","content":"one rich teaching paragraph of 80 to 130 words explaining the concept, not just points","bullets":["key point 1","key point 2","key point 3"],"example":"short classroom example or practical application","diagramType":"cards/process/cycle/compare","diagramItems":["visual label 1","visual label 2","visual label 3"],"notes":"optional teacher notes"}]}
+
+Course context:
+Academic year: ${text(body.academicyear)}
+Program: ${text(body.program)} (${text(body.programcode)})
+Regulation: ${text(body.regulation)}
+Semester: ${text(body.semester)}
+Course: ${text(body.course)} (${text(body.coursecode)})
+Language: ${text(body.language) || "English"}
+Difficulty: ${text(body.difficulty) || "Medium"}
+
+Selected syllabus:
+${selectedText}
+
+User additional prompt:
+${text(body.additionalprompt || body.prompt) || "Create a clear, visually structured deck with objectives, explanations, examples, summary and recap questions."}
+
+Rules:
+1. Return JSON only, no markdown.
+2. Create 8 to 14 slides.
+3. Every slide must include substantial visible teaching content in "content"; do not give only bullets.
+4. Use 3 to 5 concise bullets for reinforcement, not as the main content.
+5. Every slide must include diagramType and 3 to 5 diagramItems suitable for a visual diagram.
+6. Include examples, classroom discussion prompts, and a recap/quiz slide.
+7. Use the requested language.`;
+};
 
 const getAiConfig = async (colid, provider = "Gemini") => {
   const providerRegex = new RegExp(`^${escapeRegex(provider)}$`, "i");
@@ -475,6 +722,91 @@ exports.generateAiResource = async (req, res) => {
     });
 
     res.json({ success: true, data, url: data.url });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.generateAiPptResource = async (req, res) => {
+  try {
+    const payload = resourcePayload({ ...req.body, resourcetype: "Course Material" });
+    if (!payload.colid) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!payload.coursecode) return res.status(400).json({ success: false, message: "Course is required" });
+    if (!payload.facultyemail) return res.status(400).json({ success: false, message: "Faculty email is required" });
+
+    const rows = await selectedSyllabusRows({ ...req.body, ...payload });
+    if (!rows.length) return res.status(400).json({ success: false, message: "Select at least one module/topic from syllabus" });
+
+    const assigned = await require("../Models/workloadassignmentds").findOne({
+      colid: payload.colid,
+      status: "Active",
+      facultyemail: { $regex: `^${escapeRegex(payload.facultyemail)}$`, $options: "i" },
+      academicyear: payload.academicyear,
+      regulation: payload.regulation,
+      program: payload.program,
+      programcode: payload.programcode,
+      semester: payload.semester,
+      coursecode: payload.coursecode
+    }).lean();
+    if (!assigned) return res.status(403).json({ success: false, message: "Selected course is not assigned to this faculty" });
+
+    const awsConfig = await getDefaultAwsConfig(payload.colid);
+    if (!awsConfig?.username || !awsConfig?.password || !awsConfig?.bucket || !awsConfig?.region) {
+      return res.status(400).json({ success: false, message: "Default AWS configuration is incomplete" });
+    }
+
+    const provider = text(req.body.provider || "Gemini");
+    const prompt = buildAiPptPrompt({ body: { ...assigned, ...req.body, ...payload }, rows });
+    let generated = "";
+    if (provider.toLowerCase() === "ollama") {
+      const ollamaConfig = await getOllamaConfig(payload.colid, req.body.ollamaConfigId);
+      if (!ollamaConfig) return res.status(400).json({ success: false, message: "Active Ollama configuration is missing" });
+      generated = await callOllama(ollamaConfig, prompt);
+    } else {
+      const aiConfig = await getAiConfig(payload.colid, "Gemini");
+      if (!aiConfig?.apikey) return res.status(400).json({ success: false, message: "Active/default Gemini AI configuration is missing" });
+      generated = await callGemini(aiConfig.apikey, prompt, req.body.model || req.body.geminiModel);
+    }
+
+    const slides = parseSlidesFromAi(generated, { ...assigned, ...req.body, ...payload, provider }, rows).slice(0, 18);
+    if (!slides.length) return res.status(400).json({ success: false, message: "AI did not return usable slide content" });
+    const pptxBuffer = await buildPptxBuffer({ slides, meta: { ...assigned, ...req.body, ...payload } });
+    const cleanCourse = path.basename(payload.coursecode || "course").replace(/[^\w.\-() ]/g, "_");
+    const cleanTitle = path.basename(payload.title || "AI-Presentation").replace(/[^\w.\-() ]/g, "_").slice(0, 80);
+    const fileName = `${cleanCourse}-${Date.now()}-${cleanTitle}.pptx`;
+    const key = `${payload.colid}/nep-lms/${payload.academicyear || "year"}/${payload.coursecode || "course"}/Course Material/${fileName}`;
+
+    const s3 = new AWS.S3({
+      accessKeyId: awsConfig.username,
+      secretAccessKey: awsConfig.password,
+      region: awsConfig.region
+    });
+    await s3.putObject({
+      Bucket: awsConfig.bucket,
+      Key: key,
+      Body: pptxBuffer,
+      ContentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    }).promise();
+
+    const data = await NepLmsResource.create({
+      ...payload,
+      title: payload.title || `AI PPT - ${assigned.course}`,
+      module: rows.map((row) => row.module).filter(Boolean).join(", "),
+      topic: rows.map((row) => row.syllabus).filter(Boolean).join(", "),
+      description: payload.description || `AI generated PPT using ${provider}. ${text(req.body.additionalprompt || req.body.prompt)}`,
+      order: optionalNumber(req.body.order),
+      filename: fileName,
+      originalname: fileName,
+      mimetype: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      size: pptxBuffer.length,
+      bucket: awsConfig.bucket,
+      region: awsConfig.region,
+      key,
+      url: s3Url(awsConfig.bucket, awsConfig.region, key),
+      status: "Active"
+    });
+
+    res.json({ success: true, data, url: data.url, slides: slides.length });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

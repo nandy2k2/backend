@@ -1,6 +1,26 @@
 const Syllabus = require("../Models/syllabusds");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
 const AiConfiguration = require("../Models/aiconfigurationds");
+const OllamaConfiguration = require("../Models/ollamaconfigurationds");
+const pdfParse = require("pdf-parse");
+
+let mammoth = null;
+try {
+  mammoth = require("mammoth");
+} catch (error) {
+  mammoth = null;
+}
+
+const GEMINI_FALLBACK_MODELS = [
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-2.0-flash",
+  "gemini-2.0-flash-lite",
+  "gemini-1.5-pro",
+  "gemini-1.5-flash",
+  "gemini-1.5-flash-8b"
+];
 
 const text = (value) => String(value || "").trim();
 
@@ -45,6 +65,22 @@ const parseGeminiJson = (value) => {
   }
 };
 
+const getGeminiModels = async (apikey) => {
+  if (!apikey) return GEMINI_FALLBACK_MODELS;
+  try {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apikey)}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return GEMINI_FALLBACK_MODELS;
+    const models = (data.models || [])
+      .filter((model) => (model.supportedGenerationMethods || []).includes("generateContent"))
+      .map((model) => String(model.name || "").replace(/^models\//, ""))
+      .filter((name) => /^gemini-/i.test(name));
+    return [...new Set([...models, ...GEMINI_FALLBACK_MODELS])];
+  } catch (error) {
+    return GEMINI_FALLBACK_MODELS;
+  }
+};
+
 const readGeminiText = (payload = {}) => (
   payload.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("\n").trim()
   || payload.text
@@ -56,8 +92,8 @@ const getDefaultGeminiConfig = async (colid) => (
   || await AiConfiguration.findOne({ colid, type: /^gemini$/i, active: /^yes$/i }).sort({ _id: -1 }).lean()
 );
 
-const callGeminiJson = async (apikey, prompt) => {
-  const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+const callGeminiJson = async (apikey, prompt, preferredModel = "gemini-2.5-flash") => {
+  const models = [...new Set([text(preferredModel), ...GEMINI_FALLBACK_MODELS].filter(Boolean))];
   let lastError = "";
   for (const model of models) {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apikey)}`, {
@@ -78,6 +114,57 @@ const callGeminiJson = async (apikey, prompt) => {
   throw new Error(lastError || "Gemini API request failed");
 };
 
+const extractSourceTextFromLink = async (sourcefilelink, sourcefilename = "") => {
+  const url = text(sourcefilelink);
+  if (!url) return "";
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Unable to read source file from AWS link: ${response.status}`);
+  const contentType = text(response.headers.get("content-type")).toLowerCase();
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  const filename = text(sourcefilename || decodeURIComponent(url.split("?")[0].split("/").pop() || "")).toLowerCase();
+  const mimetype = contentType;
+  if (mimetype.includes("pdf") || filename.endsWith(".pdf")) {
+    const parsed = await pdfParse(buffer);
+    return text(parsed.text).slice(0, 25000);
+  }
+  if (
+    mimetype.includes("word")
+    || mimetype.includes("officedocument")
+    || filename.endsWith(".docx")
+    || filename.endsWith(".doc")
+  ) {
+    if (!mammoth) throw new Error("Word file extraction requires the mammoth package on the backend");
+    const parsed = await mammoth.extractRawText({ buffer });
+    return text(parsed.value).slice(0, 25000);
+  }
+  throw new Error("Only PDF, DOC, and DOCX AWS links are supported for syllabus source extraction");
+};
+
+const getOllamaConfig = async (colid, configId) => {
+  const query = { colid: Number(colid), active: /^yes$/i };
+  if (text(configId)) {
+    const selected = await OllamaConfiguration.findOne({ ...query, _id: configId }).lean();
+    if (selected) return selected;
+  }
+  return OllamaConfiguration.findOne({ ...query, default: /^yes$/i }).sort({ _id: -1 }).lean()
+    || OllamaConfiguration.findOne(query).sort({ _id: -1 }).lean();
+};
+
+const callOllamaJson = async (config, prompt) => {
+  const server = text(config.serveraddress || "http://localhost:11434").replace(/\/+$/, "");
+  const model = text(config.modelname);
+  if (!model) throw new Error("Ollama model name is missing");
+  const response = await fetch(`${server}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, prompt, stream: false, options: { temperature: 0.25 } })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Ollama request failed");
+  return parseGeminiJson(data.response || "");
+};
+
 const cleanPayload = (input = {}) => ({
   academicyear: text(input.academicyear || input.academicYear),
   regulation: text(input.regulation),
@@ -90,6 +177,8 @@ const cleanPayload = (input = {}) => ({
   coursecode: text(input.coursecode),
   module: text(input.module),
   syllabus: text(input.syllabus),
+  sourcefilelink: text(input.sourcefilelink || input.sourceFileLink || input.documentlink || input.filelink),
+  sourcefilename: text(input.sourcefilename || input.sourceFileName || input.documentname || input.filename),
   colid: toNumber(input.colid),
   user: text(input.user)
 });
@@ -186,6 +275,119 @@ exports.getSyllabusOptions = async (req, res) => {
       courses: [...courseMap.values()].sort((a, b) => String(a.coursecode).localeCompare(String(b.coursecode))),
       modules: uniq(syllabi.map((item) => item.module))
     });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getSyllabusAiOptions = async (req, res) => {
+  try {
+    const colid = toNumber(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const [ollamaConfigs, aiConfig] = await Promise.all([
+      OllamaConfiguration.find({ colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean(),
+      getDefaultGeminiConfig(colid)
+    ]);
+    const geminiModels = await getGeminiModels(aiConfig?.apikey);
+    res.json({
+      success: true,
+      geminiModels,
+      ollamaConfigs
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const generatedSyllabusPrompt = ({ payload, moduleCount, additionalPrompt, sourceText }) => `
+Create a complete module-wise syllabus for the selected course.
+
+Return only valid JSON with this exact shape:
+{
+  "items": [
+    { "module": "Module 1: module title", "syllabus": "Detailed comma-separated / paragraph syllabus topics for this module" }
+  ]
+}
+
+Course context:
+Academic year: ${payload.academicyear}
+Regulation: ${payload.regulation}
+Program: ${payload.program} (${payload.programcode})
+Type: ${payload.type}
+Subject group: ${payload.subject}
+Semester: ${payload.semester}
+Course: ${payload.course} (${payload.coursecode})
+
+Requirements:
+1. Create exactly ${moduleCount} modules.
+2. Each module must have a meaningful title and detailed syllabus content.
+3. Each syllabus value must include topics and subtopics suitable for saving directly as the module syllabus.
+4. Make it suitable for university-level curriculum documentation.
+5. Include theory, practical/application orientation where relevant.
+6. If source document text is provided, use it as the primary reference and reorganize it into the requested number of modules.
+7. Do not include any extra keys outside "items".
+8. Do not use markdown.
+${sourceText ? `\nSource document link: ${text(payload.sourcefilelink)}\nSource document text extracted from the AWS link:\n${sourceText}` : ""}
+${additionalPrompt ? `\nAdditional user instructions: ${additionalPrompt}` : ""}
+`;
+
+exports.generateSyllabusWithAi = async (req, res) => {
+  try {
+    const basePayload = cleanPayload({ ...req.body, module: "Module 1", syllabus: "placeholder" });
+    const coursePayload = {
+      academicyear: basePayload.academicyear,
+      regulation: basePayload.regulation,
+      program: basePayload.program,
+      programcode: basePayload.programcode,
+      type: basePayload.type,
+      subject: basePayload.subject,
+      semester: basePayload.semester,
+      course: basePayload.course,
+      coursecode: basePayload.coursecode,
+      sourcefilelink: basePayload.sourcefilelink,
+      sourcefilename: basePayload.sourcefilename,
+      colid: basePayload.colid,
+      user: basePayload.user
+    };
+    const requiredError = validatePayload({ ...coursePayload, module: "Module 1", syllabus: "placeholder" });
+    if (requiredError) return res.status(400).json({ success: false, message: requiredError });
+    const mappedCourse = await RegulationCourseMap.exists(courseMapQueryFromPayload({ ...coursePayload, module: "Module 1", syllabus: "placeholder" }));
+    if (!mappedCourse) return res.status(400).json({ success: false, message: "Selected course mapping was not found in regulation course map" });
+
+    const moduleCount = Math.max(1, Math.min(30, Number(req.body.moduleCount || req.body.noofmodules || 5)));
+    const sourceText = await extractSourceTextFromLink(coursePayload.sourcefilelink, coursePayload.sourcefilename);
+    const prompt = generatedSyllabusPrompt({
+      payload: coursePayload,
+      moduleCount,
+      additionalPrompt: text(req.body.additionalprompt || req.body.additionalPrompt || req.body.prompt),
+      sourceText
+    });
+    const provider = text(req.body.provider || "Gemini");
+    let aiResult = {};
+    if (provider.toLowerCase() === "ollama") {
+      const ollamaConfig = await getOllamaConfig(coursePayload.colid, req.body.ollamaConfigId);
+      if (!ollamaConfig) return res.status(400).json({ success: false, message: "Active Ollama configuration is missing" });
+      aiResult = await callOllamaJson(ollamaConfig, prompt);
+    } else {
+      const aiConfig = await getDefaultGeminiConfig(coursePayload.colid);
+      if (!aiConfig?.apikey) return res.status(400).json({ success: false, message: "Default active Gemini AI configuration is missing" });
+      aiResult = await callGeminiJson(aiConfig.apikey, prompt, req.body.geminiModel || req.body.model);
+    }
+
+    let items = Array.isArray(aiResult) ? aiResult : Array.isArray(aiResult.items) ? aiResult.items : [];
+    if (!items.length && Array.isArray(aiResult.modules)) items = aiResult.modules;
+    items = items.map((item, index) => ({
+      ...coursePayload,
+      module: text(item.module) || `Module ${index + 1}`,
+      syllabus: text(item.syllabus || item.topics || item.content)
+    })).filter((item) => item.module && item.syllabus).slice(0, moduleCount);
+
+    if (!items.length) return res.status(400).json({ success: false, message: "AI did not return usable syllabus rows" });
+    if (String(req.body.save || "").toLowerCase() === "yes") {
+      const data = await Syllabus.insertMany(items, { ordered: false });
+      return res.json({ success: true, inserted: data.length, data });
+    }
+    res.json({ success: true, data: items });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

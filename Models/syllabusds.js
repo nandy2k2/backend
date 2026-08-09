@@ -13,6 +13,8 @@ const syllabusSchema = new mongoose.Schema(
     coursecode: { type: String, trim: true, required: true },
     module: { type: String, trim: true, required: true },
     syllabus: { type: String, trim: true, required: true },
+    sourcefilelink: { type: String, trim: true },
+    sourcefilename: { type: String, trim: true },
     colid: { type: Number, required: true, index: true },
     user: { type: String, trim: true }
   },

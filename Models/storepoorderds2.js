@@ -35,7 +35,19 @@ const storepoorderdsschema = new mongoose.Schema({
     storename: {
         type: String
     },
+    store: {
+        type: String
+    },
     price: {
+        type: Number
+    },
+    amount: {
+        type: Number
+    },
+    gst: {
+        type: Number
+    },
+    discount: {
         type: Number
     },
     description: {
@@ -59,6 +71,7 @@ const storepoorderdsschema = new mongoose.Schema({
     creatorSignature: { type: String },
     terms: { type: String },
     warranty: { type: String },
+    remarks: { type: String },
     approvalhistory: { type: Array, default: [] },
 
     // Phase 1 Additions (SAP-Inspired Flow)

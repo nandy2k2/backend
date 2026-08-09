@@ -369,6 +369,56 @@ exports.studentExams = async (req, res) => {
   }
 };
 
+exports.studentCourses = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const regno = text(req.query.regno);
+    const user = await User.findOne({ colid, regno }).lean();
+    if (!user) return res.status(404).json({ success: false, message: "Student not found" });
+
+    const query = {
+      colid,
+      academicyear: text(user.academicyear),
+      regulation: text(user.regulation),
+      programcode: text(user.programcode),
+      semester: text(user.semester)
+    };
+    if (text(user.program)) query.program = text(user.program);
+    Object.keys(query).forEach((key) => {
+      if (query[key] === "") delete query[key];
+    });
+
+    const rows = await RegulationCourseMap.find(query)
+      .select("academicyear regulation program programcode semester course coursecode coursetype deliverytype credit")
+      .sort({ course: 1, coursecode: 1 })
+      .lean();
+
+    const seen = new Set();
+    const courses = rows.filter((row) => {
+      const key = [row.coursecode, row.course, row.semester].map(text).join("||");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    res.json({
+      success: true,
+      student: {
+        name: user.name,
+        regno: user.regno,
+        academicyear: user.academicyear,
+        regulation: user.regulation,
+        program: user.program,
+        programcode: user.programcode,
+        semester: user.semester
+      },
+      data: courses
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.startAttempt = async (req, res) => {
   try {
     const exam = await OnlineExam.findOne({ _id: req.body.examid, colid: num(req.body.colid), status: /^Published$/i }).lean();
