@@ -40,6 +40,7 @@ conductExamComponentAllocationSchema.index({
   academicyear: 1,
   examcode: 1,
   programcode: 1,
+  semester: 1,
   coursecode: 1,
   regno: 1,
   componenttype: 1,

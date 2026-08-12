@@ -3,11 +3,13 @@ const ConductExamCourse = require("../Models/conductexamcourseds");
 const ConductExamRoll = require("../Models/conductexamrollds");
 const ConductExamRoom = require("../Models/conductexamroomds");
 const ConductExamInvigilatorAllocation = require("../Models/conductexaminvigilatorallocationds");
+const ExamVivaMarks = require("../Models/examinationmodel2vivamarksds");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
 const RoomResource = require("../Models/roomresourceds");
 const User = require("../Models/user");
 const AcademicCalendar = require("../Models/macadcal");
 const AiConfiguration = require("../Models/aiconfigurationds");
+const OllamaConfiguration = require("../Models/ollamaconfigurationds");
 const InsDetails = require("../Models/insdetails");
 
 const text = (value) => String(value || "").trim();
@@ -58,6 +60,23 @@ const callGeminiText = async (apikey, prompt, requestedModel = "") => {
   throw new Error(lastError || "Gemini request failed");
 };
 
+const callOllamaText = async (colid, ollamaConfigId, prompt) => {
+  const config = ollamaConfigId
+    ? await OllamaConfiguration.findOne({ _id: ollamaConfigId, colid, active: /^yes$/i }).lean()
+    : await OllamaConfiguration.findOne({ colid, active: /^yes$/i, default: /^yes$/i }).lean()
+      || await OllamaConfiguration.findOne({ colid, active: /^yes$/i }).lean();
+  if (!config) throw new Error("Active Ollama configuration is missing");
+  const base = text(config.serveraddress || config.serverAddress || "http://localhost:11434").replace(/\/$/, "");
+  const response = await fetch(`${base}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: config.modelname, prompt, stream: false })
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Ollama request failed");
+  return data.response || "";
+};
+
 const buildExamCourseScheduleFilter = (body = {}) => {
   const filter = buildFilter(body, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode"]);
   return filter;
@@ -69,6 +88,11 @@ const buildExamCodeOnlyScheduleFilter = (body = {}) => {
   const filter = {};
   if (colid !== undefined) filter.colid = colid;
   if (examcode) filter.examcode = examcode;
+  const programcodes = Array.isArray(body.programcodes) ? body.programcodes.map(text).filter(Boolean) : [];
+  if (programcodes.length) filter.programcode = { $in: programcodes };
+  ["academicyear", "regulation", "semester"].forEach((field) => {
+    if (text(body[field])) filter[field] = text(body[field]);
+  });
   return filter;
 };
 
@@ -170,6 +194,12 @@ const examPayload = (body = {}) => ({
   academicyear: text(body.academicyear),
   examname: text(body.examname || body.exam),
   examcode: text(body.examcode),
+  program: text(body.program),
+  programcode: text(body.programcode),
+  faculty: text(body.faculty),
+  institution: text(body.institution),
+  department: text(body.department),
+  semester: text(body.semester),
   session: text(body.session),
   type: text(body.type),
   user: text(body.user)
@@ -188,7 +218,8 @@ const examCoursePayload = (body = {}) => ({
   semester: text(body.semester),
   course: text(body.course),
   coursecode: text(body.coursecode),
-  coursetype: ["Theory", "Practical"].includes(text(body.coursetype || body.courseType)) ? text(body.coursetype || body.courseType) : "Theory",
+  coursetype: ["Theory", "Practical", "Tutorial", "Internship", "Project", "Experiential learning"].includes(text(body.coursetype || body.courseType)) ? text(body.coursetype || body.courseType) : "Theory",
+  deliverytype: text(body.deliverytype || body.deliveryType),
   coursemastercode: text(body.coursemastercode || body.courseMasterCode),
   examdate: text(body.examdate),
   examslot: text(body.examslot),
@@ -263,7 +294,7 @@ const validateExamCourse = (p) => {
   for (const field of ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode"]) {
     if (!p[field]) return `${field} is required`;
   }
-  if (!["Major", "Minor"].includes(p.type)) return "Type must be Major or Minor";
+  if (!["Major", "Minor", "AEC", "SEC", "VAC", "IDC"].includes(p.type)) return "Type must be Major, Minor, AEC, SEC, VAC, IDC";
   return "";
 };
 
@@ -378,7 +409,7 @@ const pickSeatCandidate = (pool, previousCourse) => {
 
 exports.getExams = async (req, res) => {
   try {
-    const filter = buildFilter(req.query, ["academicyear", "examname", "examcode", "session", "type"]);
+    const filter = buildFilter(req.query, ["academicyear", "examname", "examcode", "program", "programcode", "faculty", "institution", "department", "semester", "session", "type"]);
     if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const data = await ConductExam.find(filter).sort({ academicyear: -1, examname: 1 }).lean();
     res.json({ success: true, data });
@@ -533,7 +564,7 @@ exports.bulkRooms = async (req, res) => {
 
 exports.getExamCourses = async (req, res) => {
   try {
-    const filter = buildFilter(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "coursetype", "coursemastercode", "examdate", "examslot"]);
+    const filter = buildFilter(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "coursetype", "deliverytype", "coursemastercode", "examdate", "examslot"]);
     if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const data = await ConductExamCourse.find(filter).sort({ academicyear: -1, exam: 1, program: 1, type: 1, semester: 1, course: 1 }).lean();
     res.json({ success: true, data });
@@ -599,6 +630,139 @@ exports.bulkExamCourses = async (req, res) => {
   }
 };
 
+const atktFilterFromSource = (source = {}) => {
+  const colid = number(source.colid);
+  const programcodes = Array.isArray(source.programcodes)
+    ? source.programcodes.map(text).filter(Boolean)
+    : text(source.programcodes)
+      ? text(source.programcodes).split(",").map(text).filter(Boolean)
+      : text(source.programcode)
+        ? [text(source.programcode)]
+      : [];
+  const filter = { status: /^fail$/i };
+  if (colid !== undefined) filter.colid = colid;
+  ["academicyear", "regulation", "semester"].forEach((field) => {
+    if (text(source[field])) filter[field] = text(source[field]);
+  });
+  if (programcodes.length) filter.programcode = { $in: programcodes };
+  return { colid, filter, programcodes };
+};
+
+const loadAtktMarks = async (source = {}) => {
+  const { colid, filter } = atktFilterFromSource(source);
+  if (colid === undefined) throw new Error("colid is required");
+  if (!text(source.academicyear)) throw new Error("Academic year is required");
+  const failed = await ExamVivaMarks.find(filter).sort({ program: 1, programcode: 1, semester: 1, course: 1, student: 1 }).lean();
+  const courseKeys = new Set(failed.map((row) => [row.academicyear, row.regulation, row.programcode, row.semester, row.coursecode].map(text).join("||")));
+  const mapQuery = { colid };
+  if (text(source.academicyear)) mapQuery.academicyear = text(source.academicyear);
+  if (text(source.regulation)) mapQuery.regulation = text(source.regulation);
+  const programcodes = uniq(failed.map((row) => row.programcode));
+  if (programcodes.length) mapQuery.programcode = { $in: programcodes };
+  const courseMapRows = programcodes.length ? await RegulationCourseMap.find(mapQuery).lean() : [];
+  const courseMap = new Map(courseMapRows.map((row) => [[row.academicyear, row.regulation, row.programcode, row.semester, row.coursecode].map(text).join("||"), row]));
+  const courses = [...courseKeys].map((key) => {
+    const sample = failed.find((row) => [row.academicyear, row.regulation, row.programcode, row.semester, row.coursecode].map(text).join("||") === key) || {};
+    const mapped = courseMap.get(key) || {};
+    const students = failed.filter((row) => [row.academicyear, row.regulation, row.programcode, row.semester, row.coursecode].map(text).join("||") === key);
+    return {
+      id: key,
+      academicyear: sample.academicyear || "",
+      regulation: sample.regulation || "",
+      program: sample.program || mapped.program || "",
+      programcode: sample.programcode || mapped.programcode || "",
+      type: mapped.type || "Major",
+      subject: mapped.subject || sample.course || "",
+      semester: sample.semester || mapped.semester || "",
+      course: sample.course || mapped.course || "",
+      coursecode: sample.coursecode || mapped.coursecode || "",
+      coursetype: mapped.coursetype || "Theory",
+      deliverytype: mapped.deliverytype || "",
+      coursemastercode: mapped.coursemastercode || "",
+      failedstudents: students.length
+    };
+  }).sort((a, b) => `${a.programcode}${a.semester}${a.course}`.localeCompare(`${b.programcode}${b.semester}${b.course}`, undefined, { numeric: true }));
+  return { failed, courses };
+};
+
+exports.getAtktSchedulerData = async (req, res) => {
+  try {
+    const result = await loadAtktMarks(req.query);
+    res.json({ success: true, courses: result.courses, students: result.failed });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.confirmAtktScheduler = async (req, res) => {
+  try {
+    const selectedCourses = Array.isArray(req.body.courses) ? req.body.courses : [];
+    if (!selectedCourses.length) return res.status(400).json({ success: false, message: "Select at least one course" });
+    const colid = number(req.body.colid);
+    const base = {
+      colid,
+      academicyear: text(req.body.academicyear),
+      regulation: text(req.body.regulation),
+      exam: text(req.body.exam || req.body.examname),
+      examcode: text(req.body.examcode),
+      user: text(req.body.user)
+    };
+    if (colid === undefined || !base.academicyear || !base.regulation || !base.exam || !base.examcode) {
+      return res.status(400).json({ success: false, message: "Academic year, regulation, exam and exam code are required" });
+    }
+    const selectedKeys = new Set(selectedCourses.map((row) => [row.academicyear || base.academicyear, row.regulation || base.regulation, row.programcode, row.semester, row.coursecode].map(text).join("||")));
+    const { failed, courses } = await loadAtktMarks({ ...req.body, colid, academicyear: base.academicyear, regulation: base.regulation });
+    const courseByKey = new Map(courses.map((row) => [[row.academicyear, row.regulation, row.programcode, row.semester, row.coursecode].map(text).join("||"), row]));
+    let courseSaved = 0;
+    let rollSaved = 0;
+    const errors = [];
+    for (const key of selectedKeys) {
+      const course = courseByKey.get(key) || selectedCourses.find((row) => [row.academicyear || base.academicyear, row.regulation || base.regulation, row.programcode, row.semester, row.coursecode].map(text).join("||") === key);
+      if (!course) continue;
+      const coursePayload = examCoursePayload({ ...base, ...course, type: course.type || "Major" });
+      const courseError = validateExamCourse(coursePayload);
+      if (courseError) {
+        errors.push({ coursecode: course.coursecode, message: courseError });
+        continue;
+      }
+      await ConductExamCourse.findOneAndUpdate(
+        { colid, academicyear: base.academicyear, regulation: base.regulation, examcode: base.examcode, programcode: coursePayload.programcode, type: coursePayload.type, subject: coursePayload.subject, semester: coursePayload.semester, coursecode: coursePayload.coursecode },
+        coursePayload,
+        { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+      );
+      courseSaved += 1;
+      const matchingStudents = failed.filter((row) => [row.academicyear, row.regulation, row.programcode, row.semester, row.coursecode].map(text).join("||") === key);
+      for (const student of matchingStudents) {
+        const roll = rollPayload({
+          ...coursePayload,
+          student: student.student || student.name || student.regno,
+          regno: student.regno,
+          applied: "Yes",
+          admitcardeligible: "No",
+          attended: "No",
+          atkt: "Yes",
+          remarks: "ATKT scheduler"
+        });
+        const rollError = validateRoll(roll);
+        if (rollError) {
+          errors.push({ regno: student.regno, coursecode: course.coursecode, message: rollError });
+          continue;
+        }
+        const data = await ConductExamRoll.findOneAndUpdate(
+          { colid, academicyear: roll.academicyear, regulation: roll.regulation, examcode: roll.examcode, programcode: roll.programcode, semester: roll.semester, coursecode: roll.coursecode, regno: roll.regno },
+          roll,
+          { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+        );
+        if (data && !data.examseatno) await ConductExamRoll.updateOne({ _id: data._id }, { $set: { examseatno: String(data._id) } });
+        rollSaved += 1;
+      }
+    }
+    res.json({ success: true, courseSaved, rollSaved, errors });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 exports.autoScheduleExamCourses = async (req, res) => {
   try {
     const colid = number(req.body.colid);
@@ -627,8 +791,6 @@ exports.aiScheduleExamCourses = async (req, res) => {
     const filter = buildExamCodeOnlyScheduleFilter(req.body);
     const rows = await ConductExamCourse.find({ ...filter, colid }).sort({ semester: 1, program: 1, subject: 1, course: 1 }).lean();
     if (!rows.length) return res.status(400).json({ success: false, message: "No exam course rows found for scheduling" });
-    const config = await getDefaultGeminiConfig(colid);
-    if (!config?.apikey) return res.status(400).json({ success: false, message: "Default active Gemini AI configuration is missing" });
     const prompt = [
       "Create an exam paper scheduling order from the following papers.",
       "Hard rules: only two slots per day, do not schedule two courses of the same semester in the same slot, no Saturday or Sunday, skip holidays handled separately by software.",
@@ -638,7 +800,14 @@ exports.aiScheduleExamCourses = async (req, res) => {
       `Slots: ${text(req.body.slot1) || "Slot 1"}, ${text(req.body.slot2) || "Slot 2"}.`,
       `Papers: ${JSON.stringify(rows.map((row) => ({ coursecode: row.coursecode, course: row.course, semester: row.semester, programcode: row.programcode, subject: row.subject })))}`
     ].join("\n");
-    const aiText = await callGeminiText(config.apikey, prompt, req.body.geminiModel);
+    let aiText = "";
+    if (/^ollama$/i.test(text(req.body.provider))) {
+      aiText = await callOllamaText(colid, req.body.ollamaConfigId || req.body.ollamaId, prompt);
+    } else {
+      const config = await getDefaultGeminiConfig(colid);
+      if (!config?.apikey) return res.status(400).json({ success: false, message: "Default active Gemini AI configuration is missing" });
+      aiText = await callGeminiText(config.apikey, prompt, req.body.geminiModel);
+    }
     const jsonMatch = aiText.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
     let aiOrder = [];
     if (jsonMatch) {
@@ -685,7 +854,7 @@ exports.getCourseMapOptions = async (req, res) => {
       types: uniq(rows.map((r) => r.type)),
       subjects: uniq(rows.map((r) => r.subject)),
       semesters: uniq(rows.map((r) => r.semester)),
-      courses: rows.map((r) => ({ course: r.course, coursecode: r.coursecode, coursetype: r.coursetype, coursemastercode: r.coursemastercode, examdate: r.examdate, examslot: r.examslot, subject: r.subject, type: r.type, semester: r.semester, program: r.program, programcode: r.programcode, regulation: r.regulation }))
+      courses: rows.map((r) => ({ course: r.course, coursecode: r.coursecode, coursetype: r.coursetype, deliverytype: r.deliverytype, coursemastercode: r.coursemastercode, examdate: r.examdate, examslot: r.examslot, subject: r.subject, type: r.type, semester: r.semester, program: r.program, programcode: r.programcode, regulation: r.regulation }))
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

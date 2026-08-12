@@ -32,12 +32,15 @@ type: String
 institution: {
 type: String
 },
-department: {
-type: String
-},
-durationinyear: {
-type: Number
-},
+	department: {
+	type: String
+	},
+	faculty: {
+	type: String
+	},
+	durationinyear: {
+	type: Number
+	},
 totalcredits: {
 type: Number
 },

@@ -1,5 +1,6 @@
 const User = require('../Models/user');
 const HrSalary = require('../Models/hrsalary');
+const HrSalStructure = require('../Models/hrsalstructure');
 const Institution = require('../Models/insdetails');
 const EmployeeLedger = require('../Models/employeeledgernewds');
 const OrganizationHierarchy = require('../Models/organizationhierarchyds');
@@ -14,6 +15,7 @@ const rx = (v) => ({ $regex: esc(v), $options: 'i' });
 const datePart = (d) => new Date(d || Date.now()).toISOString().slice(0, 10);
 
 const salaryFields = ['name', 'user', 'year', 'month', 'duedate', 'structure', 'structureid', 'employee', 'empid', 'component', 'amount', 'type', 'level', 'paystatus', 'status1', 'comments'];
+const salaryStructureFields = ['name', 'user', 'structure', 'structureid', 'employee', 'empid', 'component', 'amount', 'type', 'level', 'effectivedate', 'applieddate', 'status1', 'comments'];
 const ledgerFields = ['employee', 'empid', 'employeeemail', 'department', 'role', 'month', 'year', 'paymentdate', 'paymentmode', 'paymenttype', 'referencenumber', 'item', 'description', 'amount', 'status1', 'comments'];
 
 async function users(colid, query = {}) {
@@ -115,6 +117,97 @@ exports.getSalaryOptions = async (req, res) => {
     const options = {};
     for (const f of salaryFields) options[f] = (await HrSalary.distinct(f, base)).filter(Boolean).sort();
     res.json({ success: true, data: options });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+};
+
+function crudFilter(fields, query = {}) {
+  const filter = { colid: Number(query.colid) };
+  fields.forEach((f) => {
+    if (query[f]) filter[f] = rx(query[f]);
+  });
+  withDateRange(filter, query.datefield || fields.find((f) => /date/i.test(f)) || 'createdAt', query);
+  return filter;
+}
+
+async function distinctOptions(Model, fields, colid) {
+  const base = { colid: Number(colid) };
+  const options = {};
+  for (const f of fields) options[f] = (await Model.distinct(f, base)).filter(Boolean).sort();
+  return options;
+}
+
+function cleanSalaryPayload(body = {}, fields = []) {
+  const payload = { colid: Number(body.colid) };
+  fields.forEach((field) => {
+    if (body[field] !== undefined) payload[field] = body[field];
+  });
+  if (!payload.name) payload.name = body.createdby || body.name || body.employee || '';
+  if (!payload.user) payload.user = body.user || body.createdbyemail || body.empid || '';
+  if (payload.amount !== undefined) payload.amount = num(payload.amount);
+  return payload;
+}
+
+exports.getSalaryStructureCrud = async (req, res) => {
+  try {
+    const data = await HrSalStructure.find(crudFilter(salaryStructureFields, req.query)).sort({ structure: 1, employee: 1, component: 1 }).lean();
+    res.json({ success: true, data, options: await distinctOptions(HrSalStructure, salaryStructureFields, req.query.colid) });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+};
+
+exports.saveSalaryStructureCrud = async (req, res) => {
+  try {
+    const payload = cleanSalaryPayload(req.body, salaryStructureFields);
+    const data = req.body.id ? await HrSalStructure.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true, runValidators: true }) : await HrSalStructure.create(payload);
+    res.json({ success: true, data });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+};
+
+exports.bulkSalaryStructureCrud = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    const docs = rows.map((row) => cleanSalaryPayload({ ...row, colid: req.body.colid || row.colid, user: req.body.user || row.user }, salaryStructureFields));
+    const data = docs.length ? await HrSalStructure.insertMany(docs, { ordered: false }) : [];
+    res.json({ success: true, saved: data.length });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+};
+
+exports.deleteSalaryStructureCrud = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [req.body.id].filter(Boolean);
+    const result = await HrSalStructure.deleteMany({ colid: Number(req.body.colid), _id: { $in: ids } });
+    res.json({ success: true, deleted: result.deletedCount || 0 });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+};
+
+exports.getDueSalaryCrud = async (req, res) => {
+  try {
+    const data = await HrSalary.find(crudFilter(salaryFields, req.query)).sort({ year: -1, month: -1, employee: 1, component: 1 }).lean();
+    res.json({ success: true, data, options: await distinctOptions(HrSalary, salaryFields, req.query.colid), summary: summarize(data) });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+};
+
+exports.saveDueSalaryCrud = async (req, res) => {
+  try {
+    const payload = cleanSalaryPayload(req.body, salaryFields);
+    const data = req.body.id ? await HrSalary.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true, runValidators: true }) : await HrSalary.create(payload);
+    res.json({ success: true, data });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+};
+
+exports.bulkDueSalaryCrud = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    const docs = rows.map((row) => cleanSalaryPayload({ ...row, colid: req.body.colid || row.colid, user: req.body.user || row.user }, salaryFields));
+    const data = docs.length ? await HrSalary.insertMany(docs, { ordered: false }) : [];
+    res.json({ success: true, saved: data.length });
+  } catch (err) { res.status(500).json({ success: false, message: err.message }); }
+};
+
+exports.deleteDueSalaryCrud = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [req.body.id].filter(Boolean);
+    const result = await HrSalary.deleteMany({ colid: Number(req.body.colid), _id: { $in: ids } });
+    res.json({ success: true, deleted: result.deletedCount || 0 });
   } catch (err) { res.status(500).json({ success: false, message: err.message }); }
 };
 

@@ -46,7 +46,7 @@ const getUGCGrade = (percentage) => {
   return { grade: "F", gradepoint: 0 };
 };
 const componentMarkKey = (row) => [row.colid, row.academicyear, row.examcode, row.regulation, row.programcode, row.coursecode, row.regno, row.componenttype, row.assessmentgroup, row.assessmentcomponent].map(text).join("||");
-const studentCourseKey = (row) => [row.colid, row.academicyear, row.examcode, row.regulation, row.programcode, row.coursecode, row.regno].map(text).join("||");
+const studentCourseKey = (row) => [row.colid, row.academicyear, row.examcode, row.regulation, row.programcode, row.semester, row.coursecode, row.regno].map(text).join("||");
 const gradeFromRules = (percentage, rows = []) => {
   const value = number(percentage);
   const rule = rows.find((item) => value >= number(item.frompercentage) && value <= number(item.topercentage));
@@ -587,7 +587,8 @@ exports.processInterimMarksTransfer = async (req, res) => {
     const colid = number(req.body.colid);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
     const filter = { colid };
-    ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "student", "regno"].forEach((field) => {
+    const requestedSemester = text(req.body.semester);
+    ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "scoretype", "student", "regno"].forEach((field) => {
       if (text(req.body[field])) filter[field] = text(req.body[field]);
     });
     const ids = toArray(req.body.ids);
@@ -614,6 +615,7 @@ exports.processInterimMarksTransfer = async (req, res) => {
     componentRows.forEach((mark) => {
       const allocation = allocationMap.get(componentMarkKey(mark)) || {};
       const merged = { ...allocation, ...mark, semester: allocation.semester || mark.semester || "" };
+      if (requestedSemester && text(merged.semester) !== requestedSemester) return;
       const key = studentCourseKey(merged);
       if (!grouped.has(key)) {
         const user = userMap.get(text(merged.regno)) || {};
@@ -716,6 +718,36 @@ exports.processInterimMarksTransfer = async (req, res) => {
       }
     }
     res.json({ success: true, processed, errors, data: preview.slice(0, 500) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateInterimComponentScoreType = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const scoretype = text(req.body.scoretype);
+    if (!["Internal", "External"].includes(scoretype)) return res.status(400).json({ success: false, message: "Select Internal or External" });
+    if (!text(req.body.coursecode)) return res.status(400).json({ success: false, message: "Course code is required" });
+    if (!text(req.body.assessmentcomponent)) return res.status(400).json({ success: false, message: "Assessment component is required" });
+
+    const filter = {
+      colid,
+      coursecode: text(req.body.coursecode),
+      assessmentcomponent: text(req.body.assessmentcomponent)
+    };
+    ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "semester", "course", "componenttype", "assessmentgroup"].forEach((field) => {
+      if (text(req.body[field])) filter[field] = text(req.body[field]);
+    });
+
+    const result = await ComponentMarks.updateMany(filter, {
+      $set: {
+        scoretype,
+        user: text(req.body.user)
+      }
+    });
+    res.json({ success: true, matched: result.matchedCount || 0, modified: result.modifiedCount || 0 });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1547,6 +1579,147 @@ exports.vivaMarksheet = async (req, res) => {
         result: marks.some((row) => /^Fail$/i.test(text(row.status))) ? "Fail" : "Pass"
       },
       marksheetconfiguration: config || {},
+      institution: institution || {}
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.interimSampleMarksheet2 = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (!colid || !text(req.query.regno)) return res.status(400).json({ success: false, message: "colid and regno are required" });
+    const requestedSemester = text(req.query.semester);
+    const filter = { colid, componenttype: "Theory", regno: text(req.query.regno) };
+    ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode"].forEach((field) => {
+      if (text(req.query[field])) filter[field] = text(req.query[field]);
+    });
+    let componentRows = await ComponentMarks.find(filter).sort({ coursecode: 1, scoretype: 1, assessmentcomponent: 1 }).lean();
+    const missingSemester = componentRows.filter((row) => !text(row.semester));
+    if (missingSemester.length) {
+      const allocations = await ComponentAllocation.find({
+        colid,
+        $or: missingSemester.map((row) => ({
+          academicyear: row.academicyear,
+          examcode: row.examcode,
+          regulation: row.regulation,
+          programcode: row.programcode,
+          coursecode: row.coursecode,
+          regno: row.regno,
+          componenttype: row.componenttype,
+          assessmentgroup: row.assessmentgroup,
+          assessmentcomponent: row.assessmentcomponent
+        }))
+      }).select("academicyear examcode regulation programcode coursecode regno componenttype assessmentgroup assessmentcomponent semester").lean();
+      const allocationMap = new Map(allocations.map((row) => [[row.academicyear, row.examcode, row.regulation, row.programcode, row.coursecode, row.regno, row.componenttype, row.assessmentgroup, row.assessmentcomponent].map(text).join("||"), row.semester]));
+      componentRows.forEach((row) => {
+        if (text(row.semester)) return;
+        const key = [row.academicyear, row.examcode, row.regulation, row.programcode, row.coursecode, row.regno, row.componenttype, row.assessmentgroup, row.assessmentcomponent].map(text).join("||");
+        row.semester = allocationMap.get(key) || "";
+      });
+    }
+    if (requestedSemester) componentRows = componentRows.filter((row) => text(row.semester) === requestedSemester);
+    if (!componentRows.length) return res.status(404).json({ success: false, message: "No theory interim marks found for selected student" });
+    const first = componentRows[0];
+    const grouped = new Map();
+    componentRows.forEach((row) => {
+      const key = [row.academicyear, row.examcode, row.regulation, row.programcode, row.semester, row.coursecode, row.regno].map(text).join("||");
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          _id: key,
+          academicyear: row.academicyear,
+          regulation: row.regulation,
+          exam: row.exam,
+          examcode: row.examcode,
+          program: row.program,
+          programcode: row.programcode,
+          semester: row.semester,
+          course: row.course,
+          coursecode: row.coursecode,
+          credit: number(row.credits),
+          student: row.student,
+          regno: row.regno,
+          examrollno: row.examrollno || "",
+          theorymarks: 0,
+          theoryobtained: 0,
+          internalmarks: 0,
+          internalobtained: 0,
+          overalltotalmarks: 0,
+          overallobtained: 0,
+          overallpercentage: 0,
+          overallgradepoint: 0,
+          overallgrade: "",
+          gpa: 0,
+          status: "Pass",
+          assessmentcomponents: []
+        });
+      }
+      const item = grouped.get(key);
+      if (text(row.scoretype).toLowerCase() === "internal") {
+        item.internalmarks += number(row.maxmarks);
+        item.internalobtained += number(row.marksobtained);
+      } else {
+        item.theorymarks += number(row.maxmarks);
+        item.theoryobtained += number(row.marksobtained);
+      }
+      item.overalltotalmarks += number(row.maxmarks);
+      item.overallobtained += number(row.marksobtained);
+      item.assessmentcomponents.push(row.assessmentcomponent);
+      if (number(row.credits) > number(item.credit)) item.credit = number(row.credits);
+    });
+    const marks = Array.from(grouped.values());
+    const [student, program, institution, gradeRules, passRules, classRule] = await Promise.all([
+      User.findOne({ colid, $or: [{ regno: first.regno }, { email: first.regno }] }).lean(),
+      MPrograms.findOne({ colid, year: first.academicyear, programcode: first.programcode }).sort({ _id: -1 }).lean(),
+      getInstitution(colid),
+      GradeConfiguration.find({ colid, status: /^Active$/i, academicyear: first.academicyear, regulation: first.regulation, programcode: first.programcode }).sort({ frompercentage: 1 }).lean(),
+      PassMarksConfiguration.find({ colid, status: /^Active$/i, academicyear: first.academicyear, regulation: first.regulation, programcode: first.programcode }).lean(),
+      ClassConfiguration.findOne({ colid, academicyear: first.academicyear, programcode: first.programcode }).sort({ fromsgpa: -1 }).lean()
+    ]);
+    marks.forEach((row) => {
+      row.overallpercentage = percent(row.overallobtained, row.overalltotalmarks);
+      const courseGradeRules = gradeRules.filter((rule) => !text(rule.coursecode) || text(rule.coursecode) === text(row.coursecode));
+      const grade = gradeFromRules(row.overallpercentage, courseGradeRules);
+      row.overallgrade = grade.grade;
+      row.overallgradepoint = grade.gradepoint;
+      row.gpa = Number((number(row.credit) * number(grade.gradepoint)).toFixed(2));
+      const coursePassRules = passRules.filter((rule) => text(rule.coursecode) === text(row.coursecode));
+      row.status = passStatusFromRule("Theory", row.overallobtained, row.overalltotalmarks, coursePassRules) === "Fail" || grade.grade === "F" ? "Fail" : "Pass";
+    });
+    const creditsEarned = marks.filter((row) => /^Pass$/i.test(text(row.status))).reduce((sum, row) => sum + number(row.credit), 0);
+    const creditsAttempted = marks.reduce((sum, row) => sum + number(row.credit), 0);
+    const totalGpa = marks.reduce((sum, row) => sum + number(row.gpa), 0);
+    const sgpa = creditsAttempted ? Number((totalGpa / creditsAttempted).toFixed(2)) : 0;
+    const cgpa = sgpa;
+    res.json({
+      success: true,
+      source: "exammodel2componentmarksds",
+      componenttype: "Theory",
+      student: {
+        name: student?.name || first.student,
+        regno: first.regno,
+        abcid: student?.abcid || "",
+        photo: student?.photo || "",
+        email: student?.email || "",
+        phone: student?.phone || "",
+        program: first.program,
+        programcode: first.programcode,
+        semester: first.semester,
+        academicyear: first.academicyear,
+        regulation: first.regulation
+      },
+      marks,
+      summary: {
+        creditsoffered: number(program?.totalcredits),
+        creditsearned: creditsEarned,
+        creditsattempted: creditsAttempted,
+        sgpa,
+        cgpa,
+        classassigned: classRule?.classassigned || "",
+        resultprocessdate: "",
+        result: marks.some((row) => /^Fail$/i.test(text(row.status))) ? "Fail" : "Pass"
+      },
       institution: institution || {}
     });
   } catch (error) {

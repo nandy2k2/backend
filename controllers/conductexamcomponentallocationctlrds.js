@@ -1,4 +1,5 @@
 const ConductExamCourse = require("../Models/conductexamcourseds");
+const mongoose = require("mongoose");
 const ConductExamRoll = require("../Models/conductexamrollds");
 const ConductExamExaminer = require("../Models/conductexamexaminerds");
 const AssessmentComponent = require("../Models/assessmentcomponentds");
@@ -42,7 +43,7 @@ const institutionFor = async (colid) => {
 
 const courseFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode"];
 const allocationFields = [...courseFields, "examinername", "examineremail", "student", "regno", "examrollno", "examdate", "examslot", "componenttype", "scoretype", "assessmentgroup", "assessmentgrouptype", "assessmentcomponent", "status"];
-const marksFields = ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "student", "regno", "examrollno", "componenttype", "scoretype", "assessmentgroup", "assessmentgrouptype", "assessmentcomponent", "examinername", "examineremail"];
+const marksFields = ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "semester", "course", "coursecode", "student", "regno", "examrollno", "componenttype", "scoretype", "assessmentgroup", "assessmentgrouptype", "assessmentcomponent", "examinername", "examineremail"];
 
 const buildFilter = (source = {}, fields = []) => {
   const filter = {};
@@ -105,6 +106,7 @@ const marksPayload = (body = {}) => ({
   regulation: text(body.regulation),
   program: text(body.program),
   programcode: text(body.programcode),
+  semester: text(body.semester),
   course: text(body.course),
   coursecode: text(body.coursecode),
   student: text(body.student),
@@ -160,7 +162,7 @@ exports.options = async (req, res) => {
       courses,
       examiners,
       components,
-      filters: Object.fromEntries(["academicyear", "examcode", "regulation", "programcode", "coursecode", "componenttype", "assessmentcomponent"].map((field) => [field, uniq([...courses, ...components, ...allocations].map((row) => row[field]))]))
+      filters: Object.fromEntries(["academicyear", "examcode", "regulation", "programcode", "semester", "coursecode", "componenttype", "assessmentcomponent"].map((field) => [field, uniq([...courses, ...components, ...allocations].map((row) => row[field]))]))
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -200,6 +202,7 @@ exports.saveAllocation = async (req, res) => {
         examcode: item.examcode,
         regulation: item.regulation,
         programcode: item.programcode,
+        semester: item.semester,
         coursecode: item.coursecode,
         regno: item.regno
       }).select("_id examseatno").lean();
@@ -210,7 +213,7 @@ exports.saveAllocation = async (req, res) => {
     const data = req.body.id
       ? await ComponentAllocation.findOneAndUpdate({ _id: req.body.id, colid: item.colid }, item, { new: true, runValidators: true })
       : await ComponentAllocation.findOneAndUpdate(
-        { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, programcode: item.programcode, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
+        { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, programcode: item.programcode, semester: item.semester, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
         item,
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
@@ -252,7 +255,7 @@ exports.bulkAllocations = async (req, res) => {
         continue;
       }
       await ComponentAllocation.findOneAndUpdate(
-        { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, programcode: item.programcode, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
+        { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, programcode: item.programcode, semester: item.semester, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
         item,
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
@@ -314,13 +317,13 @@ exports.randomAllocate = async (req, res) => {
     if (assignments.length) {
       await ComponentAllocation.bulkWrite(assignments.map((item) => ({
         updateOne: {
-          filter: { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, programcode: item.programcode, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
+          filter: { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, programcode: item.programcode, semester: item.semester, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
           update: { $set: item },
           upsert: true
         }
       })), { ordered: false });
     }
-    const data = await ComponentAllocation.find({ colid: base.colid, academicyear: base.academicyear, examcode: base.examcode, programcode: base.programcode, coursecode: base.coursecode }).sort({ assessmentcomponent: 1, examinername: 1, regno: 1 }).lean();
+    const data = await ComponentAllocation.find({ colid: base.colid, academicyear: base.academicyear, examcode: base.examcode, programcode: base.programcode, semester: base.semester, coursecode: base.coursecode }).sort({ assessmentcomponent: 1, examinername: 1, regno: 1 }).lean();
     res.json({ success: true, saved: assignments.length, data, airesponse: text(req.body.airules) ? "AI rules captured with componentwise allocation request. Allocation saved using balanced random distribution." : "" });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -335,7 +338,7 @@ exports.examinerPapers = async (req, res) => {
     const rows = await ComponentAllocation.find({ colid, examineremail: new RegExp(`^${escapeRegex(examineremail)}$`, "i") }).sort({ academicyear: -1, examcode: 1, course: 1, assessmentcomponent: 1 }).lean();
     const map = new Map();
     rows.forEach((row) => {
-      const key = [row.academicyear, row.examcode, row.regulation, row.programcode, row.coursecode].join("||");
+      const key = [row.academicyear, row.examcode, row.regulation, row.programcode, row.semester, row.coursecode].join("||");
       if (!map.has(key)) map.set(key, { ...row, components: 0, students: new Set() });
       map.get(key).components += 1;
       map.get(key).students.add(row.regno);
@@ -350,15 +353,15 @@ exports.examinerRows = async (req, res) => {
   try {
     const colid = numberOrUndefined(req.query.colid);
     const examineremail = text(req.query.examineremail || req.query.user);
-    const filter = buildFilter(req.query, ["academicyear", "examcode", "regulation", "programcode", "coursecode", "componenttype", "assessmentcomponent"]);
+    const filter = buildFilter(req.query, ["academicyear", "examcode", "regulation", "programcode", "semester", "coursecode", "componenttype", "assessmentcomponent"]);
     filter.colid = colid;
     filter.examineremail = new RegExp(`^${escapeRegex(examineremail)}$`, "i");
     const allocations = await ComponentAllocation.find(filter).sort({ regno: 1, assessmentcomponent: 1 }).lean();
-    const markFilter = buildFilter(req.query, ["academicyear", "examcode", "regulation", "programcode", "coursecode"]);
+    const markFilter = buildFilter(req.query, ["academicyear", "examcode", "regulation", "programcode", "semester", "coursecode"]);
     markFilter.colid = colid;
     const [marks, examRolls] = await Promise.all([
       ComponentMarks.find(markFilter).lean(),
-      ConductExamRoll.find(markFilter).select("_id regno").lean()
+      ConductExamRoll.find(buildFilter(req.query, ["academicyear", "examcode", "regulation", "programcode", "coursecode"])).select("_id regno").lean()
     ]);
     const rollMap = new Map(examRolls.map((row) => [row.regno, String(row._id)]));
     const markMap = new Map(marks.map((row) => [[row.regno, row.componenttype, row.assessmentgroup, row.assessmentcomponent].join("||"), row]));
@@ -402,17 +405,19 @@ exports.saveExaminerMarks = async (req, res) => {
         examcode: item.examcode,
         regulation: item.regulation,
         programcode: item.programcode,
+        semester: item.semester,
         coursecode: item.coursecode,
         regno: item.regno,
         componenttype: item.componenttype,
         assessmentgroup: item.assessmentgroup,
         assessmentcomponent: item.assessmentcomponent,
         examineremail: new RegExp(`^${escapeRegex(item.examineremail)}$`, "i")
-      }).select("startdate enddate examrollno").lean();
+      }).select("startdate enddate examrollno semester").lean();
       if (!allocation) {
         errors.push({ row: index + 1, regno: item.regno, message: "Allocation not found for this examiner and component" });
         continue;
       }
+      if (!item.semester && allocation.semester) item.semester = allocation.semester;
       if (!dateInsideWindow(allocation.startdate, allocation.enddate)) {
         errors.push({ row: index + 1, regno: item.regno, message: `Marks entry is allowed only from ${allocation.startdate || "start"} to ${allocation.enddate || "end"}` });
         continue;
@@ -439,7 +444,7 @@ exports.saveExaminerMarks = async (req, res) => {
       item.submittedby = "";
       ops.push({
         updateOne: {
-          filter: { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, regulation: item.regulation, programcode: item.programcode, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
+          filter: { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, regulation: item.regulation, programcode: item.programcode, semester: item.semester, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
           update: { $set: item },
           upsert: true
         }
@@ -476,17 +481,19 @@ exports.submitExaminerMarks = async (req, res) => {
         examcode: item.examcode,
         regulation: item.regulation,
         programcode: item.programcode,
+        semester: item.semester,
         coursecode: item.coursecode,
         regno: item.regno,
         componenttype: item.componenttype,
         assessmentgroup: item.assessmentgroup,
         assessmentcomponent: item.assessmentcomponent,
         examineremail: new RegExp(`^${escapeRegex(item.examineremail)}$`, "i")
-      }).select("startdate enddate examrollno").lean();
+      }).select("startdate enddate examrollno semester").lean();
       if (!allocation) {
         errors.push({ row: index + 1, regno: item.regno, message: "Allocation not found for this examiner and component" });
         continue;
       }
+      if (!item.semester && allocation.semester) item.semester = allocation.semester;
       if (!dateInsideWindow(allocation.startdate, allocation.enddate)) {
         errors.push({ row: index + 1, regno: item.regno, message: `Submission is allowed only from ${allocation.startdate || "start"} to ${allocation.enddate || "end"}` });
         continue;
@@ -513,7 +520,7 @@ exports.submitExaminerMarks = async (req, res) => {
       item.submittedby = submittedby;
       ops.push({
         updateOne: {
-          filter: { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, regulation: item.regulation, programcode: item.programcode, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
+          filter: { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, regulation: item.regulation, programcode: item.programcode, semester: item.semester, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
           update: { $set: item },
           upsert: true
         }
@@ -532,9 +539,35 @@ exports.submitExaminerMarks = async (req, res) => {
 
 exports.listMarks = async (req, res) => {
   try {
-    const filter = buildFilter(req.query, marksFields);
+    const requestedSemester = text(req.query.semester);
+    const filter = buildFilter(req.query, marksFields.filter((field) => field !== "semester"));
     if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
-    const data = await ComponentMarks.find(filter).sort({ academicyear: -1, examcode: 1, course: 1, regno: 1, assessmentcomponent: 1 }).lean();
+    let data = await ComponentMarks.find(filter).sort({ academicyear: -1, examcode: 1, course: 1, regno: 1, assessmentcomponent: 1 }).lean();
+    const missingSemester = data.filter((row) => !text(row.semester));
+    if (missingSemester.length) {
+      const allocationFilter = {
+        colid: filter.colid,
+        $or: missingSemester.map((row) => ({
+          academicyear: row.academicyear,
+          examcode: row.examcode,
+          regulation: row.regulation,
+          programcode: row.programcode,
+          coursecode: row.coursecode,
+          regno: row.regno,
+          componenttype: row.componenttype,
+          assessmentgroup: row.assessmentgroup,
+          assessmentcomponent: row.assessmentcomponent
+        }))
+      };
+      const allocations = await ComponentAllocation.find(allocationFilter).select("academicyear examcode regulation programcode coursecode regno componenttype assessmentgroup assessmentcomponent semester").lean();
+      const allocationMap = new Map(allocations.map((row) => [[row.academicyear, row.examcode, row.regulation, row.programcode, row.coursecode, row.regno, row.componenttype, row.assessmentgroup, row.assessmentcomponent].map(text).join("||"), row.semester]));
+      data.forEach((row) => {
+        if (text(row.semester)) return;
+        const key = [row.academicyear, row.examcode, row.regulation, row.programcode, row.coursecode, row.regno, row.componenttype, row.assessmentgroup, row.assessmentcomponent].map(text).join("||");
+        row.semester = allocationMap.get(key) || "";
+      });
+    }
+    if (requestedSemester) data = data.filter((row) => text(row.semester) === requestedSemester);
     res.json({ success: true, data, options: Object.fromEntries(marksFields.map((field) => [field, uniq(data.map((row) => row[field]))])) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -549,7 +582,7 @@ exports.saveMark = async (req, res) => {
     const data = req.body.id
       ? await ComponentMarks.findOneAndUpdate({ _id: req.body.id, colid: item.colid }, item, { new: true, runValidators: true })
       : await ComponentMarks.findOneAndUpdate(
-        { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, regulation: item.regulation, programcode: item.programcode, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
+        { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, regulation: item.regulation, programcode: item.programcode, semester: item.semester, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
         item,
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
@@ -581,7 +614,7 @@ exports.bulkMarks = async (req, res) => {
         continue;
       }
       await ComponentMarks.findOneAndUpdate(
-        { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, regulation: item.regulation, programcode: item.programcode, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
+        { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, regulation: item.regulation, programcode: item.programcode, semester: item.semester, coursecode: item.coursecode, regno: item.regno, componenttype: item.componenttype, assessmentgroup: item.assessmentgroup, assessmentcomponent: item.assessmentcomponent },
         item,
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
@@ -597,17 +630,23 @@ exports.onlineExamSources = async (req, res) => {
   try {
     const colid = numberOrUndefined(req.query.colid);
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
-    const filter = {
-      colid,
-      status: /^Published$/i
-    };
-    ["academicyear", "program", "programcode", "course", "coursecode"].forEach((field) => {
-      if (text(req.query[field])) filter[field] = text(req.query[field]);
+    const coreFilter = { colid };
+    ["academicyear", "programcode", "coursecode"].forEach((field) => {
+      if (text(req.query[field])) coreFilter[field] = { $regex: `^${escapeRegex(req.query[field])}$`, $options: "i" };
     });
-    const data = await OnlineExam.find(filter)
+    const queries = [
+      { ...coreFilter, status: /^Published$/i },
+      { ...coreFilter, status: { $not: /^Draft$/i } },
+      coreFilter
+    ];
+    let data = [];
+    for (const filter of queries) {
+      data = await OnlineExam.find(filter)
       .select("academicyear program programcode course coursecode examname examcode durationminutes starttime endtime timezone status")
       .sort({ starttime: -1, examname: 1 })
       .lean();
+      if (data.length) break;
+    }
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -620,7 +659,16 @@ exports.onlineExamAttemptMarks = async (req, res) => {
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const examid = text(req.query.onlineexamid || req.query.examid);
     if (!examid) return res.status(400).json({ success: false, message: "onlineexamid is required" });
-    const attempts = await OnlineExamAttempt.find({ colid, examid, submittime: { $ne: null } })
+    const examIdValues = [examid];
+    if (mongoose.Types.ObjectId.isValid(examid)) examIdValues.push(new mongoose.Types.ObjectId(examid));
+    const attempts = await OnlineExamAttempt.find({
+      colid,
+      examid: { $in: examIdValues },
+      $or: [
+        { submittime: { $ne: null } },
+        { status: /^Submitted$/i }
+      ]
+    })
       .select("examid examname examcode academicyear program programcode course coursecode student email regno submittime status totalmarks marksobtained grade comments")
       .sort({ regno: 1, student: 1 })
       .lean();

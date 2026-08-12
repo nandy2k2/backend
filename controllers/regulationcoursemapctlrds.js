@@ -28,6 +28,9 @@ const cleanPayload = (input = {}) => ({
   semester: text(input.semester),
   program: text(input.program),
   programcode: text(input.programcode),
+  faculty: text(input.faculty),
+  institution: text(input.institution),
+  department: text(input.department),
   course: text(input.course),
   coursecode: text(input.coursecode),
   coursetype: allowedCourseTypes.has(normalizeCourseType(input.coursetype || input.courseType)) ? normalizeCourseType(input.coursetype || input.courseType) : "Theory",
@@ -57,7 +60,7 @@ const buildQuery = (source = {}) => {
   const query = {};
   const colid = toNumber(source.colid);
   if (colid !== undefined) query.colid = colid;
-  ["academicyear", "regulation", "subject", "type", "semester", "programcode", "program", "coursecode", "coursetype", "deliverytype", "coursemastercode", "status"].forEach((field) => {
+  ["academicyear", "regulation", "subject", "type", "semester", "programcode", "program", "faculty", "institution", "department", "coursecode", "coursetype", "deliverytype", "coursemastercode", "status"].forEach((field) => {
     if (source[field]) query[field] = source[field];
   });
   return query;
@@ -169,6 +172,9 @@ exports.getRegulationCourseMapOptions = async (req, res) => {
         _id: item._id,
         program: item.program || item.name || "",
         programcode: item.programcode || "",
+        faculty: item.faculty || "",
+        institution: item.institution || "",
+        department: item.department || "",
         type: item.type || "",
         year: item.year || ""
       })),

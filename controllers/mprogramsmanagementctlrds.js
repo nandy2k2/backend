@@ -24,9 +24,10 @@ const programPayload = (body = {}) => {
     programcode: text(body.programcode || body.programCode),
     type: text(body.type),
     level: text(body.level),
-    institution: text(body.institution || body.Institution),
-    department: text(body.department || body.Department),
-    durationinyear: Number.isNaN(parsedDuration) ? 0 : parsedDuration,
+	    institution: text(body.institution || body.Institution),
+	    department: text(body.department || body.Department),
+	    faculty: text(body.faculty || body.Faculty),
+	    durationinyear: Number.isNaN(parsedDuration) ? 0 : parsedDuration,
     totalcredits: Number.isNaN(parsedTotalCredits) ? 0 : parsedTotalCredits,
     typeofsession: text(body.typeofsession || body.typeOfSession || body["type of session"] || body.TypeOfSession || body["Type of session"]),
     introductionyear: text(body.introductionyear || body.introductionYear || body["introduction year"] || body.IntroductionYear || body["Introduction year"]),
@@ -44,7 +45,7 @@ exports.getPrograms = async (req, res) => {
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
 
     const filter = { colid };
-    ["year", "type", "level", "status1", "programcode", "institution", "department", "typeofsession"].forEach((field) => {
+    ["year", "type", "level", "status1", "programcode", "institution", "department", "faculty", "typeofsession"].forEach((field) => {
       if (text(req.query[field])) filter[field] = text(req.query[field]);
     });
     if (text(req.query.program)) filter.program = new RegExp(text(req.query.program).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
@@ -95,6 +96,23 @@ exports.deleteProgram = async (req, res) => {
   }
 };
 
+exports.bulkUpdateProgramMeta = async (req, res) => {
+  try {
+    const colid = numberColid(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    const update = {};
+    if (req.body.institution !== undefined) update.institution = text(req.body.institution);
+    if (req.body.faculty !== undefined) update.faculty = text(req.body.faculty);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one program" });
+    if (!Object.keys(update).length) return res.status(400).json({ success: false, message: "Enter institution or faculty to update" });
+    const result = await MPrograms.updateMany({ _id: { $in: ids }, colid }, { $set: update });
+    res.json({ success: true, modified: result.modifiedCount || 0 });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.bulkPrograms = async (req, res) => {
   try {
     const colid = numberColid(req.body.colid);
@@ -124,13 +142,14 @@ exports.getProgramOptions = async (req, res) => {
   try {
     const colid = numberColid(req.query.colid);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
-    const [years, types, levels, statuses, institutions, departments, sessionTypes] = await Promise.all([
+    const [years, types, levels, statuses, institutions, departments, faculties, sessionTypes] = await Promise.all([
       MPrograms.distinct("year", { colid }),
       MPrograms.distinct("type", { colid }),
       MPrograms.distinct("level", { colid }),
       MPrograms.distinct("status1", { colid }),
       MPrograms.distinct("institution", { colid }),
       MPrograms.distinct("department", { colid }),
+      MPrograms.distinct("faculty", { colid }),
       MPrograms.distinct("typeofsession", { colid })
     ]);
     res.json({
@@ -141,6 +160,7 @@ exports.getProgramOptions = async (req, res) => {
       statuses: statuses.filter(Boolean).sort(),
       institutions: institutions.filter(Boolean).sort(),
       departments: departments.filter(Boolean).sort(),
+      faculties: faculties.filter(Boolean).sort(),
       sessionTypes: sessionTypes.filter(Boolean).sort()
     });
   } catch (error) {
