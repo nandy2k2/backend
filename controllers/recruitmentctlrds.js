@@ -181,11 +181,6 @@ const applicationPayload = (body = {}) => {
   };
 };
 
-const hasPhoto = (payload = {}) => {
-  if (payload.photourl) return true;
-  return (payload.documents || []).some((doc) => /photo/i.test(clean(doc.documenttype || doc.originalname || doc.filename)) && doc.url);
-};
-
 exports.createForm = async (req, res) => {
   try {
     const colid = getColid(req);
@@ -485,7 +480,6 @@ exports.validateApplication = async (req, res) => {
     if (!payload.applicantname) issues.push('Applicant name is required.');
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) issues.push('Valid email is required.');
     if (String(payload.phone || '').replace(/\D/g, '').length < 10) issues.push('Valid phone number is required.');
-    if (!hasPhoto(payload)) issues.push('Candidate photo is required.');
     fields.filter((f) => /^yes$/i.test(f.isrequired)).forEach((field) => {
       if (!clean(payload.customfields?.[field.fieldname])) issues.push(`${field.label || field.fieldname} is required.`);
     });
@@ -538,7 +532,6 @@ exports.submitApplication = async (req, res) => {
     const payload = applicationPayload(req.body);
     if (!payload.colid || !payload.jobid || !payload.formid) return res.status(400).json({ msg: 'Job, form and college id are required' });
     if (!payload.email || !payload.phone) return res.status(400).json({ msg: 'Email and phone are required' });
-    if (!hasPhoto(payload)) return res.status(400).json({ msg: 'Candidate photo is required' });
     const existing = await RecruitmentApplication.findOne({ colid: payload.colid, jobid: payload.jobid, $or: [{ email: payload.email }, { phone: payload.phone }] });
     if (existing && clean(req.body.mode) !== 'update') return res.status(400).json({ msg: 'Application already exists for this email or phone' });
     if (!payload.applicationno) payload.applicationno = `REC-${payload.jobid}-${Date.now()}`;
