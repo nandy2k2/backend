@@ -88,7 +88,7 @@ const examPayload = (body = {}) => ({
   durationminutes: num(body.durationminutes, 60),
   starttime: body.starttime ? new Date(body.starttime) : null,
   endtime: body.endtime ? new Date(body.endtime) : null,
-  timezone: text(body.timezone || "Asia/Kolkata"),
+  timezone: text(body.timezone || "UTC"),
   instructions: text(body.instructions),
   status: text(body.status || "Draft"),
   user: text(body.user),

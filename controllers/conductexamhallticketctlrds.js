@@ -51,12 +51,23 @@ const validateControl = (payload) => {
   return "";
 };
 
+const yesStatusValues = ["Yes", "YES", "yes", "Y", "y", "1", 1, true];
+const presentStatusValues = [...yesStatusValues, "Present", "PRESENT", "present", "Present/1"];
+
 const eligibleQuery = (query = {}) => ({
   ...query,
-  attendance: "Yes",
-  fees: "Yes",
-  atkt: "Yes",
-  disciplinary: "Yes"
+  fees: { $in: yesStatusValues },
+  atkt: { $in: yesStatusValues },
+  disciplinary: { $in: yesStatusValues },
+  $and: [
+    ...(Array.isArray(query.$and) ? query.$and : []),
+    {
+      $or: [
+        { attendance: { $in: presentStatusValues } },
+        { attended: { $in: yesStatusValues } }
+      ]
+    }
+  ]
 });
 
 const loadHallTicketPayload = async ({ colid, academicyear, examcode, regno, requireControl = false }) => {

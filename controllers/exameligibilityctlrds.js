@@ -369,6 +369,12 @@ exports.bulkUpdateExamrollRuleRows = async (req, res) => {
       update = { admitcardeligible: "Yes" };
     } else if (action === "attendancepresent") {
       update = { attendance: "Yes", attended: "Yes" };
+    } else if (action === "feesyes") {
+      update = { fees: "Yes" };
+    } else if (action === "disciplinaryyes") {
+      update = { disciplinary: "Yes" };
+    } else if (action === "atktyes") {
+      update = { atkt: "Yes" };
     } else {
       return res.status(400).json({ success: false, message: "Valid action is required" });
     }
