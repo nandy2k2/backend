@@ -7898,6 +7898,7 @@ app.get('/api/v2/assetsnew/tracking', assetNewCtrl.getTracking);
 app.get('/api/v2/assetsnew/users', assetNewCtrl.getUsers);
 app.post('/api/v2/assetsnew/reassign', assetNewCtrl.reassignAsset);
 app.post('/api/v2/assetsnew/release-bulk', assetNewCtrl.releaseAssets);
+app.post('/api/v2/assetsnew/return', assetNewCtrl.returnAsset);
 app.post('/api/v2/assetsnew/retire', assetNewCtrl.retireAsset);
 app.get('/api/v2/assetsnew/retirements', assetNewCtrl.getRetirements);
 app.get('/api/v2/assetsnew/reports', assetNewCtrl.getReports);

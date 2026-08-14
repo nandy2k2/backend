@@ -19,6 +19,7 @@ const assetNewTrackingSchema = new mongoose.Schema({
   department: { type: String, trim: true },
   penaltytype: { type: String, trim: true },
   penaltyamount: { type: Number, default: 0 },
+  returncondition: { type: String, trim: true },
   agreementtext: { type: String, trim: true },
   remarks: { type: String, trim: true },
   createdby: { type: String, trim: true },

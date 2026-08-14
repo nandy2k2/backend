@@ -34,7 +34,7 @@ const assetFilterFields = [
   "condition", "department", "assignedto", "assignedtoemail"
 ];
 const trackingFilterFields = [
-  "assetid", "store", "category", "item", "action", "toname", "toemail", "department"
+  "assetid", "store", "category", "item", "action", "toname", "toemail", "department", "returncondition"
 ];
 
 function applyFilters(filter, source, fields) {
@@ -176,44 +176,57 @@ exports.getUsers = async (req, res) => {
 exports.reassignAsset = async (req, res) => {
   try {
     const colid = num(req.body.colid);
-    const asset = await AssetItem.findOne({ _id: req.body.assetid || req.body.id, colid });
-    if (!asset) return res.status(404).json({ success: false, message: "Asset not found" });
-    if (asset.status === "Retired") return res.status(400).json({ success: false, message: "Retired asset cannot be assigned" });
+    const assetids = Array.isArray(req.body.assetids)
+      ? req.body.assetids.filter(Boolean)
+      : [req.body.assetid || req.body.id].filter(Boolean);
+    if (!colid || !assetids.length) return res.status(400).json({ success: false, message: "Select at least one asset" });
+    const assets = await AssetItem.find({ _id: { $in: assetids }, colid });
+    if (!assets.length) return res.status(404).json({ success: false, message: "Asset not found" });
+    if (assets.length !== assetids.length) return res.status(404).json({ success: false, message: "Some selected assets were not found" });
+    const retired = assets.filter((asset) => asset.status === "Retired");
+    if (retired.length) return res.status(400).json({ success: false, message: `Retired asset cannot be assigned: ${retired.map((asset) => asset.assetid).join(", ")}` });
     const action = clean(req.body.action) || "Reissue";
-    if (action === "Assignment" && asset.status === "Assigned") {
-      return res.status(400).json({ success: false, message: "Asset is already assigned. Use Asset reissue to reassign it." });
+    const alreadyAssigned = assets.filter((asset) => asset.status === "Assigned");
+    if (action === "Assignment" && alreadyAssigned.length) {
+      return res.status(400).json({ success: false, message: `Asset is already assigned. Use Asset reissue to reassign it: ${alreadyAssigned.map((asset) => asset.assetid).join(", ")}` });
     }
-    const tracking = await AssetTracking.create({
-      colid,
-      asset: asset._id,
-      assetid: asset.assetid,
-      itemmasterid: asset.itemmasterid,
-      store: asset.store,
-      category: asset.category,
-      item: asset.item,
-      description: asset.description,
-      action,
-      assignmentdate: req.body.assignmentdate ? new Date(req.body.assignmentdate) : new Date(),
-      fromname: asset.assignedto,
-      fromemail: asset.assignedtoemail,
-      toname: clean(req.body.toname),
-      toemail: clean(req.body.toemail),
-      department: clean(req.body.department),
-      penaltytype: clean(req.body.penaltytype),
-      penaltyamount: num(req.body.penaltyamount, 0),
-      agreementtext: clean(req.body.agreementtext),
-      remarks: clean(req.body.remarks),
-      createdby: clean(req.body.user),
-      createdbyname: clean(req.body.username)
-    });
-    asset.status = "Assigned";
-    asset.assignedto = tracking.toname;
-    asset.assignedtoemail = tracking.toemail;
-    asset.department = tracking.department;
-    asset.assigneddate = tracking.assignmentdate;
-    asset.lasttrackingid = tracking._id;
-    await asset.save();
-    res.json({ success: true, data: asset, tracking });
+    const savedAssets = [];
+    const trackingRows = [];
+    for (const asset of assets) {
+      const tracking = await AssetTracking.create({
+        colid,
+        asset: asset._id,
+        assetid: asset.assetid,
+        itemmasterid: asset.itemmasterid,
+        store: asset.store,
+        category: asset.category,
+        item: asset.item,
+        description: asset.description,
+        action,
+        assignmentdate: req.body.assignmentdate ? new Date(req.body.assignmentdate) : new Date(),
+        fromname: asset.assignedto,
+        fromemail: asset.assignedtoemail,
+        toname: clean(req.body.toname),
+        toemail: clean(req.body.toemail),
+        department: clean(req.body.department),
+        penaltytype: clean(req.body.penaltytype),
+        penaltyamount: num(req.body.penaltyamount, 0),
+        agreementtext: clean(req.body.agreementtext),
+        remarks: clean(req.body.remarks),
+        createdby: clean(req.body.user),
+        createdbyname: clean(req.body.username)
+      });
+      asset.status = "Assigned";
+      asset.assignedto = tracking.toname;
+      asset.assignedtoemail = tracking.toemail;
+      asset.department = tracking.department;
+      asset.assigneddate = tracking.assignmentdate;
+      asset.lasttrackingid = tracking._id;
+      await asset.save();
+      savedAssets.push(asset);
+      trackingRows.push(tracking);
+    }
+    res.json({ success: true, data: savedAssets[0], dataList: savedAssets, updated: savedAssets.length, tracking: trackingRows[0], trackingList: trackingRows });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -260,6 +273,51 @@ exports.releaseAssets = async (req, res) => {
       trackingRows.push(tracking);
     }
     res.json({ success: true, updated: assets.length, data: assets, tracking: trackingRows });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+exports.returnAsset = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const asset = await AssetItem.findOne({ _id: req.body.assetid || req.body.id, colid });
+    if (!asset) return res.status(404).json({ success: false, message: "Asset not found" });
+    if (asset.status !== "Assigned") return res.status(400).json({ success: false, message: "Only assigned assets can be returned" });
+    const returnDate = req.body.returndate ? new Date(req.body.returndate) : new Date();
+    const returnCondition = clean(req.body.returncondition) || asset.condition || "Good";
+    const tracking = await AssetTracking.create({
+      colid,
+      asset: asset._id,
+      assetid: asset.assetid,
+      itemmasterid: asset.itemmasterid,
+      requisitionid: asset.requisitionid,
+      store: asset.store,
+      category: asset.category,
+      item: asset.item,
+      description: asset.description,
+      action: "Return",
+      assignmentdate: returnDate,
+      fromname: asset.assignedto,
+      fromemail: asset.assignedtoemail,
+      toname: "Store / Asset inventory",
+      toemail: "",
+      department: asset.department,
+      returncondition: returnCondition,
+      remarks: clean(req.body.remarks),
+      createdby: clean(req.body.user),
+      createdbyname: clean(req.body.username)
+    });
+    asset.status = "Available";
+    asset.condition = returnCondition;
+    asset.assignedto = "";
+    asset.assignedtoemail = "";
+    asset.department = "";
+    asset.assigneddate = undefined;
+    asset.requisitionid = undefined;
+    asset.lasttrackingid = tracking._id;
+    await asset.save();
+    res.json({ success: true, data: asset, tracking });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
