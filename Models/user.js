@@ -12,7 +12,9 @@ const userschema = new mongoose.Schema({
     authenticator: {
         type: String,
         enum: ['Yes', 'No'],
-        default: 'No'
+        default: function () {
+            return String(this.role || '').toLowerCase() === 'student' ? 'No' : 'Yes';
+        }
     },
     authenticatordate: {
         type: Date

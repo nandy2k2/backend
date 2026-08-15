@@ -104,6 +104,12 @@ const normalizeStaffStatus = (value) => {
   return Number(value || 0);
 };
 
+const defaultAuthenticatorForRole = (role, value) => {
+  if (value === 'Yes' || value === 'No') return value;
+  if (/^student$/i.test(String(role || ''))) return 'No';
+  return 'Yes';
+};
+
 const staffPayload = (row, colid, actor) => {
   const payload = {};
   staffListFields.forEach((field) => {
@@ -119,6 +125,7 @@ const staffPayload = (row, colid, actor) => {
   payload.colid = Number(colid);
   payload.user = actor || row.user || '';
   payload.role = payload.role || 'Faculty';
+  payload.authenticator = defaultAuthenticatorForRole(payload.role, payload.authenticator);
   payload.status = normalizeStaffStatus(payload.status);
   payload.password = payload.password || 'Password@123';
   payload.phone = payload.phone || 'NA';
@@ -163,6 +170,7 @@ const userPayload = (body, customFieldDefs = []) => {
 
   payload.colid = Number(body.colid);
   payload.user = body.user || '';
+  payload.authenticator = defaultAuthenticatorForRole(payload.role, payload.authenticator);
   if (body.photo !== undefined) payload.photo = cleanValue(body.photo);
   payload.lastlogin = hasDemoText(payload) ? dateAfterDays(3) : dateAfterDays(365);
 

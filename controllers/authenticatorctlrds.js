@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const User = require("../Models/user");
 
 const GLOBAL_MANDATORY_DATE = new Date("2026-08-15T00:00:00.000Z");
+const AUTHENTICATOR_NO_MANDATORY_DATE = new Date("2027-01-01T00:00:00.000Z");
 const NEW_ACCOUNT_GRACE_DAYS = 5;
 const TRUST_DEVICE_DAYS = 3;
 const STEP_SECONDS = 30;
@@ -125,21 +126,16 @@ function accountCreatedAt(user) {
   return new Date();
 }
 
-function earlierDate(a, b) {
-  if (!a) return b;
-  if (!b) return a;
-  return new Date(a).getTime() <= new Date(b).getTime() ? new Date(a) : new Date(b);
-}
-
 function buildTwoFactorStatus(user) {
   if (!user || isStudent(user)) return { applicable: false, required: false, skipAllowed: true };
   const now = new Date();
   const createdAt = accountCreatedAt(user);
   const graceUntil = new Date(createdAt.getTime() + NEW_ACCOUNT_GRACE_DAYS * 24 * 60 * 60 * 1000);
   const userEnabled = clean(user.authenticator).toLowerCase() === "yes";
-  const mandatoryDate = userEnabled
-    ? earlierDate(user.authenticatordate || GLOBAL_MANDATORY_DATE, GLOBAL_MANDATORY_DATE)
-    : GLOBAL_MANDATORY_DATE;
+  const userMandatoryDate = user.authenticatordate ? new Date(user.authenticatordate) : null;
+  const mandatoryDate = userMandatoryDate && !Number.isNaN(userMandatoryDate.getTime())
+    ? userMandatoryDate
+    : (userEnabled ? GLOBAL_MANDATORY_DATE : AUTHENTICATOR_NO_MANDATORY_DATE);
   const withinNewAccountGrace = now.getTime() < graceUntil.getTime();
   const requiredByDate = now.getTime() >= mandatoryDate.getTime();
   const required = userEnabled ? requiredByDate : (requiredByDate && !withinNewAccountGrace);
@@ -153,9 +149,10 @@ function buildTwoFactorStatus(user) {
     skipAllowed,
     mandatoryDate,
     globalMandatoryDate: GLOBAL_MANDATORY_DATE,
+    authenticatorNoMandatoryDate: AUTHENTICATOR_NO_MANDATORY_DATE,
     newAccountGraceUntil: graceUntil,
     message: skipAllowed
-      ? `Authenticator is mandatory after ${GLOBAL_MANDATORY_DATE.toISOString().slice(0, 10)}. New accounts may skip for ${NEW_ACCOUNT_GRACE_DAYS} days.`
+      ? `Authenticator is mandatory for this account after ${mandatoryDate.toISOString().slice(0, 10)}. New accounts may skip for ${NEW_ACCOUNT_GRACE_DAYS} days.`
       : "Authenticator verification is mandatory for this login."
   };
 }
@@ -277,17 +274,72 @@ exports.trustCheck = async (req, res) => {
 
 exports.adminUpdate = async (req, res) => {
   try {
-    const user = await findUser(req.body) || await findManagedUser(req.body);
+    const user = await findManagedUser(req.body);
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
     user.authenticator = clean(req.body.authenticator || user.authenticator || "No") === "Yes" ? "Yes" : "No";
-    user.authenticatordate = req.body.authenticatordate ? new Date(req.body.authenticatordate) : undefined;
+    if (Object.prototype.hasOwnProperty.call(req.body, "authenticatordate")) {
+      user.authenticatordate = req.body.authenticatordate ? new Date(req.body.authenticatordate) : undefined;
+    }
     if (req.body.resetsecret === true || req.body.resetsecret === "Yes") {
       user.authenticatorsecret = undefined;
       user.authenticatorsetupdate = undefined;
-      if (user.authenticator === "Yes") user.authenticator = "No";
     }
     await user.save();
     res.json({ success: true, data: user, twofa: buildTwoFactorStatus(user) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.adminBulkUpdate = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(clean).filter(Boolean) : [];
+    if (!colid) return res.status(400).json({ success: false, message: "College id is required" });
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one user" });
+
+    const hasAuthenticator = ["Yes", "No"].includes(clean(req.body.authenticator));
+    const hasDate = Object.prototype.hasOwnProperty.call(req.body, "authenticatordate");
+    const resetSecret = req.body.resetsecret === true || req.body.resetsecret === "Yes";
+    if (!hasAuthenticator && !hasDate && !resetSecret) {
+      return res.status(400).json({ success: false, message: "Select at least one bulk action" });
+    }
+
+    const users = await User.find({
+      _id: { $in: ids },
+      colid,
+      $nor: [{ role: /^student$/i }]
+    });
+    if (!users.length) return res.status(404).json({ success: false, message: "No matching users found" });
+
+    const updated = [];
+    for (const user of users) {
+      if (hasAuthenticator) user.authenticator = clean(req.body.authenticator);
+      if (hasDate) {
+        user.authenticatordate = req.body.authenticatordate ? new Date(req.body.authenticatordate) : undefined;
+      }
+      if (resetSecret) {
+        user.authenticatorsecret = undefined;
+        user.authenticatorsetupdate = undefined;
+      }
+      await user.save();
+      updated.push({
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        authenticator: user.authenticator,
+        authenticatordate: user.authenticatordate,
+        authenticatorsetupdate: user.authenticatorsetupdate
+      });
+    }
+
+    res.json({
+      success: true,
+      matched: users.length,
+      updated: updated.length,
+      data: updated
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

@@ -179,6 +179,7 @@ exports.registerWithGoogle = async (req, res) => {
         department: clean(decoded.department) || 'NA',
         designation: clean(decoded.designation),
         colid: Number(decoded.colid),
+        authenticator: /^student$/i.test(clean(decoded.role)) ? 'No' : 'Yes',
         status: 1,
         lastlogin: new Date(Date.now() + (365 * 24 * 60 * 60 * 1000))
       });

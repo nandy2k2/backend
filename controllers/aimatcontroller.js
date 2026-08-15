@@ -23912,6 +23912,7 @@ exports.createuserbyrole1 = async (req, res) => {
       phone: req.query.phone,
       password: req.query.password,
       role: req.query.role,
+      authenticator: String(req.query.role || "").toLowerCase() === "student" ? "No" : "Yes",
       regno: "NA",
       programcode: "NA",
       admissionyear: "NA",

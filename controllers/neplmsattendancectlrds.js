@@ -160,6 +160,140 @@ exports.getStudentsForAttendance = async (req, res) => {
   }
 };
 
+exports.getAttendanceDiagnostic = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+
+    const source = req.query || {};
+    const role = text(source.role).toLowerCase();
+    const facultyemail = text(source.facultyemail || source.user);
+    const exact = (value) => regexText(value);
+    const applySourceFilter = (query, sourceField, targetField = sourceField) => {
+      if (source[sourceField]) query[targetField] = exact(source[sourceField]);
+    };
+
+    const assignmentQuery = { colid, status: /^Active$/i };
+    ["academicyear", "regulation", "program", "programcode", "semester", "course", "coursecode"].forEach((field) => {
+      applySourceFilter(assignmentQuery, field);
+    });
+    if (source.major) assignmentQuery.subject = exact(source.major);
+    if (facultyemail && !["all", "admin"].includes(role)) assignmentQuery.facultyemail = exact(facultyemail);
+
+    const assignmentRows = await WorkloadAssignment.find(assignmentQuery)
+      .select("academicyear regulation program programcode subject semester course coursecode facultyname facultyemail facultydepartment")
+      .sort({ academicyear: -1, program: 1, semester: 1, course: 1, coursecode: 1 })
+      .lean();
+
+    const uniqueAssignments = [];
+    const seen = new Set();
+    assignmentRows.forEach((row) => {
+      const key = [
+        text(row.academicyear),
+        text(row.regulation),
+        text(row.program),
+        text(row.programcode),
+        text(row.subject),
+        text(row.semester),
+        text(row.course),
+        text(row.coursecode),
+        text(row.facultyemail)
+      ].join("|").toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        uniqueAssignments.push(row);
+      }
+    });
+
+    const buildTimetableQuery = (assignment) => {
+      const query = { colid };
+      ["academicyear", "regulation", "program", "programcode", "semester", "course", "coursecode", "facultyemail"].forEach((field) => {
+        if (assignment[field]) query[field] = exact(assignment[field]);
+      });
+      if (assignment.subject) query.major = exact(assignment.subject);
+      if (source.section) query.section = exact(source.section);
+      if (source.specialization) query.specialization = exact(source.specialization);
+      return query;
+    };
+
+    const buildStudentQuery = (assignment) => {
+      const query = { colid, role: /^Student$/i };
+      ["academicyear", "regulation", "program", "programcode", "semester"].forEach((field) => {
+        if (assignment[field]) query[field] = exact(assignment[field]);
+      });
+      if (source.section) query.section = exact(source.section);
+      if (assignment.subject) query.Major = exact(assignment.subject);
+      if (source.specialization) {
+        const specialization = exact(source.specialization);
+        query.$or = [{ specialization }, { specialization1: specialization }, { specialization2: specialization }];
+      }
+      return query;
+    };
+
+    const courseRows = await Promise.all(uniqueAssignments.map(async (assignment, index) => {
+      const [timetableCount, studentCount] = await Promise.all([
+        NepLmsTimetable.countDocuments(buildTimetableQuery(assignment)),
+        User.countDocuments(buildStudentQuery(assignment))
+      ]);
+      const mismatches = [];
+      if (!timetableCount) mismatches.push("No matching timetable classes");
+      if (!studentCount) mismatches.push("No matching students");
+      return {
+        id: String(assignment._id || index),
+        academicyear: text(assignment.academicyear),
+        regulation: text(assignment.regulation),
+        program: text(assignment.program),
+        programcode: text(assignment.programcode),
+        semester: text(assignment.semester),
+        major: text(assignment.subject),
+        course: text(assignment.course),
+        coursecode: text(assignment.coursecode),
+        faculty: text(assignment.facultyname),
+        facultyemail: text(assignment.facultyemail),
+        facultydepartment: text(assignment.facultydepartment),
+        timetableCount,
+        studentCount,
+        status: timetableCount && studentCount ? "OK" : "Mismatch",
+        mismatches
+      };
+    }));
+
+    const totals = courseRows.reduce((acc, row) => {
+      acc.timetable += row.timetableCount || 0;
+      acc.students += row.studentCount || 0;
+      if (row.status === "OK") acc.ok += 1;
+      else acc.mismatch += 1;
+      return acc;
+    }, { courses: courseRows.length, timetable: 0, students: 0, ok: 0, mismatch: 0 });
+
+    const mismatches = [];
+    if (!courseRows.length) mismatches.push("No assigned courses found in workload for the selected criteria.");
+    if (totals.mismatch) mismatches.push(`${totals.mismatch} assigned course(s) have zero matching timetable classes or zero matching students.`);
+    res.json({
+      success: true,
+      criteria: {
+        academicyear: text(source.academicyear),
+        regulation: text(source.regulation),
+        program: text(source.program),
+        programcode: text(source.programcode),
+        semester: text(source.semester),
+        section: text(source.section),
+        major: text(source.major),
+        specialization: text(source.specialization),
+        course: text(source.course),
+        coursecode: text(source.coursecode)
+      },
+      timetable: { count: totals.timetable },
+      students: { count: totals.students },
+      totals,
+      courseRows,
+      mismatches
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.getClassGroupStudentsForAttendance = async (req, res) => {
   try {
     const colid = number(req.query.colid);

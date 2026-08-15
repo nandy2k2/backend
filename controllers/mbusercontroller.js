@@ -6,6 +6,11 @@ const getFutureDate = () => {
     return d;
 };
 
+const defaultAuthenticatorForRole = (role, value) => {
+    if (value === 'Yes' || value === 'No') return value;
+    return String(role || '').toLowerCase() === 'student' ? 'No' : 'Yes';
+};
+
 // ✅ Create single user
 exports.mbCreateUser = async (req, res) => {
     try {
@@ -32,6 +37,7 @@ exports.mbCreateUser = async (req, res) => {
             department: data.department,
             designation: data.designation,
             role: data.role,
+            authenticator: defaultAuthenticatorForRole(data.role, data.authenticator),
             admissionyear: data.admissionyear,
             joiningdate: data.joiningdate || data.dateofjoining,
 
@@ -69,6 +75,7 @@ exports.mbBulkCreateUsers = async (req, res) => {
 
             user: u.user,
             colid: u.colid,
+            authenticator: defaultAuthenticatorForRole(u.role, u.authenticator),
 
             status: 1,
             lastlogin: getFutureDate(),

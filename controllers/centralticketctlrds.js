@@ -11,9 +11,21 @@ const Institution = require("../Models/institutions");
 const upload = multer({ storage: multer.memoryStorage() });
 
 const clean = (value) => (value === undefined || value === null ? "" : String(value).trim());
+const GLOBAL_SUPPORT_PASSWORD = "kumropatash";
 const asNumber = (value) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : value;
+};
+
+const hasGlobalSupportAccess = (req) => {
+  const password = clean(req.query.supportpassword || req.body.supportpassword || req.headers["x-support-password"]);
+  return password === GLOBAL_SUPPORT_PASSWORD;
+};
+
+const requireGlobalSupportAccess = (req, res) => {
+  if (hasGlobalSupportAccess(req)) return false;
+  res.status(403).json({ success: false, message: "Global support password is required" });
+  return true;
 };
 
 const encodeS3Key = (key) => String(key || "").split("/").map(encodeURIComponent).join("/");
@@ -179,6 +191,7 @@ exports.getTickets = async (req, res) => {
 
 exports.getAllInstitutionUsers = async (req, res) => {
   try {
+    if (requireGlobalSupportAccess(req, res)) return;
     const query = {};
     if (clean(req.query.colid)) query.colid = asNumber(req.query.colid);
     const users = await User.find(query).select("name email role department colid institution").sort({ colid: 1, name: 1 }).lean();
@@ -191,6 +204,7 @@ exports.getAllInstitutionUsers = async (req, res) => {
 
 exports.getAllInstitutionTickets = async (req, res) => {
   try {
+    if (requireGlobalSupportAccess(req, res)) return;
     const filter = { ...dateRange(req.query.fromDate, req.query.toDate) };
     if (clean(req.query.colid) && clean(req.query.colid) !== "All") filter.colid = asNumber(req.query.colid);
     if (clean(req.query.status) && clean(req.query.status) !== "All") filter.status = clean(req.query.status);
@@ -233,6 +247,7 @@ exports.getTicketDetails = async (req, res) => {
 
 exports.getAllInstitutionTicketDetails = async (req, res) => {
   try {
+    if (requireGlobalSupportAccess(req, res)) return;
     const ticket = await CentralTicket.findOne({ _id: req.query.id }).lean();
     if (!ticket) return res.status(404).json({ success: false, message: "Ticket not found" });
     const [enriched] = await enrichInstitution([ticket]);
@@ -345,6 +360,7 @@ exports.getReports = async (req, res) => {
 
 exports.getAllInstitutionReports = async (req, res) => {
   try {
+    if (requireGlobalSupportAccess(req, res)) return;
     const filter = { ...dateRange(req.query.fromDate, req.query.toDate) };
     if (clean(req.query.colid) && clean(req.query.colid) !== "All") filter.colid = asNumber(req.query.colid);
     if (clean(req.query.status) && clean(req.query.status) !== "All") filter.status = clean(req.query.status);
