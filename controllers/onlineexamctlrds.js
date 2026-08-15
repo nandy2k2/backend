@@ -129,6 +129,47 @@ const initialAnswers = (exam) => (exam.sections || []).flatMap((section) => (sec
   gradingstatus: "Pending"
 })));
 
+const shuffleArray = (items = []) => {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+};
+
+const shuffledExamForAttempt = (exam = {}) => ({
+  ...exam,
+  sections: (exam.sections || []).map((section) => ({
+    ...section,
+    questions: shuffleArray(section.questions || [])
+  }))
+});
+
+const examWithAttemptQuestionOrder = (exam = {}, attempt = {}) => {
+  const orderBySection = {};
+  (attempt.answers || []).forEach((answer, index) => {
+    const sectionid = text(answer.sectionid);
+    if (!orderBySection[sectionid]) orderBySection[sectionid] = {};
+    orderBySection[sectionid][text(answer.questionid)] = index;
+  });
+  return {
+    ...exam,
+    sections: (exam.sections || []).map((section) => {
+      const sectionOrder = orderBySection[text(section._id)] || {};
+      const questions = [...(section.questions || [])].sort((a, b) => {
+        const aOrder = sectionOrder[text(a._id)];
+        const bOrder = sectionOrder[text(b._id)];
+        if (aOrder === undefined && bOrder === undefined) return num(a.order) - num(b.order);
+        if (aOrder === undefined) return 1;
+        if (bOrder === undefined) return -1;
+        return aOrder - bOrder;
+      });
+      return { ...section, questions };
+    })
+  };
+};
+
 exports.options = async (req, res) => {
   try {
     const colid = num(req.query.colid);
@@ -194,7 +235,11 @@ exports.questionOptions = async (req, res) => {
 
 exports.listExams = async (req, res) => {
   try {
-    const rows = await OnlineExam.find(dynamicQuery(req.query)).sort({ createdAt: -1 }).limit(1000).lean();
+    const query = dynamicQuery(req.query);
+    if (text(req.query.createdby || req.query.createdbyemail || req.query.user)) {
+      query.user = { $regex: `^${esc(req.query.createdby || req.query.createdbyemail || req.query.user)}$`, $options: "i" };
+    }
+    const rows = await OnlineExam.find(query).sort({ createdAt: -1 }).limit(1000).lean();
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -429,6 +474,7 @@ exports.startAttempt = async (req, res) => {
     const existing = await OnlineExamAttempt.findOne({ colid: exam.colid, examid: exam._id, regno: student.regno });
     if (existing?.submittime) return res.status(400).json({ success: false, message: "Exam already submitted" });
     const totalSeconds = Math.max(60, num(exam.durationminutes, 60) * 60);
+    const orderedExam = existing ? examWithAttemptQuestionOrder(exam, existing) : shuffledExamForAttempt(exam);
     const attempt = existing || await OnlineExamAttempt.create({
       colid: exam.colid,
       examid: exam._id,
@@ -445,10 +491,10 @@ exports.startAttempt = async (req, res) => {
       starttime: new Date(),
       status: "Started",
       remainingseconds: totalSeconds,
-      totalmarks: initialAnswers(exam).reduce((sum, a) => sum + num(a.maxmarks), 0),
-      answers: initialAnswers(exam)
+      totalmarks: initialAnswers(orderedExam).reduce((sum, a) => sum + num(a.maxmarks), 0),
+      answers: initialAnswers(orderedExam)
     });
-    res.json({ success: true, exam, attempt });
+    res.json({ success: true, exam: examWithAttemptQuestionOrder(exam, attempt), attempt });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -512,7 +558,15 @@ exports.submitAttempt = async (req, res) => {
 
 exports.responses = async (req, res) => {
   try {
-    const rows = await OnlineExamAttempt.find(dynamicQuery(req.body)).sort({ updatedAt: -1 }).limit(1000).lean();
+    const query = dynamicQuery(req.body);
+    if (text(req.body.createdby || req.body.createdbyemail || req.body.userfilter)) {
+      const exams = await OnlineExam.find({
+        colid: query.colid,
+        user: { $regex: `^${esc(req.body.createdby || req.body.createdbyemail || req.body.userfilter)}$`, $options: "i" }
+      }).select("_id").lean();
+      query.examid = { $in: exams.map((exam) => exam._id) };
+    }
+    const rows = await OnlineExamAttempt.find(query).sort({ updatedAt: -1 }).limit(1000).lean();
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -573,7 +627,15 @@ ${JSON.stringify(attempt.answers.map((a) => ({ _id: a._id, questionid: a.questio
 
 exports.report = async (req, res) => {
   try {
-    const rows = await OnlineExamAttempt.find(dynamicQuery(req.body)).sort({ updatedAt: -1 }).limit(2000).lean();
+    const query = dynamicQuery(req.body);
+    if (text(req.body.createdby || req.body.createdbyemail || req.body.userfilter)) {
+      const exams = await OnlineExam.find({
+        colid: query.colid,
+        user: { $regex: `^${esc(req.body.createdby || req.body.createdbyemail || req.body.userfilter)}$`, $options: "i" }
+      }).select("_id").lean();
+      query.examid = { $in: exams.map((exam) => exam._id) };
+    }
+    const rows = await OnlineExamAttempt.find(query).sort({ updatedAt: -1 }).limit(2000).lean();
     const submitted = rows.filter((r) => r.submittime).length;
     const graded = rows.filter((r) => /^Graded$/i.test(r.status)).length;
     const avg = rows.length ? rows.reduce((s, r) => s + num(r.marksobtained), 0) / rows.length : 0;

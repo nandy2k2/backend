@@ -634,6 +634,9 @@ exports.onlineExamSources = async (req, res) => {
     ["academicyear", "programcode", "coursecode"].forEach((field) => {
       if (text(req.query[field])) coreFilter[field] = { $regex: `^${escapeRegex(req.query[field])}$`, $options: "i" };
     });
+    if (text(req.query.createdby || req.query.createdbyemail || req.query.user)) {
+      coreFilter.user = { $regex: `^${escapeRegex(req.query.createdby || req.query.createdbyemail || req.query.user)}$`, $options: "i" };
+    }
     const queries = [
       { ...coreFilter, status: /^Published$/i },
       { ...coreFilter, status: { $not: /^Draft$/i } },
