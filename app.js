@@ -232,6 +232,13 @@ app.post('/api/v2/online-exam/responses-delete', onlineExamController.deleteResp
 app.post('/api/v2/online-exam/grade-attempt', onlineExamController.gradeAttempt);
 app.post('/api/v2/online-exam/ai-evaluate', onlineExamController.aiEvaluate);
 app.post('/api/v2/online-exam/report', onlineExamController.report);
+app.get('/api/v2/online-exam/course-group-assignment-options', onlineExamController.courseGroupAssignmentOptions);
+app.get('/api/v2/online-exam/course-group-assignments', onlineExamController.listCourseGroupAssignments);
+app.post('/api/v2/online-exam/course-group-assignments', onlineExamController.saveCourseGroupAssignment);
+app.post('/api/v2/online-exam/course-group-assignments-delete', onlineExamController.deleteCourseGroupAssignments);
+app.get('/api/v2/online-exam/student-course-group-courses', onlineExamController.studentCourseGroupCourses);
+app.get('/api/v2/online-exam/student-course-group-groups', onlineExamController.studentCourseGroupGroups);
+app.get('/api/v2/online-exam/student-course-group-exams', onlineExamController.studentCourseGroupExams);
 app.get('/api/v2/visitor-management/options', visitorManagementController.options);
 app.get('/api/v2/visitor-management/list', visitorManagementController.list);
 app.post('/api/v2/visitor-management/save', visitorManagementController.save);

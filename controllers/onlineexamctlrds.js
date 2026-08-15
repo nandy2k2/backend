@@ -10,6 +10,8 @@ const CourseOutcome = require("../Models/courseoutcomeds");
 const Awsconfig = require("../Models/awsconfig");
 const AiConfiguration = require("../Models/aiconfigurationds");
 const OllamaConfiguration = require("../Models/ollamaconfigurationds");
+const NepLmsClassGroup = require("../Models/neplmsclassgroupds");
+const OnlineExamCourseGroupAssignment = require("../Models/onlineexamcoursegroupassignmentds");
 
 const upload = multer({ storage: multer.memoryStorage() });
 exports.uploadMiddleware = upload.single("file");
@@ -168,6 +170,15 @@ const examWithAttemptQuestionOrder = (exam = {}, attempt = {}) => {
       return { ...section, questions };
     })
   };
+};
+
+const courseGroupKeyFields = ["academicyear", "regulation", "program", "programcode", "semester", "course", "coursecode", "facultyemail", "groupname"];
+const courseGroupMatch = (source = {}) => {
+  const query = { colid: num(source.colid) };
+  courseGroupKeyFields.forEach((field) => {
+    if (text(source[field])) query[field] = text(source[field]);
+  });
+  return query;
 };
 
 exports.options = async (req, res) => {
@@ -650,6 +661,196 @@ exports.report = async (req, res) => {
     });
     Object.values(byCourse).forEach((r) => { r.average = r.attempts ? Number((r.marks / r.attempts).toFixed(2)) : 0; });
     res.json({ success: true, data: rows, summary: { total: rows.length, submitted, graded, average: Number(avg.toFixed(2)) }, byCourse: Object.values(byCourse) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.courseGroupAssignmentOptions = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const facultyemail = text(req.query.user || req.query.facultyemail);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!facultyemail) return res.status(400).json({ success: false, message: "faculty email is required" });
+    const [exams, groupRows] = await Promise.all([
+      OnlineExam.find({ colid, user: { $regex: `^${esc(facultyemail)}$`, $options: "i" } })
+        .select("academicyear regulation program programcode semester course coursecode examname examcode starttime endtime timezone status user username")
+        .sort({ createdAt: -1 })
+        .lean(),
+      NepLmsClassGroup.find({ colid, facultyemail: { $regex: `^${esc(facultyemail)}$`, $options: "i" } })
+        .select("academicyear regulation program programcode semester course coursecode facultyname facultyemail groupname section")
+        .sort({ academicyear: -1, semester: 1, course: 1, groupname: 1 })
+        .lean()
+    ]);
+    const seen = new Set();
+    const groups = groupRows.filter((row) => {
+      const key = courseGroupKeyFields.map((field) => text(row[field])).join("||");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const filterValues = {};
+    ["academicyear", "regulation", "program", "programcode", "semester", "course", "coursecode", "examname", "examcode", "groupname", "status"].forEach((field) => {
+      filterValues[field] = uniq([...exams.map((row) => row[field]), ...groups.map((row) => row[field])]);
+    });
+    res.json({ success: true, exams, groups, filterValues });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.listCourseGroupAssignments = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const facultyemail = text(req.query.user || req.query.facultyemail);
+    const query = { colid };
+    if (facultyemail) query.facultyemail = { $regex: `^${esc(facultyemail)}$`, $options: "i" };
+    ["academicyear", "regulation", "programcode", "semester", "coursecode", "groupname", "examcode", "status"].forEach((field) => {
+      if (text(req.query[field])) query[field] = { $regex: esc(req.query[field]), $options: "i" };
+    });
+    const rows = await OnlineExamCourseGroupAssignment.find(query).sort({ createdAt: -1 }).limit(1000).lean();
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.saveCourseGroupAssignment = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const facultyemail = text(req.body.user || req.body.facultyemail);
+    const exam = await OnlineExam.findOne({ _id: req.body.examid, colid, user: { $regex: `^${esc(facultyemail)}$`, $options: "i" } }).lean();
+    if (!exam) return res.status(404).json({ success: false, message: "Online exam created by this user was not found" });
+    const group = await NepLmsClassGroup.findOne({
+      ...courseGroupMatch({ ...req.body, colid, facultyemail }),
+      facultyemail: { $regex: `^${esc(facultyemail)}$`, $options: "i" }
+    }).lean();
+    if (!group) return res.status(404).json({ success: false, message: "Course group created by this user was not found" });
+    if ((text(exam.coursecode) && text(exam.coursecode) !== text(group.coursecode))
+      || (text(exam.programcode) && text(exam.programcode) !== text(group.programcode))
+      || (text(exam.academicyear) && text(exam.academicyear) !== text(group.academicyear))) {
+      return res.status(400).json({ success: false, message: "Exam and course group must match academic year, program and course" });
+    }
+    const payload = {
+      examid: exam._id,
+      examname: exam.examname,
+      examcode: exam.examcode,
+      academicyear: group.academicyear,
+      regulation: group.regulation,
+      program: group.program,
+      programcode: group.programcode,
+      semester: group.semester,
+      course: group.course,
+      coursecode: group.coursecode,
+      groupname: group.groupname,
+      facultyname: group.facultyname || exam.username,
+      facultyemail: group.facultyemail,
+      status: text(req.body.status || "Active"),
+      remarks: text(req.body.remarks),
+      colid,
+      user: facultyemail
+    };
+    const row = await OnlineExamCourseGroupAssignment.findOneAndUpdate({
+      colid,
+      examid: exam._id,
+      academicyear: payload.academicyear,
+      regulation: payload.regulation,
+      programcode: payload.programcode,
+      semester: payload.semester,
+      coursecode: payload.coursecode,
+      facultyemail: payload.facultyemail,
+      groupname: payload.groupname
+    }, payload, { upsert: true, new: true, setDefaultsOnInsert: true });
+    res.json({ success: true, data: row });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteCourseGroupAssignments = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(text).filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select assignments to delete" });
+    const result = await OnlineExamCourseGroupAssignment.deleteMany({ colid: num(req.body.colid), user: { $regex: `^${esc(req.body.user)}$`, $options: "i" }, _id: { $in: ids } });
+    res.json({ success: true, deleted: result.deletedCount || 0 });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.studentCourseGroupCourses = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const regno = text(req.query.regno);
+    const student = await User.findOne({ colid, regno }).lean();
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+    const groups = await NepLmsClassGroup.find({
+      colid,
+      regno,
+      academicyear: text(student.academicyear),
+      regulation: text(student.regulation),
+      programcode: text(student.programcode),
+      semester: text(student.semester)
+    }).select("academicyear regulation program programcode semester course coursecode groupname facultyemail facultyname").lean();
+    const seen = new Set();
+    const courses = groups.filter((row) => {
+      const key = [row.academicyear, row.regulation, row.programcode, row.semester, row.coursecode].map(text).join("||");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    res.json({ success: true, student, data: courses });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.studentCourseGroupGroups = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const regno = text(req.query.regno);
+    const query = { colid, regno };
+    ["academicyear", "regulation", "programcode", "semester", "coursecode"].forEach((field) => {
+      if (text(req.query[field])) query[field] = text(req.query[field]);
+    });
+    const groups = await NepLmsClassGroup.find(query).select("academicyear regulation program programcode semester course coursecode groupname facultyemail facultyname").sort({ groupname: 1 }).lean();
+    const seen = new Set();
+    const data = groups.filter((row) => {
+      const key = [row.facultyemail, row.groupname, row.coursecode].map(text).join("||");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.studentCourseGroupExams = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const regno = text(req.query.regno);
+    const membership = await NepLmsClassGroup.findOne({
+      ...courseGroupMatch({ ...req.query, colid }),
+      regno
+    }).lean();
+    if (!membership) return res.json({ success: true, data: [] });
+    const assignments = await OnlineExamCourseGroupAssignment.find({
+      ...courseGroupMatch({ ...membership, colid }),
+      status: /^Active$/i
+    }).lean();
+    const examIds = assignments.map((row) => row.examid).filter(Boolean);
+    const exams = await OnlineExam.find({ colid, _id: { $in: examIds }, status: /^Published$/i }).sort({ starttime: 1 }).lean();
+    const attempts = await OnlineExamAttempt.find({ colid, regno, examid: { $in: exams.map((exam) => exam._id) } }).lean();
+    const byExam = Object.fromEntries(attempts.map((attempt) => [String(attempt.examid), attempt]));
+    res.json({ success: true, data: exams.map((exam) => ({
+      ...exam,
+      groupname: membership.groupname,
+      facultyemail: membership.facultyemail,
+      attempt: byExam[String(exam._id)] || null,
+      canStart: currentAllowed(exam) && !byExam[String(exam._id)]?.submittime
+    })) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
