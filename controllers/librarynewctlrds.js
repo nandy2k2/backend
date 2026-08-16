@@ -510,13 +510,36 @@ exports.books = async (req, res) => {
   try {
     const colid = number(req.query.colid, undefined);
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const requestedLimit = number(req.query.limit, 5000);
+    const limit = Math.min(Math.max(requestedLimit || 5000, 1), 5000);
+    const page = Math.max(number(req.query.page, 1), 1);
+    const skip = Math.max(number(req.query.skip, (page - 1) * limit), 0);
     const query = { colid };
     await applyLibraryAccess(query, colid, req.query);
     applyFilters(query, req.query, bookFields);
-    const data = await LibraryBook.find(query).sort({ accessionno: 1 }).limit(5000).lean();
+    const [data, total] = await Promise.all([
+      LibraryBook.find(query).sort({ accessionno: 1 }).skip(skip).limit(limit).lean(),
+      LibraryBook.countDocuments(query)
+    ]);
     const optionBase = {};
     await applyLibraryAccess(optionBase, colid, req.query);
-    res.json({ success: true, data, options: await distinctOptions(LibraryBook, colid, bookFields, optionBase), libraries: await accessibleLibraries(colid, req.query.user || req.query.email) });
+    res.json({
+      success: true,
+      data,
+      pagination: {
+        page,
+        limit,
+        skip,
+        total,
+        returned: data.length,
+        hasNext: skip + data.length < total,
+        hasPrev: skip > 0,
+        nextPage: skip + data.length < total ? page + 1 : null,
+        prevPage: skip > 0 ? Math.max(page - 1, 1) : null
+      },
+      options: await distinctOptions(LibraryBook, colid, bookFields, optionBase),
+      libraries: await accessibleLibraries(colid, req.query.user || req.query.email)
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
