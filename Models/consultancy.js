@@ -71,6 +71,16 @@ const consultancyschema = new mongoose.Schema({
     doclink: {
         type: String
     },
+    filelink: { type: String },
+    documentocrtext: { type: String },
+    submissionstatus: { type: String, default: "Submitted" },
+    documentstatus: { type: String, default: "Blank" },
+    aivalidationstatus: { type: String },
+    overallstatus: { type: String, default: "Submitted" },
+    approvercomment: { type: String },
+    usercomment: { type: String },
+    aivalidationcomment: { type: String },
+    accreditationframework: { type: String },
     
 
     comments: {

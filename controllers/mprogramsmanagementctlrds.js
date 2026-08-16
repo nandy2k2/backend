@@ -26,9 +26,10 @@ const programPayload = (body = {}) => {
     level: text(body.level),
 	    institution: text(body.institution || body.Institution),
 	    department: text(body.department || body.Department),
-	    faculty: text(body.faculty || body.Faculty),
-	    durationinyear: Number.isNaN(parsedDuration) ? 0 : parsedDuration,
+    faculty: text(body.faculty || body.Faculty),
+    durationinyear: Number.isNaN(parsedDuration) ? 0 : parsedDuration,
     totalcredits: Number.isNaN(parsedTotalCredits) ? 0 : parsedTotalCredits,
+    excluded: /^yes$/i.test(text(body.excluded || body.Excluded)) ? "Yes" : "No",
     typeofsession: text(body.typeofsession || body.typeOfSession || body["type of session"] || body.TypeOfSession || body["Type of session"]),
     introductionyear: text(body.introductionyear || body.introductionYear || body["introduction year"] || body.IntroductionYear || body["Introduction year"]),
     discontinueyear: text(body.discontinueyear || body.discontinueYear || body["discontinue year"] || body.DiscontinueYear || body["Discontinue year"]),
@@ -45,7 +46,7 @@ exports.getPrograms = async (req, res) => {
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
 
     const filter = { colid };
-    ["year", "type", "level", "status1", "programcode", "institution", "department", "faculty", "typeofsession"].forEach((field) => {
+    ["year", "type", "level", "status1", "programcode", "institution", "department", "faculty", "typeofsession", "excluded"].forEach((field) => {
       if (text(req.query[field])) filter[field] = text(req.query[field]);
     });
     if (text(req.query.program)) filter.program = new RegExp(text(req.query.program).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
@@ -103,9 +104,10 @@ exports.bulkUpdateProgramMeta = async (req, res) => {
     const update = {};
     if (req.body.institution !== undefined) update.institution = text(req.body.institution);
     if (req.body.faculty !== undefined) update.faculty = text(req.body.faculty);
+    if (req.body.excluded !== undefined) update.excluded = /^yes$/i.test(text(req.body.excluded)) ? "Yes" : "No";
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
     if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one program" });
-    if (!Object.keys(update).length) return res.status(400).json({ success: false, message: "Enter institution or faculty to update" });
+    if (!Object.keys(update).length) return res.status(400).json({ success: false, message: "Enter institution, faculty or excluded value to update" });
     const result = await MPrograms.updateMany({ _id: { $in: ids }, colid }, { $set: update });
     res.json({ success: true, modified: result.modifiedCount || 0 });
   } catch (error) {
@@ -142,7 +144,7 @@ exports.getProgramOptions = async (req, res) => {
   try {
     const colid = numberColid(req.query.colid);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
-    const [years, types, levels, statuses, institutions, departments, faculties, sessionTypes] = await Promise.all([
+    const [years, types, levels, statuses, institutions, departments, faculties, sessionTypes, excluded] = await Promise.all([
       MPrograms.distinct("year", { colid }),
       MPrograms.distinct("type", { colid }),
       MPrograms.distinct("level", { colid }),
@@ -150,7 +152,8 @@ exports.getProgramOptions = async (req, res) => {
       MPrograms.distinct("institution", { colid }),
       MPrograms.distinct("department", { colid }),
       MPrograms.distinct("faculty", { colid }),
-      MPrograms.distinct("typeofsession", { colid })
+      MPrograms.distinct("typeofsession", { colid }),
+      MPrograms.distinct("excluded", { colid })
     ]);
     res.json({
       success: true,
@@ -161,6 +164,7 @@ exports.getProgramOptions = async (req, res) => {
       institutions: institutions.filter(Boolean).sort(),
       departments: departments.filter(Boolean).sort(),
       faculties: faculties.filter(Boolean).sort(),
+      excluded: Array.from(new Set(["No", "Yes", ...excluded.filter(Boolean)])).sort(),
       sessionTypes: sessionTypes.filter(Boolean).sort()
     });
   } catch (error) {

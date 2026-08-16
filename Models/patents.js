@@ -39,6 +39,16 @@ const patentschema = new mongoose.Schema({
     doclink: {
         type: String
     },
+    filelink: { type: String },
+    documentocrtext: { type: String },
+    submissionstatus: { type: String, default: "Submitted" },
+    documentstatus: { type: String, default: "Blank" },
+    aivalidationstatus: { type: String },
+    overallstatus: { type: String, default: "Submitted" },
+    approvercomment: { type: String },
+    usercomment: { type: String },
+    aivalidationcomment: { type: String },
+    accreditationframework: { type: String },
     patentstatus: {
         type: String
     },
@@ -53,4 +63,3 @@ const patentschema = new mongoose.Schema({
 const Patent=mongoose.model('Patent',patentschema);
 
 module.exports=Patent;
-

@@ -44,6 +44,11 @@ type: String
 totalcredits: {
 type: Number
 },
+excluded: {
+type: String,
+enum: ["Yes", "No"],
+default: "No"
+},
 typeofsession: {
 type: String
 },

@@ -42,6 +42,10 @@ const teacherfsschema = new mongoose.Schema({
     source: {
         type: String
     },
+    level: { type: String },
+    award: { type: String },
+    purpose: { type: String },
+    duration: { type: String },
     status1: {
         type: String,
         required: [true,'Please enter the status'],
@@ -52,7 +56,18 @@ const teacherfsschema = new mongoose.Schema({
         type: String,
         required: [true,'Please enter the comments'],
         unique: false
-    }
+    },
+    doclink: { type: String },
+    filelink: { type: String },
+    documentocrtext: { type: String },
+    submissionstatus: { type: String, default: "Submitted" },
+    documentstatus: { type: String, default: "Blank" },
+    aivalidationstatus: { type: String },
+    overallstatus: { type: String, default: "Submitted" },
+    approvercomment: { type: String },
+    usercomment: { type: String },
+    aivalidationcomment: { type: String },
+    accreditationframework: { type: String }
 })
 //
 const TeacherFinancialSupport=mongoose.model('TeacherFinancialSupport',teacherfsschema);

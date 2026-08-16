@@ -40,6 +40,7 @@ const fieldOptions = (field) => {
   if (field === 'gender') return ['Male', 'Female', 'Not specified'];
   if (field === 'category') return ['General', 'SC', 'ST', 'OBC', 'EBC', 'EWS', 'PH'];
   if (field === 'isdisabled') return ['Yes', 'No'];
+  if (field === 'excluded') return ['No', 'Yes'];
   if (field === 'role') return ['Faculty', 'Student', 'All', 'Admin'];
   if (field === 'status') return ['1', '0'];
   return [];
@@ -68,6 +69,7 @@ const staffListFields = [
   'designation',
   'joiningdate',
   'googleemail',
+  'excluded',
   'institution',
   'gender',
   'state',
@@ -385,6 +387,53 @@ exports.search = async (req, res) => {
     const filter = buildFilter(req.body.colid, req.body.filters || []);
     const data = await User.find(filter).sort({ createdAt: -1, name: 1 }).limit(Number(req.body.limit || 1000));
     res.json(data.map(serializeUser));
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+exports.excludeUserOptions = async (req, res) => {
+  try {
+    const colid = Number(req.query.colid);
+    if (!colid) return res.status(400).json({ msg: 'College id is required' });
+    const roles = await User.distinct('role', { colid });
+    const fields = [
+      'name', 'email', 'role', 'department', 'designation', 'program', 'programcode',
+      'academicyear', 'admissionyear', 'semester', 'section', 'regulation', 'gender',
+      'category', 'excluded', 'institution'
+    ].map((field) => ({ field, label: field, type: 'text', options: fieldOptions(field) }));
+    res.json({ roles: roles.filter(Boolean).sort(), fields });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+exports.excludeUserSearch = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    if (!colid) return res.status(400).json({ msg: 'College id is required' });
+    const filter = buildFilter(colid, req.body.filters || []);
+    if (req.body.role) filter.role = { $regex: String(req.body.role), $options: 'i' };
+    const data = await User.find(filter)
+      .select('name email role department designation program programcode academicyear admissionyear semester section regulation gender category institution excluded colid')
+      .sort({ role: 1, name: 1, email: 1 })
+      .limit(5000)
+      .lean();
+    res.json({ data });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+exports.bulkSetExcluded = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    const excluded = /^yes$/i.test(String(req.body.excluded || '')) ? 'Yes' : 'No';
+    if (!colid) return res.status(400).json({ msg: 'College id is required' });
+    if (!ids.length) return res.status(400).json({ msg: 'Select at least one user' });
+    const result = await User.updateMany({ colid, _id: { $in: ids } }, { $set: { excluded } });
+    res.json({ modified: result.modifiedCount || 0, excluded });
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }

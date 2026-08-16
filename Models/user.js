@@ -9,6 +9,11 @@ const userschema = new mongoose.Schema({
     googleemail: {
         type: String
     },
+    excluded: {
+        type: String,
+        enum: ['Yes', 'No'],
+        default: 'No'
+    },
     authenticator: {
         type: String,
         enum: ['Yes', 'No'],

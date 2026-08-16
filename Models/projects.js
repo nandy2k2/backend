@@ -56,6 +56,16 @@ const bookschema = new mongoose.Schema({
     doclink: {
         type: String
     },
+    filelink: { type: String },
+    documentocrtext: { type: String },
+    submissionstatus: { type: String, default: "Submitted" },
+    documentstatus: { type: String, default: "Blank" },
+    aivalidationstatus: { type: String },
+    overallstatus: { type: String, default: "Submitted" },
+    approvercomment: { type: String },
+    usercomment: { type: String },
+    aivalidationcomment: { type: String },
+    accreditationframework: { type: String },
     duration: {
         type: String,
         required: [true,'Please enter duration'],
@@ -66,4 +76,3 @@ const bookschema = new mongoose.Schema({
 const Project=mongoose.model('Project',bookschema);
 
 module.exports=Project;
-
