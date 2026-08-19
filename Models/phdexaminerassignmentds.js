@@ -1,5 +1,17 @@
 const mongoose = require("mongoose");
 
+const phdExaminerAssignmentDocumentSchema = new mongoose.Schema(
+  {
+    documentname: { type: String, trim: true, default: "" },
+    documenttype: { type: String, trim: true, default: "" },
+    url: { type: String, trim: true, default: "" },
+    filename: { type: String, trim: true, default: "" },
+    key: { type: String, trim: true, default: "" },
+    uploadedat: { type: Date, default: Date.now }
+  },
+  { _id: false }
+);
+
 const phdExaminerAssignmentSchema = new mongoose.Schema(
   {
     colid: { type: Number, required: true, index: true },
@@ -18,6 +30,7 @@ const phdExaminerAssignmentSchema = new mongoose.Schema(
     subject: { type: String, trim: true, default: "" },
     fileurl: { type: String, trim: true, default: "" },
     filename: { type: String, trim: true, default: "" },
+    documents: { type: [phdExaminerAssignmentDocumentSchema], default: [] },
     guidename: { type: String, trim: true, default: "" },
     guideemail: { type: String, trim: true, default: "" },
     examinername: { type: String, trim: true, required: true },

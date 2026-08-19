@@ -46,6 +46,27 @@ function applyFilters(query, source = {}, fields = []) {
   });
 }
 
+function parseDocuments(value) {
+  const raw = Array.isArray(value) ? value : (() => {
+    try {
+      const parsed = JSON.parse(text(value) || "[]");
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  })();
+  return raw
+    .map((row) => ({
+      documentname: text(row.documentname || row.name || row.documenttype),
+      documenttype: text(row.documenttype || row.type || row.documentname),
+      url: text(row.url || row.fileurl || row.link),
+      filename: text(row.filename),
+      key: text(row.key || row.filekey),
+      uploadedat: row.uploadedat ? new Date(row.uploadedat) : new Date()
+    }))
+    .filter((row) => row.documentname && row.url);
+}
+
 const encodeS3Key = (key) => String(key || "").split("/").map(encodeURIComponent).join("/");
 const s3Url = (bucket, region, key) => region === "us-east-1"
   ? `https://${bucket}.s3.amazonaws.com/${encodeS3Key(key)}`
@@ -565,6 +586,7 @@ async function ensureNocApproval(submission, seedUser = {}) {
     guideemail: submission.guideemail,
     fileurl: submission.fileurl,
     filename: submission.filename,
+    documents: submission.documents || [],
     ...firstState,
     history: [{ action: "Submitted for final NoC approval", level: firstState.currentlevel || 0, approvername: "", approveremail: "", comments: "Created after all examiner approvals.", date: new Date() }],
     name: text(seedUser.name),
@@ -599,7 +621,11 @@ async function ensureOralDefenseApproval(source, seedUser = {}) {
     subject: source.subject,
     guidename: source.guidename,
     guideemail: source.guideemail,
+    fileurl: source.fileurl,
+    filename: source.filename,
+    documents: source.documents || [],
     oraldefensedate: source.oraldefensedate,
+    recommended: "No",
     ...firstState,
     history: [{ action: "Submitted for oral defense approval", level: firstState.currentlevel || 0, approvername: "", approveremail: "", comments: "Created after oral defense examiner approval.", date: new Date() }],
     name: text(seedUser.name),
@@ -1320,6 +1346,7 @@ exports.submitThesis = async (req, res) => {
       fileurl: text(req.body.fileurl),
       filename: text(req.body.filename),
       filekey: text(req.body.filekey),
+      documents: parseDocuments(req.body.documents),
       studentcomments: text(req.body.studentcomments),
       resubmissioncomments: text(req.body.resubmissioncomments),
       ...firstState,
@@ -1337,10 +1364,14 @@ exports.approvalList = async (req, res) => {
   try {
     const colid = num(req.query.colid);
     const user = text(req.query.user).toLowerCase();
+    const scope = text(req.query.scope || "pending").toLowerCase();
     const query = { colid };
     applyFilters(query, req.query, ["academicyear", "regulation", "program", "programcode", "student", "regno", "subject", "topic", "status"]);
-    if (!/^all$/i.test(text(req.query.role)) && !/^admin$/i.test(text(req.query.role))) {
-      query.$or = [{ currentapproveremail: regex(user) }, { guideemail: regex(user) }];
+    if (scope === "approved") {
+      query.history = { $elemMatch: { action: /^Approved$/i, approveremail: regex(user) } };
+    } else {
+      query.status = /^Submitted$/i;
+      query.currentapproveremail = regex(user);
     }
     const data = await PhdSubmission.find(query).sort({ updatedAt: -1 }).lean();
     res.json({ success: true, data, institution: await institution(colid) });
@@ -1443,6 +1474,7 @@ exports.saveExaminerAssignments = async (req, res) => {
           subject: submission.subject,
           fileurl: submission.fileurl,
           filename: submission.filename,
+          documents: submission.documents || [],
           guidename: submission.guidename,
           guideemail: submission.guideemail,
           examinername: member.examinername,
@@ -1487,14 +1519,16 @@ exports.myExaminerAssignments = async (req, res) => {
     const query = { colid: num(req.query.colid), $or: [{ examineremail: regex(login) }, { useremail: regex(login) }, { user: regex(login) }] };
     applyFilters(query, req.query, ["academicyear", "regulation", "program", "programcode", "panelname", "student", "regno", "status"]);
     const data = await PhdExaminerAssignment.find(query).sort({ assigneddate: -1, student: 1 }).lean();
-    const missing = data.filter((row) => !row.fileurl).map((row) => row.submissionid).filter(Boolean);
+    const missing = data.filter((row) => !row.fileurl || !(row.documents || []).length).map((row) => row.submissionid).filter(Boolean);
     if (missing.length) {
-      const submissions = await PhdSubmission.find({ colid: num(req.query.colid), _id: { $in: missing } }).select("fileurl filename").lean();
+      const submissions = await PhdSubmission.find({ colid: num(req.query.colid), _id: { $in: missing } }).select("fileurl filename documents").lean();
       const byId = Object.fromEntries(submissions.map((row) => [String(row._id), row]));
       data.forEach((row) => {
-        if (!row.fileurl && byId[String(row.submissionid)]) {
-          row.fileurl = byId[String(row.submissionid)].fileurl;
-          row.filename = byId[String(row.submissionid)].filename;
+        const source = byId[String(row.submissionid)];
+        if (source) {
+          if (!row.fileurl) row.fileurl = source.fileurl;
+          if (!row.filename) row.filename = source.filename;
+          if (!(row.documents || []).length) row.documents = source.documents || [];
         }
       });
     }
@@ -1621,7 +1655,7 @@ exports.nocApprovalList = async (req, res) => {
     const examinerReady = await examinerApprovedSubmissions({ colid, status: /^Approved$/i });
     await syncNocApprovalsForSubmissions(examinerReady, { name: req.query.name, user: req.query.user });
     const query = { colid };
-    applyFilters(query, req.query, ["academicyear", "regulation", "program", "programcode", "student", "regno", "subject", "topic", "status", "currentapprovername", "currentapproveremail"]);
+    applyFilters(query, req.query, ["academicyear", "regulation", "program", "programcode", "student", "regno", "subject", "topic", "status", "recommended", "currentapprovername", "currentapproveremail"]);
     const user = text(req.query.user).toLowerCase();
     if (!/^all$/i.test(text(req.query.role)) && !/^admin$/i.test(text(req.query.role))) {
       query.currentapproveremail = regex(user);
@@ -1781,6 +1815,9 @@ exports.saveOralDefenseAssignments = async (req, res) => {
         subject: student.subject,
         guidename: student.guidename,
         guideemail: student.guideemail,
+        fileurl: student.fileurl,
+        filename: student.filename,
+        documents: student.documents || [],
         examinername: member.examinername,
         examineremail: member.examineremail,
         examinerdesignation: member.designation,
@@ -1910,6 +1947,19 @@ exports.oralDefenseApprovalList = async (req, res) => {
     const user = text(req.query.user).toLowerCase();
     if (!/^all$/i.test(text(req.query.role)) && !/^admin$/i.test(text(req.query.role))) query.currentapproveremail = regex(user);
     const data = await PhdOralDefenseApproval.find(query).sort({ updatedAt: -1 }).lean();
+    const missing = data.filter((row) => !row.fileurl || !(row.documents || []).length).map((row) => row.submissionid).filter(Boolean);
+    if (missing.length) {
+      const submissions = await PhdSubmission.find({ colid, _id: { $in: missing } }).select("fileurl filename documents").lean();
+      const byId = new Map(submissions.map((row) => [String(row._id), row]));
+      data.forEach((row) => {
+        const source = byId.get(String(row.submissionid));
+        if (source) {
+          if (!row.fileurl) row.fileurl = source.fileurl;
+          if (!row.filename) row.filename = source.filename;
+          if (!(row.documents || []).length) row.documents = source.documents || [];
+        }
+      });
+    }
     res.json({ success: true, data, institution: await institution(colid) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1928,6 +1978,11 @@ exports.oralDefenseApprovalDetails = async (req, res) => {
       PhdExaminerAssignment.find({ colid, submissionid: row.submissionid }).sort({ examinername: 1 }).lean(),
       PhdExaminerAssessment.find({ colid, submissionid: row.submissionid }).sort({ group: 1, topic: 1, examinername: 1 }).lean()
     ]);
+    if (submission) {
+      if (!row.fileurl) row.fileurl = submission.fileurl;
+      if (!row.filename) row.filename = submission.filename;
+      if (!(row.documents || []).length) row.documents = submission.documents || [];
+    }
     res.json({ success: true, data: row, noc, submission, oralAssignments, thesisAssignments, thesisAssessments, institution: await institution(colid) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1949,6 +2004,9 @@ exports.oralDefenseApprovalAction = async (req, res) => {
     } else {
       const workflow = await oralWorkflowFor(row);
       const next = workflow.find((item) => Number(item.level) > Number(row.currentlevel || 0));
+      if (!next && !/^Yes$/i.test(text(row.recommended))) {
+        return res.status(400).json({ success: false, message: "Final oral defense approval is allowed only when Recommended is Yes." });
+      }
       row.history.push({ action: "Approved", level: row.currentlevel, approvername: text(req.body.name), approveremail: text(req.body.user), comments, date: new Date() });
       if (next) {
         row.status = "Submitted";
@@ -1964,6 +2022,32 @@ exports.oralDefenseApprovalAction = async (req, res) => {
         row.finalcomments = comments;
       }
     }
+    await row.save();
+    res.json({ success: true, data: row });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateOralDefenseRecommendation = async (req, res) => {
+  try {
+    if (!/^coe$/i.test(text(req.body.role))) return res.status(403).json({ success: false, message: "Only COE can update recommendation." });
+    const colid = num(req.body.colid);
+    const recommended = /^Yes$/i.test(text(req.body.recommended)) ? "Yes" : "No";
+    const row = await PhdOralDefenseApproval.findOne({ colid, _id: req.body.id });
+    if (!row) return res.status(404).json({ success: false, message: "Oral defense approval not found." });
+    row.recommended = recommended;
+    row.recommendedby = text(req.body.name);
+    row.recommendedbyemail = text(req.body.user);
+    row.recommendeddate = new Date();
+    row.history.push({
+      action: `Recommendation ${recommended}`,
+      level: row.currentlevel,
+      approvername: text(req.body.name),
+      approveremail: text(req.body.user),
+      comments: text(req.body.comments),
+      date: new Date()
+    });
     await row.save();
     res.json({ success: true, data: row });
   } catch (error) {

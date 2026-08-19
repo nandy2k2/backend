@@ -42,6 +42,27 @@ const conductExamQuestionPaperSchema = new mongoose.Schema({
   paperstatus: { type: String, trim: true, default: "Default" },
   paperattachmenturl: { type: String, trim: true },
   paperattachmentfilename: { type: String, trim: true },
+  paperdocuments: [{
+    title: { type: String, trim: true },
+    filename: { type: String, trim: true },
+    url: { type: String, trim: true },
+    uploadedby: { type: String, trim: true },
+    uploadeddate: { type: Date, default: Date.now }
+  }],
+  moderationdocuments: [{
+    title: { type: String, trim: true },
+    filename: { type: String, trim: true },
+    url: { type: String, trim: true },
+    uploadedby: { type: String, trim: true },
+    uploadeddate: { type: Date, default: Date.now }
+  }],
+  reviewdocuments: [{
+    title: { type: String, trim: true },
+    filename: { type: String, trim: true },
+    url: { type: String, trim: true },
+    uploadedby: { type: String, trim: true },
+    uploadeddate: { type: Date, default: Date.now }
+  }],
   sections: [sectionSchema],
   airesponse: { type: String, trim: true },
   blockchainhash: { type: String, trim: true },

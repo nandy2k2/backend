@@ -1,5 +1,7 @@
 const ConductExamCourse = require("../Models/conductexamcourseds");
 const Moderator = require("../Models/conductexammoderatords");
+const ModeratorPanel = require("../Models/conductexammoderatorpanelds");
+const ModeratorPanelMember = require("../Models/conductexammoderatorpanelmemberds");
 const QuestionPaper = require("../Models/conductexamquestionpaperds");
 const ModerationAudit = require("../Models/conductexammoderationauditds");
 const AiConfiguration = require("../Models/aiconfigurationds");
@@ -11,6 +13,18 @@ const number = (value) => {
   return Number.isNaN(parsed) ? undefined : parsed;
 };
 const arr = (value) => Array.isArray(value) ? value.map(text).filter(Boolean) : String(value || "").split(/[,;|]/).map(text).filter(Boolean);
+const dateOrUndefined = (value) => {
+  if (!text(value)) return undefined;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+};
+const docs = (value) => Array.isArray(value) ? value.map((doc) => ({
+  title: text(doc.title),
+  filename: text(doc.filename || doc.originalname),
+  url: text(doc.url),
+  uploadedby: text(doc.uploadedby),
+  uploadeddate: dateOrUndefined(doc.uploadeddate) || new Date()
+})).filter((doc) => doc.url) : [];
 const uniq = (values) => [...new Set(values.map(text).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 const stripCodeFence = (content) => text(content).replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
 const parseJson = (content) => {
@@ -24,6 +38,8 @@ const parseJson = (content) => {
 
 const courseFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode"];
 const moderatorFields = [...courseFields, "moderatorname", "moderatoremail", "status"];
+const panelFields = ["academicyear", "regulation", "program", "programcode", "panelname", "status"];
+const panelMemberFields = [...panelFields, "membername", "memberemail", "role", "department", "approvalstatus", "status"];
 
 const buildFilter = (source = {}, fields = []) => {
   const filter = {};
@@ -55,12 +71,65 @@ const moderatorPayload = (body = {}) => ({
   ...baseCoursePayload(body),
   moderatorname: text(body.moderatorname || body.moderator || body.name),
   moderatoremail: text(body.moderatoremail || body.email).toLowerCase(),
+  startdate: dateOrUndefined(body.startdate),
+  enddate: dateOrUndefined(body.enddate),
+  admindocuments: docs(body.admindocuments),
   status: text(body.status) || "assigned"
+});
+
+const panelPayload = (body = {}) => ({
+  colid: number(body.colid),
+  academicyear: text(body.academicyear),
+  regulation: text(body.regulation),
+  program: text(body.program),
+  programcode: text(body.programcode),
+  panelname: text(body.panelname),
+  description: text(body.description),
+  status: text(body.status) || "Active",
+  name: text(body.name),
+  user: text(body.user)
+});
+
+const panelMemberPayload = (body = {}, panel = null) => ({
+  colid: number(body.colid || panel?.colid),
+  panelid: text(body.panelid || panel?._id),
+  academicyear: text(body.academicyear || panel?.academicyear),
+  regulation: text(body.regulation || panel?.regulation),
+  program: text(body.program || panel?.program),
+  programcode: text(body.programcode || panel?.programcode),
+  panelname: text(body.panelname || panel?.panelname),
+  membername: text(body.membername || body.name),
+  memberemail: text(body.memberemail || body.email).toLowerCase(),
+  role: text(body.role),
+  department: text(body.department),
+  designation: text(body.designation),
+  institution: text(body.institution),
+  approvalstatus: text(body.approvalstatus) || "Pending",
+  comments: text(body.comments),
+  status: text(body.status) || "Active",
+  name: text(body.createdby || body.name),
+  user: text(body.createduser || body.user)
 });
 
 const validateModerator = (item) => {
   if (item.colid === undefined) return "colid is required";
   for (const field of ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "course", "coursecode", "moderatorname", "moderatoremail"]) {
+    if (!item[field]) return `${field} is required`;
+  }
+  return "";
+};
+
+const validatePanel = (item) => {
+  if (item.colid === undefined) return "colid is required";
+  for (const field of ["academicyear", "regulation", "program", "programcode", "panelname"]) {
+    if (!item[field]) return `${field} is required`;
+  }
+  return "";
+};
+
+const validatePanelMember = (item) => {
+  if (item.colid === undefined) return "colid is required";
+  for (const field of ["panelid", "academicyear", "regulation", "program", "programcode", "panelname", "membername", "memberemail"]) {
     if (!item[field]) return `${field} is required`;
   }
   return "";
@@ -131,6 +200,149 @@ exports.options = async (req, res) => {
       User.find({ colid, role: { $not: /^Student$/i } }).select("name email role department").sort({ name: 1, email: 1 }).lean()
     ]);
     res.json({ success: true, courses, moderators, users, academicyears: uniq(courses.map((row) => row.academicyear)), examcodes: uniq(courses.map((row) => row.examcode)) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getPanels = async (req, res) => {
+  try {
+    const filter = buildFilter(req.query, panelFields);
+    if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const data = await ModeratorPanel.find(filter).sort({ academicyear: -1, program: 1, panelname: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.savePanel = async (req, res) => {
+  try {
+    const item = panelPayload(req.body);
+    const error = validatePanel(item);
+    if (error) return res.status(400).json({ success: false, message: error });
+    const data = req.body.id
+      ? await ModeratorPanel.findOneAndUpdate({ _id: req.body.id, colid: item.colid }, item, { new: true, runValidators: true })
+      : await ModeratorPanel.findOneAndUpdate(
+        { colid: item.colid, academicyear: item.academicyear, regulation: item.regulation, programcode: item.programcode, panelname: item.panelname },
+        item,
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.code === 11000 ? "This moderator panel already exists." : error.message });
+  }
+};
+
+exports.deletePanel = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [req.body.id].filter(Boolean);
+    await ModeratorPanel.deleteMany({ _id: { $in: ids }, colid });
+    await ModeratorPanelMember.deleteMany({ panelid: { $in: ids }, colid });
+    res.json({ success: true, deleted: ids.length });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkPanels = async (req, res) => {
+  try {
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    const errors = [];
+    let saved = 0;
+    for (let index = 0; index < items.length; index += 1) {
+      const item = panelPayload({ ...items[index], colid: req.body.colid || items[index].colid, name: req.body.name || items[index].name, user: req.body.user || items[index].user });
+      const error = validatePanel(item);
+      if (error) {
+        errors.push({ rowNumber: items[index].rowNumber || index + 2, message: error });
+        continue;
+      }
+      await ModeratorPanel.findOneAndUpdate(
+        { colid: item.colid, academicyear: item.academicyear, regulation: item.regulation, programcode: item.programcode, panelname: item.panelname },
+        item,
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      saved += 1;
+    }
+    res.json({ success: true, saved, errors });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getPanelMembers = async (req, res) => {
+  try {
+    const filter = buildFilter(req.query, panelMemberFields);
+    if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (text(req.query.panelid)) filter.panelid = text(req.query.panelid);
+    const data = await ModeratorPanelMember.find(filter).sort({ academicyear: -1, program: 1, panelname: 1, membername: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.savePanelMembers = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const panelid = text(req.body.panelid);
+    if (colid === undefined || !panelid) return res.status(400).json({ success: false, message: "colid and panelid are required" });
+    const panel = await ModeratorPanel.findOne({ _id: panelid, colid }).lean();
+    if (!panel) return res.status(404).json({ success: false, message: "Panel not found" });
+    const users = Array.isArray(req.body.users) && req.body.users.length ? req.body.users : [req.body];
+    const errors = [];
+    let saved = 0;
+    for (let index = 0; index < users.length; index += 1) {
+      const item = panelMemberPayload({ ...users[index], colid, panelid, createdby: req.body.name, createduser: req.body.user }, panel);
+      const error = validatePanelMember(item);
+      if (error) {
+        errors.push({ rowNumber: users[index].rowNumber || index + 1, message: error });
+        continue;
+      }
+      await ModeratorPanelMember.findOneAndUpdate(
+        { colid: item.colid, panelid: item.panelid, memberemail: item.memberemail },
+        item,
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      saved += 1;
+    }
+    res.json({ success: true, saved, errors });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.code === 11000 ? "This member is already assigned to the panel." : error.message });
+  }
+};
+
+exports.deletePanelMembers = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [req.body.id].filter(Boolean);
+    await ModeratorPanelMember.deleteMany({ _id: { $in: ids }, colid });
+    res.json({ success: true, deleted: ids.length });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.approvePanelMembers = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+    const approvalstatus = text(req.body.approvalstatus) || "Approved";
+    if (colid === undefined || !ids.length) return res.status(400).json({ success: false, message: "Select at least one member" });
+    const result = await ModeratorPanelMember.updateMany(
+      { _id: { $in: ids }, colid },
+      {
+        $set: {
+          approvalstatus,
+          comments: text(req.body.comments),
+          approvedby: text(req.body.approvedby || req.body.name),
+          approvedbyemail: text(req.body.approvedbyemail || req.body.user),
+          approveddate: new Date()
+        }
+      }
+    );
+    res.json({ success: true, updated: result.modifiedCount || 0 });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -273,9 +485,11 @@ exports.saveModerationPaper = async (req, res) => {
       });
     });
 
+    const updatePayload = { sections: incomingSections, status: text(req.body.status) || "Moderation In Progress", user: text(req.body.user) };
+    if (Array.isArray(req.body.moderationdocuments)) updatePayload.moderationdocuments = docs(req.body.moderationdocuments);
     const data = await QuestionPaper.findOneAndUpdate(
       { _id: paper._id, colid },
-      { sections: incomingSections, status: text(req.body.status) || "Moderation In Progress", user: text(req.body.user) },
+      updatePayload,
       { new: true, runValidators: true }
     );
     if (auditRows.length) await ModerationAudit.insertMany(auditRows);

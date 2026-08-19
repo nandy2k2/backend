@@ -15,6 +15,15 @@ const conductExamPaperSetterSchema = new mongoose.Schema({
   coursecode: { type: String, required: true, trim: true },
   papersettername: { type: String, required: true, trim: true },
   papersetteremail: { type: String, required: true, trim: true, lowercase: true },
+  startdate: { type: Date },
+  enddate: { type: Date },
+  admindocuments: [{
+    title: { type: String, trim: true },
+    filename: { type: String, trim: true },
+    url: { type: String, trim: true },
+    uploadedby: { type: String, trim: true },
+    uploadeddate: { type: Date, default: Date.now }
+  }],
   status: { type: String, trim: true, default: "assigned" },
   user: { type: String, trim: true }
 }, { timestamps: true });

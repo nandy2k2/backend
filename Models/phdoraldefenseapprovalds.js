@@ -12,6 +12,18 @@ const phdOralDefenseHistorySchema = new mongoose.Schema(
   { _id: false }
 );
 
+const phdOralDefenseDocumentSchema = new mongoose.Schema(
+  {
+    documentname: { type: String, trim: true, default: "" },
+    documenttype: { type: String, trim: true, default: "" },
+    url: { type: String, trim: true, default: "" },
+    filename: { type: String, trim: true, default: "" },
+    key: { type: String, trim: true, default: "" },
+    uploadedat: { type: Date, default: Date.now }
+  },
+  { _id: false }
+);
+
 const phdOralDefenseApprovalSchema = new mongoose.Schema(
   {
     colid: { type: Number, required: true, index: true },
@@ -27,7 +39,14 @@ const phdOralDefenseApprovalSchema = new mongoose.Schema(
     subject: { type: String, trim: true, default: "" },
     guidename: { type: String, trim: true, default: "" },
     guideemail: { type: String, trim: true, default: "" },
+    fileurl: { type: String, trim: true, default: "" },
+    filename: { type: String, trim: true, default: "" },
+    documents: { type: [phdOralDefenseDocumentSchema], default: [] },
     oraldefensedate: { type: String, trim: true, default: "" },
+    recommended: { type: String, trim: true, default: "No" },
+    recommendedby: { type: String, trim: true, default: "" },
+    recommendedbyemail: { type: String, trim: true, default: "" },
+    recommendeddate: { type: Date },
     status: { type: String, trim: true, default: "Submitted", index: true },
     currentlevel: { type: Number, default: 1 },
     currentapprovername: { type: String, trim: true, default: "" },

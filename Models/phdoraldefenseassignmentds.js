@@ -11,6 +11,18 @@ const phdOralDefenseAttendeeSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const phdOralDefenseDocumentSchema = new mongoose.Schema(
+  {
+    documentname: { type: String, trim: true, default: "" },
+    documenttype: { type: String, trim: true, default: "" },
+    url: { type: String, trim: true, default: "" },
+    filename: { type: String, trim: true, default: "" },
+    key: { type: String, trim: true, default: "" },
+    uploadedat: { type: Date, default: Date.now }
+  },
+  { _id: false }
+);
+
 const phdOralDefenseAssignmentSchema = new mongoose.Schema(
   {
     colid: { type: Number, required: true, index: true },
@@ -29,6 +41,9 @@ const phdOralDefenseAssignmentSchema = new mongoose.Schema(
     subject: { type: String, trim: true, default: "" },
     guidename: { type: String, trim: true, default: "" },
     guideemail: { type: String, trim: true, default: "" },
+    fileurl: { type: String, trim: true, default: "" },
+    filename: { type: String, trim: true, default: "" },
+    documents: { type: [phdOralDefenseDocumentSchema], default: [] },
     examinername: { type: String, trim: true, required: true },
     examineremail: { type: String, trim: true, required: true },
     examinerdesignation: { type: String, trim: true, default: "" },

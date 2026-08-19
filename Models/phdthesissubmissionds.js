@@ -12,6 +12,18 @@ const phdThesisHistorySchema = new mongoose.Schema(
   { _id: false }
 );
 
+const phdThesisDocumentSchema = new mongoose.Schema(
+  {
+    documentname: { type: String, trim: true, default: "" },
+    documenttype: { type: String, trim: true, default: "" },
+    url: { type: String, trim: true, default: "" },
+    filename: { type: String, trim: true, default: "" },
+    key: { type: String, trim: true, default: "" },
+    uploadedat: { type: Date, default: Date.now }
+  },
+  { _id: false }
+);
+
 const phdThesisSubmissionSchema = new mongoose.Schema(
   {
     colid: { type: Number, required: true, index: true },
@@ -30,6 +42,7 @@ const phdThesisSubmissionSchema = new mongoose.Schema(
     fileurl: { type: String, trim: true, required: true },
     filename: { type: String, trim: true, default: "" },
     filekey: { type: String, trim: true, default: "" },
+    documents: { type: [phdThesisDocumentSchema], default: [] },
     studentcomments: { type: String, trim: true, default: "" },
     resubmissioncomments: { type: String, trim: true, default: "" },
     status: { type: String, trim: true, default: "Submitted", index: true },
