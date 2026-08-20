@@ -38,7 +38,9 @@ const OnlineExamSectionSchema = new mongoose.Schema({
 
 const OnlineExamSchema = new mongoose.Schema({
   colid: { type: Number, required: true, index: true },
+  examcontext: { type: String, default: "Student", index: true },
   academicyear: { type: String, index: true },
+  category: String,
   program: String,
   programcode: { type: String, index: true },
   course: String,

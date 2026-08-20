@@ -16,6 +16,8 @@ const phdThesisDocumentSchema = new mongoose.Schema(
   {
     documentname: { type: String, trim: true, default: "" },
     documenttype: { type: String, trim: true, default: "" },
+    component: { type: String, trim: true, default: "" },
+    chapter: { type: Number, default: 0 },
     url: { type: String, trim: true, default: "" },
     filename: { type: String, trim: true, default: "" },
     key: { type: String, trim: true, default: "" },
@@ -43,6 +45,7 @@ const phdThesisSubmissionSchema = new mongoose.Schema(
     filename: { type: String, trim: true, default: "" },
     filekey: { type: String, trim: true, default: "" },
     documents: { type: [phdThesisDocumentSchema], default: [] },
+    componentdocuments: { type: [phdThesisDocumentSchema], default: [] },
     studentcomments: { type: String, trim: true, default: "" },
     resubmissioncomments: { type: String, trim: true, default: "" },
     status: { type: String, trim: true, default: "Submitted", index: true },

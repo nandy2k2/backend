@@ -3,6 +3,7 @@ const multer = require("multer");
 const AWS = require("aws-sdk");
 const nodemailer = require("nodemailer");
 const PhdAssignment = require("../Models/phdthesisassignmentds");
+const PhdAssignmentWorkflow = require("../Models/phdthesisassignmentworkflowds");
 const PhdWorkflow = require("../Models/phdthesisworkflowds");
 const PhdSubmission = require("../Models/phdthesissubmissionds");
 const PhdNocWorkflow = require("../Models/phdnocworkflowds");
@@ -18,6 +19,8 @@ const PhdExamPanelMember = require("../Models/phdexampanelmemberds");
 const PhdExaminerAssignment = require("../Models/phdexaminerassignmentds");
 const PhdExaminerRubric = require("../Models/phdexaminerrubricds");
 const PhdExaminerAssessment = require("../Models/phdexaminerassessmentds");
+const PhdProgressReport = require("../Models/phdprogressreportds");
+const PhdGuideMessage = require("../Models/phdguidemessageds");
 const User = require("../Models/user");
 const MPrograms = require("../Models/mprograms");
 const Institution = require("../Models/insdetails");
@@ -59,6 +62,8 @@ function parseDocuments(value) {
     .map((row) => ({
       documentname: text(row.documentname || row.name || row.documenttype),
       documenttype: text(row.documenttype || row.type || row.documentname),
+      component: text(row.component),
+      chapter: num(row.chapter),
       url: text(row.url || row.fileurl || row.link),
       filename: text(row.filename),
       key: text(row.key || row.filekey),
@@ -106,6 +111,12 @@ function assignmentPayload(body = {}) {
     guideemail: text(body.guideemail),
     startdate: text(body.startdate),
     enddate: text(body.enddate),
+    requestsource: text(body.requestsource) || "Admin",
+    assignmentapprovalstatus: text(body.assignmentapprovalstatus) || "Approved",
+    currentlevel: num(body.currentlevel),
+    currentapprovername: text(body.currentapprovername),
+    currentapproveremail: text(body.currentapproveremail),
+    approvalcomments: text(body.approvalcomments),
     status: text(body.status) || "Active",
     name: text(body.name),
     user: text(body.user)
@@ -460,6 +471,19 @@ async function workflowFor(assignment) {
   }).sort({ level: 1 }).lean();
 }
 
+async function assignmentWorkflowFor(assignment) {
+  return PhdAssignmentWorkflow.find({
+    colid: assignment.colid,
+    programcode: regex(assignment.programcode),
+    status: /^Active$/i,
+    $or: [
+      { academicyear: "" },
+      { academicyear: { $exists: false } },
+      { academicyear: regex(assignment.academicyear) }
+    ]
+  }).sort({ level: 1 }).lean();
+}
+
 async function nocWorkflowFor(submission) {
   return PhdNocWorkflow.find({
     colid: submission.colid,
@@ -563,6 +587,41 @@ function firstPendingStatus(workflow) {
   return first
     ? { status: "Submitted", currentlevel: first.level, currentapprovername: first.approvername, currentapproveremail: first.approveremail }
     : { status: "Approved", currentlevel: 0, currentapprovername: "", currentapproveremail: "", approveddate: new Date(), finalcomments: "Approved automatically because no workflow was configured." };
+}
+
+const thesisComponentRequired = ["Title", "Prelim pages", "Content", "Abstract", "Recommendation", "Annexure", "Plagiarism report"];
+
+function normalComponent(value = "") {
+  return text(value).toLowerCase().replace(/\s+/g, " ");
+}
+
+function missingThesisComponents(docs = []) {
+  const names = new Set(docs.map((doc) => normalComponent(doc.component || doc.documentname || doc.documenttype)));
+  const missing = thesisComponentRequired.filter((name) => !names.has(normalComponent(name)));
+  for (let chapter = 1; chapter <= 6; chapter += 1) {
+    const hasChapter = docs.some((doc) => Number(doc.chapter) === chapter || normalComponent(doc.component || doc.documentname).includes(`chapter ${chapter}`));
+    if (!hasChapter) missing.push(`Chapter ${chapter}`);
+  }
+  return missing;
+}
+
+async function assignmentWorkflowState(assignment) {
+  const workflow = await assignmentWorkflowFor(assignment);
+  const first = workflow[0];
+  return first
+    ? { assignmentapprovalstatus: "Submitted", status: "Pending", currentlevel: first.level, currentapprovername: first.approvername, currentapproveremail: first.approveremail }
+    : { assignmentapprovalstatus: "Approved", status: "Active", currentlevel: 0, currentapprovername: "", currentapproveremail: "", approveddate: new Date(), approvalcomments: "Approved automatically because no workflow was configured." };
+}
+
+function assignmentHistory(action, row = {}, actor = {}, comments = "") {
+  return {
+    action,
+    level: num(row.currentlevel),
+    approvername: text(actor.name),
+    approveremail: text(actor.user),
+    comments: text(comments),
+    date: new Date()
+  };
 }
 
 async function ensureNocApproval(submission, seedUser = {}) {
@@ -936,7 +995,15 @@ exports.listAssignments = async (req, res) => {
 
 exports.saveAssignment = async (req, res) => {
   try {
-    const payload = assignmentPayload(req.body);
+    const payload = { ...assignmentPayload(req.body), requestsource: text(req.body.requestsource) || "Admin", assignmentapprovalstatus: text(req.body.assignmentapprovalstatus) || "Approved" };
+    if (!req.body._id && payload.requestsource === "Admin") {
+      payload.assignmentapprovalstatus = "Approved";
+      payload.status = payload.status || "Active";
+      payload.currentlevel = 0;
+      payload.currentapprovername = "";
+      payload.currentapproveremail = "";
+      payload.approveddate = new Date();
+    }
     if (!payload.academicyear || !payload.program || !payload.programcode || !payload.student || !payload.regno || !payload.topic || !payload.subject || !payload.guideemail) {
       return res.status(400).json({ success: false, message: "Academic year, program, student, topic, subject and guide are required." });
     }
@@ -949,10 +1016,133 @@ exports.saveAssignment = async (req, res) => {
   }
 };
 
+exports.studentApplyAssignment = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const login = text(req.body.user || req.body.email);
+    const student = await User.findOne({
+      colid,
+      role: /^Student$/i,
+      $or: [{ email: regex(login) }, { user: regex(login) }, { regno: regex(req.body.regno || "") }]
+    }).lean();
+    if (!student) return res.status(404).json({ success: false, message: "Student profile not found for thesis assignment application." });
+    const guide = await User.findOne({ colid, role: { $not: /^Student$/i }, $or: [{ email: regex(req.body.guideemail) }, { user: regex(req.body.guideemail) }] }).lean();
+    const payload = assignmentPayload({
+      ...req.body,
+      colid,
+      academicyear: req.body.academicyear || student.academicyear || student.admissionyear,
+      regulation: req.body.regulation || student.regulation,
+      program: req.body.program || student.program,
+      programcode: req.body.programcode || student.programcode,
+      student: student.name,
+      regno: student.regno,
+      email: student.email || student.user,
+      phone: student.phone,
+      guidename: guide?.name || req.body.guidename,
+      guideemail: guide?.email || guide?.user || req.body.guideemail,
+      requestsource: "Student",
+      assignmentapprovalstatus: "Submitted",
+      status: "Pending",
+      name: student.name,
+      user: student.email || student.user
+    });
+    if (!payload.topic || !payload.subject || !payload.guideemail) {
+      return res.status(400).json({ success: false, message: "Topic, subject and guide are required." });
+    }
+    const state = await assignmentWorkflowState(payload);
+    const data = await PhdAssignment.create({
+      ...payload,
+      ...state,
+      history: [assignmentHistory(state.assignmentapprovalstatus === "Approved" ? "Approved automatically" : "Submitted for assignment approval", state, { name: student.name, user: student.email || student.user }, text(req.body.comments))]
+    });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.studentAssignmentRequests = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const regno = text(req.query.regno);
+    const user = text(req.query.user);
+    const query = { colid, requestsource: /^Student$/i };
+    if (regno || user) query.$or = [{ regno: regex(regno) }, { email: regex(user) }, { user: regex(user) }];
+    const data = await PhdAssignment.find(query).sort({ createdAt: -1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.assignmentApprovalList = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const user = text(req.query.user).toLowerCase();
+    const scope = text(req.query.scope || "pending").toLowerCase();
+    const query = { colid, requestsource: /^Student$/i };
+    applyFilters(query, req.query, ["academicyear", "regulation", "program", "programcode", "student", "regno", "subject", "topic", "assignmentapprovalstatus"]);
+    if (scope === "approved") {
+      query.history = { $elemMatch: { action: /^Approved$/i, approveremail: regex(user) } };
+    } else {
+      query.assignmentapprovalstatus = /^Submitted$/i;
+      query.currentapproveremail = regex(user);
+    }
+    const data = await PhdAssignment.find(query).sort({ updatedAt: -1 }).lean();
+    res.json({ success: true, data, institution: await institution(colid) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.assignmentApprovalAction = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const row = await PhdAssignment.findOne({ colid, _id: req.body.id, requestsource: /^Student$/i });
+    if (!row) return res.status(404).json({ success: false, message: "Assignment request not found." });
+    const comments = text(req.body.comments);
+    if (/^reject/i.test(text(req.body.action))) {
+      row.assignmentapprovalstatus = "Rejected";
+      row.status = "Rejected";
+      row.rejecteddate = new Date();
+      row.approvalcomments = comments;
+      row.history.push(assignmentHistory("Rejected", row, req.body, comments));
+    } else {
+      const workflow = await assignmentWorkflowFor(row);
+      const next = workflow.find((item) => Number(item.level) > Number(row.currentlevel || 0));
+      row.history.push(assignmentHistory("Approved", row, req.body, comments));
+      if (next) {
+        row.assignmentapprovalstatus = "Submitted";
+        row.status = "Pending";
+        row.currentlevel = next.level;
+        row.currentapprovername = next.approvername;
+        row.currentapproveremail = next.approveremail;
+      } else {
+        row.assignmentapprovalstatus = "Approved";
+        row.status = "Active";
+        row.approveddate = new Date();
+        row.currentlevel = 0;
+        row.currentapprovername = "";
+        row.currentapproveremail = "";
+        row.approvalcomments = comments;
+      }
+    }
+    await row.save();
+    res.json({ success: true, data: row });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.bulkAssignments = async (req, res) => {
   try {
     const items = Array.isArray(req.body.items) ? req.body.items : [];
-    const rows = items.map((item) => assignmentPayload({ ...item, colid: req.body.colid, user: req.body.user, name: req.body.name })).filter((row) => row.regno && row.topic);
+    const rows = items.map((item) => ({
+      ...assignmentPayload({ ...item, colid: req.body.colid, user: req.body.user, name: req.body.name, requestsource: "Admin", assignmentapprovalstatus: "Approved" }),
+      requestsource: "Admin",
+      assignmentapprovalstatus: "Approved",
+      approveddate: new Date()
+    })).filter((row) => row.regno && row.topic);
     if (rows.length) await PhdAssignment.insertMany(rows, { ordered: false });
     res.json({ success: true, inserted: rows.length });
   } catch (error) {
@@ -964,6 +1154,54 @@ exports.deleteAssignments = async (req, res) => {
   try {
     const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
     const result = await PhdAssignment.deleteMany({ colid: num(req.body.colid), _id: { $in: ids } });
+    res.json({ success: true, deleted: result.deletedCount || 0 });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.listAssignmentWorkflows = async (req, res) => {
+  try {
+    const query = { colid: num(req.query.colid) };
+    applyFilters(query, req.query, ["academicyear", "regulation", "program", "programcode", "approveremail", "role", "status"]);
+    const data = await PhdAssignmentWorkflow.find(query).sort({ programcode: 1, level: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.saveAssignmentWorkflow = async (req, res) => {
+  try {
+    const payload = workflowPayload(req.body);
+    if (!payload.program || !payload.programcode || !payload.level || !payload.approvername || !payload.approveremail) {
+      return res.status(400).json({ success: false, message: "Program, program code, level and approver are required." });
+    }
+    const data = req.body._id
+      ? await PhdAssignmentWorkflow.findOneAndUpdate({ _id: req.body._id, colid: payload.colid }, payload, { new: true })
+      : await PhdAssignmentWorkflow.create(payload);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkAssignmentWorkflows = async (req, res) => {
+  try {
+    const rows = (Array.isArray(req.body.items) ? req.body.items : [])
+      .map((item) => workflowPayload({ ...item, colid: req.body.colid, name: req.body.name, user: req.body.user }))
+      .filter((row) => row.programcode && row.level && row.approveremail);
+    if (rows.length) await PhdAssignmentWorkflow.insertMany(rows, { ordered: false });
+    res.json({ success: true, inserted: rows.length });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteAssignmentWorkflows = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+    const result = await PhdAssignmentWorkflow.deleteMany({ colid: num(req.body.colid), _id: { $in: ids } });
     res.json({ success: true, deleted: result.deletedCount || 0 });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1313,9 +1551,12 @@ exports.studentContext = async (req, res) => {
   try {
     const colid = num(req.query.colid);
     const regno = text(req.query.regno);
-    const assignments = await PhdAssignment.find({ colid, regno: regex(regno), status: /^Active$/i }).sort({ createdAt: -1 }).lean();
-    const submissions = await PhdSubmission.find({ colid, regno: regex(regno) }).sort({ createdAt: -1 }).lean();
-    res.json({ success: true, assignments, submissions });
+    const user = text(req.query.user);
+    const studentQuery = regno || user ? { $or: [{ regno: regex(regno) }, { email: regex(user) }, { user: regex(user) }] } : {};
+    const assignments = await PhdAssignment.find({ colid, ...studentQuery, status: /^Active$/i, assignmentapprovalstatus: /^Approved$/i }).sort({ createdAt: -1 }).lean();
+    const requests = await PhdAssignment.find({ colid, ...studentQuery, requestsource: /^Student$/i }).sort({ createdAt: -1 }).lean();
+    const submissions = await PhdSubmission.find({ colid, ...studentQuery }).sort({ createdAt: -1 }).lean();
+    res.json({ success: true, assignments, requests, submissions });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1326,7 +1567,14 @@ exports.submitThesis = async (req, res) => {
     const colid = num(req.body.colid);
     const assignment = await PhdAssignment.findOne({ _id: req.body.assignmentid, colid }).lean();
     if (!assignment) return res.status(404).json({ success: false, message: "Thesis assignment not found." });
+    if (!/^Approved$/i.test(text(assignment.assignmentapprovalstatus || "Approved")) || !/^Active$/i.test(text(assignment.status || "Active"))) {
+      return res.status(400).json({ success: false, message: "Thesis assignment is not approved/active yet." });
+    }
     if (!text(req.body.fileurl)) return res.status(400).json({ success: false, message: "Uploaded thesis file link is required." });
+    const componentdocuments = parseDocuments(req.body.componentdocuments);
+    const missing = missingThesisComponents(componentdocuments);
+    if (missing.length) return res.status(400).json({ success: false, message: `Mandatory thesis documents missing: ${missing.join(", ")}` });
+    const documents = [...parseDocuments(req.body.documents), ...componentdocuments].filter((doc, index, list) => list.findIndex((item) => item.url === doc.url && item.documentname === doc.documentname) === index);
     const workflow = await workflowFor(assignment);
     const firstState = firstPendingStatus(workflow);
     const data = await PhdSubmission.create({
@@ -1346,7 +1594,8 @@ exports.submitThesis = async (req, res) => {
       fileurl: text(req.body.fileurl),
       filename: text(req.body.filename),
       filekey: text(req.body.filekey),
-      documents: parseDocuments(req.body.documents),
+      documents,
+      componentdocuments,
       studentcomments: text(req.body.studentcomments),
       resubmissioncomments: text(req.body.resubmissioncomments),
       ...firstState,
@@ -1411,6 +1660,148 @@ exports.takeAction = async (req, res) => {
     }
     await submission.save();
     res.json({ success: true, data: submission });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+function progressPayload(assignment, body = {}) {
+  return {
+    colid: assignment.colid,
+    assignmentid: String(assignment._id),
+    academicyear: assignment.academicyear,
+    regulation: assignment.regulation,
+    program: assignment.program,
+    programcode: assignment.programcode,
+    student: assignment.student,
+    regno: assignment.regno,
+    studentemail: assignment.email || assignment.user || "",
+    guidename: assignment.guidename,
+    guideemail: assignment.guideemail,
+    progressdate: text(body.progressdate),
+    progress: text(body.progress),
+    documents: parseDocuments(body.documents),
+    name: text(body.name),
+    user: text(body.user)
+  };
+}
+
+exports.studentProgressReports = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const query = { colid };
+    if (text(req.query.assignmentid)) query.assignmentid = text(req.query.assignmentid);
+    else query.$or = [{ regno: regex(req.query.regno || "") }, { studentemail: regex(req.query.user || "") }];
+    const data = await PhdProgressReport.find(query).sort({ progressdate: -1, createdAt: -1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.saveStudentProgressReport = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const assignment = await PhdAssignment.findOne({ colid, _id: req.body.assignmentid, assignmentapprovalstatus: /^Approved$/i }).lean();
+    if (!assignment) return res.status(404).json({ success: false, message: "Approved thesis assignment not found." });
+    const payload = progressPayload(assignment, req.body);
+    if (!payload.progressdate || !payload.progress) return res.status(400).json({ success: false, message: "Progress date and progress details are required." });
+    payload.conversation = [{
+      byname: text(req.body.name),
+      byemail: text(req.body.user),
+      role: text(req.body.role || "Student"),
+      comments: text(req.body.studentcomment || req.body.progress),
+      date: new Date()
+    }];
+    const data = await PhdProgressReport.create(payload);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.addProgressConversation = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const report = await PhdProgressReport.findOne({ colid, _id: req.body.id });
+    if (!report) return res.status(404).json({ success: false, message: "Progress report not found." });
+    const comment = text(req.body.comments);
+    if (!comment) return res.status(400).json({ success: false, message: "Comment is required." });
+    report.conversation.push({ byname: text(req.body.name), byemail: text(req.body.user), role: text(req.body.role), comments: comment, date: new Date() });
+    await report.save();
+    res.json({ success: true, data: report });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.guideDashboard = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const login = text(req.query.user);
+    const assignments = await PhdAssignment.find({ colid, guideemail: regex(login), assignmentapprovalstatus: /^Approved$/i }).sort({ student: 1 }).lean();
+    const assignmentIds = assignments.map((row) => String(row._id));
+    const regnos = assignments.map((row) => row.regno).filter(Boolean);
+    const [submissions, progress, oral] = await Promise.all([
+      PhdSubmission.find({ colid, assignmentid: { $in: assignmentIds } }).sort({ createdAt: -1 }).lean(),
+      PhdProgressReport.find({ colid, assignmentid: { $in: assignmentIds } }).sort({ progressdate: -1, createdAt: -1 }).lean(),
+      PhdOralDefenseAssignment.find({ colid, regno: { $in: regnos } }).select("assignmentid submissionid regno status oraldefensedate").lean()
+    ]);
+    const completedRegnos = new Set(oral.filter((row) => /^Approved$/i.test(row.status)).map((row) => row.regno));
+    const data = assignments.map((row) => ({
+      ...row,
+      guidecompletionstatus: completedRegnos.has(row.regno) ? "Completed" : "Ongoing",
+      submissions: submissions.filter((item) => String(item.assignmentid) === String(row._id)),
+      progressreports: progress.filter((item) => String(item.assignmentid) === String(row._id))
+    }));
+    res.json({ success: true, data, submissions, progress, institution: await institution(colid) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.guideMessages = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const query = { colid };
+    if (text(req.query.assignmentid)) query.assignmentid = text(req.query.assignmentid);
+    else {
+      const login = text(req.query.user);
+      query.$or = [{ studentemail: regex(login) }, { guideemail: regex(login) }, { regno: regex(req.query.regno || "") }];
+    }
+    const data = await PhdGuideMessage.find(query).sort({ messagedate: 1, createdAt: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.sendGuideMessage = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const assignment = await PhdAssignment.findOne({ colid, _id: req.body.assignmentid, assignmentapprovalstatus: /^Approved$/i }).lean();
+    if (!assignment) return res.status(404).json({ success: false, message: "Approved thesis assignment not found." });
+    const message = text(req.body.message);
+    if (!message) return res.status(400).json({ success: false, message: "Message is required." });
+    const data = await PhdGuideMessage.create({
+      colid,
+      assignmentid: String(assignment._id),
+      academicyear: assignment.academicyear,
+      regulation: assignment.regulation,
+      program: assignment.program,
+      programcode: assignment.programcode,
+      student: assignment.student,
+      regno: assignment.regno,
+      studentemail: assignment.email || "",
+      guidename: assignment.guidename,
+      guideemail: assignment.guideemail,
+      sendername: text(req.body.name),
+      senderemail: text(req.body.user),
+      senderrole: text(req.body.role),
+      message,
+      documents: parseDocuments(req.body.documents)
+    });
+    res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1609,8 +2000,13 @@ exports.reviewPrintable = async (req, res) => {
     if (submissionid) query.submissionid = submissionid;
     else applyFilters(query, req.query, ["academicyear", "regulation", "program", "programcode", "student", "regno"]);
     const assignments = await PhdExaminerAssignment.find(query).sort({ examinername: 1 }).lean();
-    const assessments = await PhdExaminerAssessment.find({ colid, submissionid: { $in: assignments.map((row) => row.submissionid) } }).sort({ examinername: 1, group: 1, topic: 1 }).lean();
-    res.json({ success: true, assignments, assessments, institution: await institution(colid) });
+    const submissionIds = assignments.map((row) => row.submissionid).filter(Boolean);
+    const [assessments, submissions, progress] = await Promise.all([
+      PhdExaminerAssessment.find({ colid, submissionid: { $in: submissionIds } }).sort({ examinername: 1, group: 1, topic: 1 }).lean(),
+      PhdSubmission.find({ colid, _id: { $in: submissionIds } }).lean(),
+      PhdProgressReport.find({ colid, assignmentid: { $in: assignments.map((row) => row.assignmentid).filter(Boolean) } }).sort({ progressdate: -1 }).lean()
+    ]);
+    res.json({ success: true, assignments, assessments, submissions, progress, institution: await institution(colid) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1923,6 +2319,11 @@ exports.oralDefenseCandidateReport = async (req, res) => {
       PhdOralDefenseAssignment.find({ colid, submissionid }).sort({ oraldefensedate: 1, examinername: 1 }).lean(),
       PhdOralDefenseApproval.findOne({ colid, submissionid }).lean()
     ]);
+    const assignmentid = submission?.assignmentid || oralAssignment.assignmentid || "";
+    const [progressReports, messages] = await Promise.all([
+      assignmentid ? PhdProgressReport.find({ colid, assignmentid }).sort({ progressdate: -1, createdAt: -1 }).lean() : [],
+      assignmentid ? PhdGuideMessage.find({ colid, assignmentid }).sort({ messagedate: 1 }).lean() : []
+    ]);
     res.json({
       success: true,
       assignment: oralAssignment,
@@ -1932,6 +2333,8 @@ exports.oralDefenseCandidateReport = async (req, res) => {
       nocApproval,
       oralAssignments,
       oralApproval,
+      progressReports,
+      messages,
       institution: await institution(colid)
     });
   } catch (error) {

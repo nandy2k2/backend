@@ -28,7 +28,11 @@ const OnlineExamAnswerSchema = new mongoose.Schema({
 
 const OnlineExamAttemptSchema = new mongoose.Schema({
   colid: { type: Number, required: true, index: true },
+  examcontext: { type: String, default: "Student", index: true },
   examid: { type: mongoose.Schema.Types.ObjectId, ref: "onlineexamds", index: true },
+  applicantid: String,
+  applicationnumber: String,
+  category: String,
   examname: String,
   examcode: String,
   academicyear: String,

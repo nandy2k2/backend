@@ -1,6 +1,7 @@
 const multer = require("multer");
 const path = require("path");
 const AWS = require("aws-sdk");
+const mongoose = require("mongoose");
 const OnlineExam = require("../Models/onlineexamds");
 const OnlineExamAttempt = require("../Models/onlineexamattemptds");
 const User = require("../Models/user");
@@ -12,6 +13,10 @@ const AiConfiguration = require("../Models/aiconfigurationds");
 const OllamaConfiguration = require("../Models/ollamaconfigurationds");
 const NepLmsClassGroup = require("../Models/neplmsclassgroupds");
 const OnlineExamCourseGroupAssignment = require("../Models/onlineexamcoursegroupassignmentds");
+const AdmissionApplication = require("../Models/admissionapplicationdynamic");
+const AdmissionOnlineExamAssignment = require("../Models/admissiononlineexamassignmentds");
+const AdmissionEntranceComponent = require("../Models/admissionentrancecomponentds");
+const AdmissionEntranceMarks = require("../Models/admissionentrancemarksds");
 
 const upload = multer({ storage: multer.memoryStorage() });
 exports.uploadMiddleware = upload.single("file");
@@ -24,6 +29,7 @@ const num = (value, fallback = 0) => {
 const esc = (value) => text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const uniq = (arr) => [...new Set((arr || []).map(text).filter(Boolean))].sort();
 const arr = (value) => Array.isArray(value) ? value.map(text).filter(Boolean) : text(value) ? [text(value)] : [];
+const geminiModels = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"];
 const s3Url = (bucket, region, key) => region === "us-east-1"
   ? `https://${bucket}.s3.amazonaws.com/${key.split("/").map(encodeURIComponent).join("/")}`
   : `https://${bucket}.s3.${region}.amazonaws.com/${key.split("/").map(encodeURIComponent).join("/")}`;
@@ -80,7 +86,9 @@ const parseJsonFromText = (raw) => {
 
 const examPayload = (body = {}) => ({
   colid: num(body.colid),
+  examcontext: text(body.examcontext || body.context || "Student"),
   academicyear: text(body.academicyear),
+  category: text(body.category),
   program: text(body.program),
   programcode: text(body.programcode),
   course: text(body.course),
@@ -99,7 +107,7 @@ const examPayload = (body = {}) => ({
 
 const dynamicQuery = (body = {}) => {
   const query = { colid: num(body.colid) };
-  ["academicyear", "program", "programcode", "course", "coursecode", "examname", "examcode", "status", "student", "regno"].forEach((field) => {
+  ["examcontext", "academicyear", "category", "program", "programcode", "course", "coursecode", "examname", "examcode", "status", "student", "regno", "applicantid", "applicationnumber", "email"].forEach((field) => {
     if (text(body[field])) query[field] = { $regex: esc(body[field]), $options: "i" };
   });
   if (Array.isArray(body.dynamicFilters)) {
@@ -184,12 +192,15 @@ const courseGroupMatch = (source = {}) => {
 exports.options = async (req, res) => {
   try {
     const colid = num(req.query.colid);
-    const responseFields = ["academicyear", "program", "programcode", "course", "coursecode", "examname", "examcode", "student", "regno", "status"];
+    const examcontext = text(req.query.examcontext || req.query.context);
+    const responseFields = ["examcontext", "academicyear", "category", "program", "programcode", "course", "coursecode", "examname", "examcode", "student", "regno", "applicationnumber", "email", "status"];
+    const attemptBase = { colid };
+    if (examcontext) attemptBase.examcontext = examcontext;
     const [courses, users, ollama, ...responseValuesList] = await Promise.all([
       RegulationCourseMap.find({ colid }).select("academicyear program programcode course coursecode").lean(),
       User.find({ colid, role: /^Student$/i }).select("name email regno academicyear program programcode semester").limit(2000).lean(),
       OllamaConfiguration.find({ colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean(),
-      ...responseFields.map((field) => OnlineExamAttempt.distinct(field, { colid }))
+      ...responseFields.map((field) => OnlineExamAttempt.distinct(field, attemptBase))
     ]);
     const responseValues = {};
     responseFields.forEach((field, index) => { responseValues[field] = uniq(responseValuesList[index]); });
@@ -260,6 +271,10 @@ exports.listExams = async (req, res) => {
 exports.saveExam = async (req, res) => {
   try {
     const data = examPayload(req.body);
+    if (/^admission$/i.test(data.examcontext)) {
+      data.course = data.course || "Admission Entrance";
+      data.coursecode = data.coursecode || data.category || "ENTRANCE";
+    }
     if (!data.colid || !data.academicyear || !data.programcode || !data.coursecode || !data.examname) {
       return res.status(400).json({ success: false, message: "Academic year, program code, course code and exam name are required" });
     }
@@ -420,6 +435,512 @@ exports.studentExams = async (req, res) => {
     const attempts = await OnlineExamAttempt.find({ colid, regno, examid: { $in: exams.map((e) => e._id) } }).lean();
     const byExam = Object.fromEntries(attempts.map((a) => [String(a.examid), a]));
     res.json({ success: true, student: user, data: exams.map((exam) => ({ ...exam, attempt: byExam[String(exam._id)] || null, canStart: currentAllowed(exam) && !byExam[String(exam._id)]?.submittime })) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const admissionFields = ["academicyear", "category", "programapplied", "programcode", "name", "email", "phone", "applicationid", "applicationnumber", "username", "applicationstatus", "enrollmentstatus", "paymentstatus"];
+const entranceComponentFields = ["academicyear", "regulation", "program", "programcode", "component", "status"];
+
+const admissionAppQuery = (body = {}) => {
+  const query = { colid: num(body.colid) };
+  (Array.isArray(body.dynamicFilters) ? body.dynamicFilters : []).forEach((filter) => {
+    const field = text(filter.field);
+    const value = text(filter.value);
+    if (!field || !value || field.includes("$")) return;
+    const target = field === "program" ? "programapplied" : field;
+    query[target] = text(filter.operator).toLowerCase() === "equals" ? value : { $regex: esc(value), $options: "i" };
+  });
+  return query;
+};
+
+exports.admissionOptions = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const [exams, ollama] = await Promise.all([
+      OnlineExam.find({ colid, examcontext: /^Admission$/i }).select("examname examcode academicyear category program programcode starttime endtime timezone status").sort({ createdAt: -1 }).lean(),
+      OllamaConfiguration.find({ colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean()
+    ]);
+    const applicationValues = {};
+    await Promise.all(admissionFields.map(async (field) => {
+      const dbField = field === "program" ? "programapplied" : field;
+      applicationValues[field] = uniq(await AdmissionApplication.distinct(dbField, { colid }));
+    }));
+    const examValues = {};
+    await Promise.all(["academicyear", "category", "program", "programcode", "examname", "examcode", "status"].map(async (field) => {
+      examValues[field] = uniq(await OnlineExam.distinct(field, { colid, examcontext: /^Admission$/i }));
+    }));
+    res.json({ success: true, exams, applicationFields: admissionFields, applicationValues, examValues, ollama, geminiModels });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.searchAdmissionApplications = async (req, res) => {
+  try {
+    const rows = await AdmissionApplication.find(admissionAppQuery(req.body))
+      .select("academicyear category programapplied programcode name email phone applicationid applicationnumber username applicationstatus enrollmentstatus paymentstatus createdAt")
+      .sort({ createdAt: -1 })
+      .limit(2000)
+      .lean();
+    res.json({ success: true, data: rows.map((row) => ({ ...row, program: row.programapplied || row.program })) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.assignAdmissionExam = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const exam = await OnlineExam.findOne({ _id: req.body.examid, colid, examcontext: /^Admission$/i }).lean();
+    if (!exam) return res.status(404).json({ success: false, message: "Admission exam not found" });
+    const ids = Array.isArray(req.body.applicationids) ? req.body.applicationids.map(text).filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one admission application" });
+    const apps = await AdmissionApplication.find({ colid, _id: { $in: ids } }).lean();
+    const ops = apps.map((app) => {
+      const applicationid = text(app.applicationid || app._id);
+      return {
+        updateOne: {
+          filter: { colid, examid: exam._id, applicationid },
+          update: {
+            $set: {
+              colid,
+              examid: exam._id,
+              examname: exam.examname,
+              examcode: exam.examcode,
+              academicyear: exam.academicyear || app.academicyear,
+              category: exam.category || app.category,
+              program: exam.program || app.programapplied,
+              programcode: exam.programcode || app.programcode,
+              applicationid,
+              applicationnumber: text(app.applicationnumber),
+              applicantname: text(app.name),
+              applicantemail: text(app.email),
+              username: text(app.username || app.email),
+              status: text(req.body.status || "Assigned"),
+              assignedby: text(req.body.user),
+              assignedbyname: text(req.body.username),
+              remarks: text(req.body.remarks)
+            }
+          },
+          upsert: true
+        }
+      };
+    });
+    if (ops.length) await AdmissionOnlineExamAssignment.bulkWrite(ops);
+    res.json({ success: true, assigned: ops.length });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.listAdmissionAssignments = async (req, res) => {
+  try {
+    const query = dynamicQuery(req.query);
+    delete query.examcontext;
+    ["applicantname", "applicantemail", "applicationid", "applicationnumber"].forEach((field) => {
+      if (text(req.query[field])) query[field] = { $regex: esc(req.query[field]), $options: "i" };
+    });
+    const rows = await AdmissionOnlineExamAssignment.find(query).sort({ createdAt: -1 }).limit(2000).lean();
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.applicantLogin = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const username = text(req.body.username);
+    const password = text(req.body.password);
+    if (!colid || !username || !password) return res.status(400).json({ success: false, message: "Institution id, username and password are required" });
+    const app = await AdmissionApplication.findOne({
+      colid,
+      $or: [{ username }, { email: username }, { applicationid: username }, { applicationnumber: username }]
+    }).lean();
+    if (!app || text(app.password) !== password) return res.status(401).json({ success: false, message: "Invalid applicant login" });
+    res.json({ success: true, applicant: {
+      _id: app._id,
+      applicationid: app.applicationid || String(app._id),
+      applicationnumber: app.applicationnumber || "",
+      name: app.name,
+      email: app.email,
+      username: app.username || app.email,
+      academicyear: app.academicyear,
+      category: app.category,
+      program: app.programapplied,
+      programcode: app.programcode,
+      colid
+    }});
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.applicantExams = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const applicationid = text(req.query.applicationid);
+    const assignments = await AdmissionOnlineExamAssignment.find({ colid, applicationid, status: /^Assigned|Active$/i }).lean();
+    const exams = await OnlineExam.find({ colid, _id: { $in: assignments.map((a) => a.examid) }, examcontext: /^Admission$/i, status: /^Published$/i }).sort({ starttime: 1 }).lean();
+    const attempts = await OnlineExamAttempt.find({ colid, examid: { $in: exams.map((e) => e._id) }, regno: applicationid, examcontext: /^Admission$/i }).lean();
+    const byExam = Object.fromEntries(attempts.map((a) => [String(a.examid), a]));
+    res.json({ success: true, data: exams.map((exam) => ({ ...exam, attempt: byExam[String(exam._id)] || null, canStart: currentAllowed(exam) && !byExam[String(exam._id)]?.submittime })) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.startApplicantAttempt = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const applicationid = text(req.body.applicationid);
+    const exam = await OnlineExam.findOne({ _id: req.body.examid, colid, examcontext: /^Admission$/i, status: /^Published$/i }).lean();
+    if (!exam) return res.status(404).json({ success: false, message: "Admission exam not found" });
+    if (!currentAllowed(exam)) return res.status(400).json({ success: false, message: `Exam is available between ${exam.starttime} and ${exam.endtime} (${exam.timezone})` });
+    const assignment = await AdmissionOnlineExamAssignment.findOne({ colid, examid: exam._id, applicationid }).lean();
+    if (!assignment) return res.status(403).json({ success: false, message: "This exam is not assigned to this applicant" });
+    const appMatch = [{ applicationid }];
+    if (mongoose.Types.ObjectId.isValid(applicationid)) appMatch.push({ _id: applicationid });
+    const app = await AdmissionApplication.findOne({ colid, $or: appMatch }).lean();
+    if (!app) return res.status(404).json({ success: false, message: "Applicant not found" });
+    const existing = await OnlineExamAttempt.findOne({ colid, examid: exam._id, regno: applicationid, examcontext: /^Admission$/i });
+    if (existing?.submittime) return res.status(400).json({ success: false, message: "Exam already submitted" });
+    const totalSeconds = Math.max(60, num(exam.durationminutes, 60) * 60);
+    const orderedExam = existing ? examWithAttemptQuestionOrder(exam, existing) : shuffledExamForAttempt(exam);
+    const attempt = existing || await OnlineExamAttempt.create({
+      colid,
+      examcontext: "Admission",
+      examid: exam._id,
+      examname: exam.examname,
+      examcode: exam.examcode,
+      academicyear: exam.academicyear || app.academicyear,
+      category: exam.category || app.category,
+      program: exam.program || app.programapplied,
+      programcode: exam.programcode || app.programcode,
+      course: exam.course,
+      coursecode: exam.coursecode,
+      student: app.name,
+      email: app.email,
+      regno: applicationid,
+      applicantid: applicationid,
+      applicationnumber: app.applicationnumber,
+      starttime: new Date(),
+      status: "Started",
+      remainingseconds: totalSeconds,
+      totalmarks: initialAnswers(orderedExam).reduce((sum, a) => sum + num(a.maxmarks), 0),
+      answers: initialAnswers(orderedExam)
+    });
+    res.json({ success: true, exam: examWithAttemptQuestionOrder(exam, attempt), attempt });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.admissionScores = async (req, res) => {
+  try {
+    const query = dynamicQuery({ ...req.body, examcontext: "Admission" });
+    const rows = await OnlineExamAttempt.find(query).sort({ marksobtained: -1, updatedAt: -1 }).limit(3000).lean();
+    const byProgram = {};
+    rows.forEach((r) => {
+      const key = r.programcode || "NA";
+      byProgram[key] = byProgram[key] || { programcode: key, candidates: 0, submitted: 0, average: 0, marks: 0 };
+      byProgram[key].candidates += 1;
+      if (r.submittime) byProgram[key].submitted += 1;
+      byProgram[key].marks += num(r.marksobtained);
+    });
+    Object.values(byProgram).forEach((r) => { r.average = r.candidates ? Number((r.marks / r.candidates).toFixed(2)) : 0; });
+    res.json({ success: true, data: rows, byProgram: Object.values(byProgram), summary: {
+      candidates: rows.length,
+      submitted: rows.filter((r) => r.submittime).length,
+      graded: rows.filter((r) => /^Graded$/i.test(r.status)).length,
+      average: rows.length ? Number((rows.reduce((s, r) => s + num(r.marksobtained), 0) / rows.length).toFixed(2)) : 0
+    }});
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const entranceBaseQuery = (body = {}) => {
+  const query = { colid: num(body.colid) };
+  entranceComponentFields.forEach((field) => {
+    if (text(body[field])) query[field] = { $regex: esc(body[field]), $options: "i" };
+  });
+  if (Array.isArray(body.dynamicFilters)) {
+    body.dynamicFilters.forEach((filter) => {
+      const field = text(filter.field);
+      const value = text(filter.value);
+      if (!field || !value || field.includes("$")) return;
+      query[field] = text(filter.operator).toLowerCase() === "equals" ? value : { $regex: esc(value), $options: "i" };
+    });
+  }
+  return query;
+};
+
+exports.entranceComponentOptions = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const [appYears, compYears, regulations, appPrograms, compPrograms, categories] = await Promise.all([
+      AdmissionApplication.distinct("academicyear", { colid }),
+      AdmissionEntranceComponent.distinct("academicyear", { colid }),
+      AdmissionEntranceComponent.distinct("regulation", { colid }),
+      AdmissionApplication.find({ colid }).select("programapplied programcode").limit(5000).lean(),
+      AdmissionEntranceComponent.find({ colid }).select("program programcode").limit(5000).lean(),
+      AdmissionApplication.distinct("category", { colid })
+    ]);
+    const programMap = new Map();
+    [...appPrograms, ...compPrograms].forEach((row) => {
+      const code = text(row.programcode);
+      const name = text(row.program || row.programapplied);
+      if (code || name) programMap.set(`${name}||${code}`, { program: name, programcode: code });
+    });
+    const valueOptions = {};
+    await Promise.all(entranceComponentFields.map(async (field) => {
+      valueOptions[field] = uniq(await AdmissionEntranceComponent.distinct(field, { colid }));
+    }));
+    res.json({
+      success: true,
+      academicyears: uniq([...appYears, ...compYears]),
+      regulations: uniq(regulations),
+      programs: [...programMap.values()].sort((a, b) => `${a.program} ${a.programcode}`.localeCompare(`${b.program} ${b.programcode}`)),
+      categories: uniq(categories),
+      valueOptions
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.listEntranceComponents = async (req, res) => {
+  try {
+    const rows = await AdmissionEntranceComponent.find(entranceBaseQuery(req.query)).sort({ academicyear: -1, programcode: 1, order: 1, component: 1 }).limit(2000).lean();
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.saveEntranceComponent = async (req, res) => {
+  try {
+    const payload = {
+      colid: num(req.body.colid),
+      academicyear: text(req.body.academicyear),
+      regulation: text(req.body.regulation),
+      program: text(req.body.program),
+      programcode: text(req.body.programcode),
+      component: text(req.body.component),
+      maxmarks: num(req.body.maxmarks),
+      order: num(req.body.order),
+      status: text(req.body.status || "Active"),
+      user: text(req.body.user),
+      username: text(req.body.username)
+    };
+    if (!payload.colid || !payload.academicyear || !payload.programcode || !payload.component) {
+      return res.status(400).json({ success: false, message: "Academic year, program code and component are required" });
+    }
+    const row = req.body.id
+      ? await AdmissionEntranceComponent.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true })
+      : await AdmissionEntranceComponent.findOneAndUpdate({
+        colid: payload.colid,
+        academicyear: payload.academicyear,
+        regulation: payload.regulation,
+        programcode: payload.programcode,
+        component: payload.component
+      }, payload, { new: true, upsert: true });
+    res.json({ success: true, data: row });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteEntranceComponents = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(text).filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select records to delete" });
+    const result = await AdmissionEntranceComponent.deleteMany({ colid: num(req.body.colid), _id: { $in: ids } });
+    res.json({ success: true, deletedCount: result.deletedCount || 0 });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.loadEntranceMarks = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const criteria = {
+      colid,
+      academicyear: text(req.body.academicyear),
+      regulation: text(req.body.regulation),
+      programcode: text(req.body.programcode)
+    };
+    const componentQuery = { ...criteria, status: /^Active$/i };
+    if (text(req.body.program)) componentQuery.program = { $regex: esc(req.body.program), $options: "i" };
+    const appQuery = admissionAppQuery(req.body);
+    if (criteria.academicyear) appQuery.academicyear = criteria.academicyear;
+    if (text(req.body.category)) appQuery.category = text(req.body.category);
+    if (text(req.body.program)) appQuery.programapplied = { $regex: esc(req.body.program), $options: "i" };
+    if (criteria.programcode) appQuery.programcode = criteria.programcode;
+    const [components, applications] = await Promise.all([
+      AdmissionEntranceComponent.find(componentQuery).sort({ order: 1, component: 1 }).lean(),
+      AdmissionApplication.find(appQuery).select("academicyear category programapplied programcode name email phone applicationid applicationnumber username").sort({ name: 1 }).limit(3000).lean()
+    ]);
+    const appIds = applications.map((app) => text(app.applicationid || app._id));
+    const existing = await AdmissionEntranceMarks.find({ colid, academicyear: criteria.academicyear, regulation: criteria.regulation, programcode: criteria.programcode, applicationid: { $in: appIds } }).lean();
+    const marksMap = new Map(existing.map((row) => [text(row.applicationid), row]));
+    const rows = applications.map((app) => {
+      const applicationid = text(app.applicationid || app._id);
+      const saved = marksMap.get(applicationid);
+      const componentMarks = {};
+      (saved?.marks || []).forEach((m) => { componentMarks[text(m.componentid)] = m.marks; });
+      return {
+        id: String(app._id),
+        _id: String(app._id),
+        applicationid,
+        applicationnumber: app.applicationnumber || "",
+        applicantname: app.name || "",
+        applicantemail: app.email || "",
+        category: app.category || "",
+        academicyear: app.academicyear || "",
+        program: app.programapplied || "",
+        programcode: app.programcode || "",
+        componentMarks,
+        totalmarks: saved?.totalmarks || 0
+      };
+    });
+    res.json({ success: true, components, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.saveEntranceMarks = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const components = await AdmissionEntranceComponent.find({
+      colid,
+      academicyear: text(req.body.academicyear),
+      regulation: text(req.body.regulation),
+      programcode: text(req.body.programcode)
+    }).lean();
+    const byId = new Map(components.map((c) => [String(c._id), c]));
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    const ops = rows.map((row) => {
+      const marksObj = row.componentMarks || {};
+      const marks = Object.keys(marksObj).map((componentid) => {
+        const component = byId.get(componentid) || {};
+        return {
+          componentid,
+          component: component.component || "",
+          maxmarks: num(component.maxmarks),
+          marks: num(marksObj[componentid])
+        };
+      }).filter((m) => m.componentid);
+      const totalmarks = marks.reduce((sum, m) => sum + num(m.marks), 0);
+      return {
+        updateOne: {
+          filter: {
+            colid,
+            academicyear: text(req.body.academicyear),
+            regulation: text(req.body.regulation),
+            programcode: text(req.body.programcode),
+            applicationid: text(row.applicationid)
+          },
+          update: {
+            $set: {
+              colid,
+              academicyear: text(req.body.academicyear),
+              regulation: text(req.body.regulation),
+              category: text(row.category || req.body.category),
+              program: text(row.program || req.body.program),
+              programcode: text(req.body.programcode || row.programcode),
+              applicationid: text(row.applicationid),
+              applicationnumber: text(row.applicationnumber),
+              applicantname: text(row.applicantname),
+              applicantemail: text(row.applicantemail),
+              marks,
+              totalmarks,
+              user: text(req.body.user),
+              username: text(req.body.username)
+            }
+          },
+          upsert: true
+        }
+      };
+    }).filter((op) => op.updateOne.filter.applicationid);
+    if (ops.length) await AdmissionEntranceMarks.bulkWrite(ops);
+    res.json({ success: true, saved: ops.length });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.entranceReport = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const criteria = {
+      colid,
+      academicyear: text(req.body.academicyear),
+      regulation: text(req.body.regulation),
+      programcode: text(req.body.programcode)
+    };
+    const componentQuery = { ...criteria };
+    const appQuery = admissionAppQuery(req.body);
+    if (criteria.academicyear) appQuery.academicyear = criteria.academicyear;
+    if (text(req.body.category)) appQuery.category = text(req.body.category);
+    if (text(req.body.program)) appQuery.programapplied = { $regex: esc(req.body.program), $options: "i" };
+    if (criteria.programcode) appQuery.programcode = criteria.programcode;
+    const [components, applications, marksRows, onlineRows] = await Promise.all([
+      AdmissionEntranceComponent.find(componentQuery).sort({ order: 1, component: 1 }).lean(),
+      AdmissionApplication.find(appQuery).select("academicyear category programapplied programcode name email phone applicationid applicationnumber username").sort({ name: 1 }).limit(5000).lean(),
+      AdmissionEntranceMarks.find(criteria).lean(),
+      /^yes|true|1$/i.test(text(req.body.includeOnlineExam))
+        ? OnlineExamAttempt.find({ colid, examcontext: /^Admission$/i, academicyear: criteria.academicyear, programcode: criteria.programcode, submittime: { $ne: null } }).lean()
+        : Promise.resolve([])
+    ]);
+    const marksMap = new Map(marksRows.map((row) => [text(row.applicationid), row]));
+    const onlineTotals = new Map();
+    onlineRows.forEach((row) => {
+      const id = text(row.applicantid || row.regno);
+      onlineTotals.set(id, (onlineTotals.get(id) || 0) + num(row.marksobtained));
+    });
+    let rows = applications.map((app) => {
+      const applicationid = text(app.applicationid || app._id);
+      const saved = marksMap.get(applicationid);
+      const markByComponent = {};
+      (saved?.marks || []).forEach((m) => { markByComponent[text(m.componentid)] = num(m.marks); });
+      const componentTotal = components.reduce((sum, c) => sum + num(markByComponent[String(c._id)]), 0);
+      const onlineExamMarks = onlineTotals.get(applicationid) || 0;
+      return {
+        id: String(app._id),
+        applicationid,
+        applicationnumber: app.applicationnumber || "",
+        applicantname: app.name || "",
+        applicantemail: app.email || "",
+        category: app.category || "",
+        academicyear: app.academicyear || "",
+        program: app.programapplied || "",
+        programcode: app.programcode || "",
+        componentMarks: markByComponent,
+        componentTotal,
+        onlineExamMarks,
+        overallMarks: componentTotal + onlineExamMarks
+      };
+    });
+    const sortBy = text(req.body.sortBy || "overallMarks");
+    const sortDir = /^asc$/i.test(text(req.body.sortDir)) ? 1 : -1;
+    rows = rows.sort((a, b) => {
+      const av = a[sortBy] ?? a.componentMarks?.[sortBy] ?? "";
+      const bv = b[sortBy] ?? b.componentMarks?.[sortBy] ?? "";
+      if (typeof av === "number" || typeof bv === "number") return (num(av) - num(bv)) * sortDir;
+      return String(av).localeCompare(String(bv)) * sortDir;
+    });
+    rows = rows.map((row, index) => ({ ...row, rank: index + 1 }));
+    res.json({ success: true, components, data: rows, summary: {
+      candidates: rows.length,
+      average: rows.length ? Number((rows.reduce((sum, row) => sum + num(row.overallMarks), 0) / rows.length).toFixed(2)) : 0,
+      highest: rows.length ? Math.max(...rows.map((row) => num(row.overallMarks))) : 0
+    }});
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
