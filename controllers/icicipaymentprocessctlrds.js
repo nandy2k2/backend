@@ -27,6 +27,10 @@ function regex(value) {
   return { $regex: text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" };
 }
 
+function exactRegex(value) {
+  return new RegExp(`^${text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+}
+
 function fallbackBackendCallbackUrl(req) {
   const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
   const host = req.headers["x-forwarded-host"] || req.headers.host;
@@ -64,6 +68,31 @@ function buildHandler(config) {
     commandUrl: config.commandurl,
     settlementUrl: config.settlementurl
   });
+}
+
+async function findIciciConfigForPayment(colid, body = {}) {
+  const program = text(body.program);
+  const programcode = text(body.programcode);
+  if (program || programcode) {
+    const programConfig = await IciciGateway.findOne({
+      colid,
+      isactive: true,
+      $or: [
+        ...(programcode ? [{ programcode: exactRegex(programcode) }] : []),
+        ...(program ? [{ program: exactRegex(program) }] : [])
+      ]
+    }).sort({ updatedAt: -1 }).lean();
+    if (programConfig) return programConfig;
+  }
+  const defaultConfig = await IciciGateway.findOne({
+    colid,
+    isactive: true,
+    $and: [
+      { $or: [{ programcode: "" }, { programcode: { $exists: false } }, { programcode: null }] },
+      { $or: [{ program: "" }, { program: { $exists: false } }, { program: null }] }
+    ]
+  }).sort({ updatedAt: -1 }).lean();
+  return defaultConfig || IciciGateway.findOne({ colid, isactive: true }).sort({ updatedAt: -1 }).lean();
 }
 
 function normalizeStatus(params = {}) {
@@ -115,7 +144,7 @@ exports.initiateIciciPayment = async (req, res) => {
       return res.status(400).json({ success: false, message: "Student, regno, fee item and amount are required" });
     }
 
-    const config = await IciciGateway.findOne({ colid, isactive: true }).sort({ updatedAt: -1 }).lean();
+    const config = await findIciciConfigForPayment(colid, req.body);
     if (!config) return res.status(404).json({ success: false, message: "Active ICICI configuration not found" });
 
     const handler = buildHandler(config);
@@ -139,6 +168,9 @@ exports.initiateIciciPayment = async (req, res) => {
       source: text(req.body.source),
       sourceid: text(req.body.sourceid),
       studentonlinepaymentid: text(req.body.studentonlinepaymentid),
+      gatewayconfigid: String(config._id || ""),
+      gatewayprogram: text(config.program),
+      gatewayprogramcode: text(config.programcode),
       refno,
       merchantTxnNo,
       txnid: merchantTxnNo,
@@ -206,7 +238,9 @@ exports.handleIciciPaymentCallback = async (req, res) => {
     const payment = await IciciPayment.findOne({ merchantTxnNo });
     if (!payment) throw new Error("Payment record not found");
 
-    const config = await IciciGateway.findOne({ colid: payment.colid }).sort({ isactive: -1, updatedAt: -1 }).lean();
+    const config = payment.gatewayconfigid
+      ? await IciciGateway.findOne({ _id: payment.gatewayconfigid, colid: payment.colid }).lean()
+      : await IciciGateway.findOne({ colid: payment.colid }).sort({ isactive: -1, updatedAt: -1 }).lean();
     if (!config) throw new Error("ICICI configuration not found");
 
     const handler = buildHandler(config);

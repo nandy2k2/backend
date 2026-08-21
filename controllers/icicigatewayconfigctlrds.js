@@ -18,6 +18,8 @@ function payload(body = {}) {
     name: text(body.name),
     user: text(body.user),
     colid: Number(body.colid),
+    program: text(body.program),
+    programcode: text(body.programcode),
     merchantid: text(body.merchantid),
     aggregatorid: text(body.aggregatorid),
     secretkey: text(body.secretkey),
@@ -34,6 +36,8 @@ function queryFrom(source = {}) {
   const query = { colid: Number(source.colid) };
   if (text(source.environment)) query.environment = text(source.environment);
   if (text(source.isactive)) query.isactive = bool(source.isactive);
+  if (text(source.program)) query.program = { $regex: escapeRegex(source.program), $options: "i" };
+  if (text(source.programcode)) query.programcode = { $regex: escapeRegex(source.programcode), $options: "i" };
   if (text(source.merchantid)) query.merchantid = { $regex: escapeRegex(source.merchantid), $options: "i" };
   if (text(source.aggregatorid)) query.aggregatorid = { $regex: escapeRegex(source.aggregatorid), $options: "i" };
   return query;

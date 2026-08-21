@@ -13,6 +13,14 @@ const icicigatewaydsschema = new mongoose.Schema({
     type: Number,
     required: [true, 'Please enter colid']
   },
+  program: {
+    type: String,
+    default: ''
+  },
+  programcode: {
+    type: String,
+    default: ''
+  },
   merchantid: {
     type: String,
     required: [true, 'Please enter merchant id']
@@ -50,6 +58,7 @@ const icicigatewaydsschema = new mongoose.Schema({
 
 icicigatewaydsschema.index({ colid: 1 });
 icicigatewaydsschema.index({ colid: 1, isactive: 1 });
+icicigatewaydsschema.index({ colid: 1, programcode: 1, isactive: 1 });
 
 const icicigatewayds = mongoose.models.icicigatewayds || mongoose.model('icicigatewayds', icicigatewaydsschema);
 module.exports = icicigatewayds;
