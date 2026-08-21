@@ -124,6 +124,9 @@ const userschema = new mongoose.Schema({
     category: {
         type: String
     },
+    nationality: {
+        type: String
+    },
     address: {
         type: String
     },

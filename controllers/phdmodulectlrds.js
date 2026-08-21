@@ -16,6 +16,7 @@ const PhdOralDefensePanelMember = require("../Models/phdoraldefensepanelmemberds
 const PhdOralDefensePanelWorkflow = require("../Models/phdoraldefensepanelworkflowds");
 const PhdExamPanel = require("../Models/phdexampanelds");
 const PhdExamPanelMember = require("../Models/phdexampanelmemberds");
+const PhdExamPanelWorkflow = require("../Models/phdexampanelworkflowds");
 const PhdExaminerAssignment = require("../Models/phdexaminerassignmentds");
 const PhdExaminerRubric = require("../Models/phdexaminerrubricds");
 const PhdExaminerAssessment = require("../Models/phdexaminerassessmentds");
@@ -195,6 +196,24 @@ function oralPanelWorkflowPayload(body = {}) {
   };
 }
 
+function examPanelWorkflowPayload(body = {}) {
+  return {
+    colid: num(body.colid),
+    academicyear: text(body.academicyear),
+    regulation: text(body.regulation),
+    program: text(body.program),
+    programcode: text(body.programcode),
+    level: num(body.level),
+    approvername: text(body.approvername),
+    approveremail: text(body.approveremail),
+    role: text(body.role),
+    status: text(body.status) || "Active",
+    remarks: text(body.remarks),
+    name: text(body.name),
+    user: text(body.user)
+  };
+}
+
 function panelPayload(body = {}) {
   return {
     colid: num(body.colid),
@@ -204,6 +223,11 @@ function panelPayload(body = {}) {
     programcode: text(body.programcode),
     panelname: text(body.panelname),
     description: text(body.description),
+    approvalstatus: text(body.approvalstatus) || "Draft",
+    currentlevel: num(body.currentlevel),
+    currentapprovername: text(body.currentapprovername),
+    currentapproveremail: text(body.currentapproveremail),
+    comments: text(body.comments),
     status: text(body.status) || "Active",
     name: text(body.name),
     user: text(body.user)
@@ -523,6 +547,58 @@ async function oralPanelWorkflowFor(row) {
   }).sort({ level: 1 }).lean();
 }
 
+async function examPanelWorkflowFor(row) {
+  return PhdExamPanelWorkflow.find({
+    colid: row.colid,
+    programcode: regex(row.programcode),
+    status: /^Active$/i,
+    $or: [
+      { academicyear: "" },
+      { academicyear: { $exists: false } },
+      { academicyear: regex(row.academicyear) }
+    ]
+  }).sort({ level: 1 }).lean();
+}
+
+async function submitExamPanelMembers(panel, actor = {}) {
+  const workflow = await examPanelWorkflowFor(panel);
+  const first = workflow[0];
+  const members = await PhdExamPanelMember.find({ colid: panel.colid, panelid: String(panel._id), approvalstatus: { $in: ["Pending", "Rejected"] } });
+  for (const member of members) {
+    member.approvalstatus = first ? "Submitted" : "Submitted";
+    member.currentlevel = first ? first.level : 0;
+    member.currentapprovername = first ? first.approvername : "";
+    member.currentapproveremail = first ? first.approveremail : "";
+    member.approveddate = undefined;
+    member.rejecteddate = undefined;
+    member.approvalcomments = text(actor.comments);
+    member.history.push({
+      action: first ? "Submitted for examiner panel member approval" : "Submitted for final examiner panel approval",
+      level: first ? first.level : 0,
+      approvername: text(actor.name),
+      approveremail: text(actor.user),
+      comments: text(actor.comments),
+      date: new Date()
+    });
+    await member.save();
+  }
+  panel.approvalstatus = "Submitted";
+  panel.currentlevel = first ? first.level : 0;
+  panel.currentapprovername = first ? first.approvername : "";
+  panel.currentapproveremail = first ? first.approveremail : "";
+  panel.comments = text(actor.comments);
+  panel.history.push({
+    action: first ? "Members submitted for examiner panel approval" : "Members submitted for final examiner panel approval",
+    level: first ? first.level : 0,
+    approvername: text(actor.name),
+    approveremail: text(actor.user),
+    comments: text(actor.comments),
+    date: new Date()
+  });
+  await panel.save();
+  return { panel, submitted: members.length };
+}
+
 async function submitOralPanel(panel, actor = {}) {
   const workflow = await oralPanelWorkflowFor(panel);
   const first = workflow[0];
@@ -758,7 +834,7 @@ exports.options = async (req, res) => {
 exports.listExamPanels = async (req, res) => {
   try {
     const query = { colid: num(req.query.colid) };
-    applyFilters(query, req.query, ["academicyear", "regulation", "program", "programcode", "panelname", "status"]);
+    applyFilters(query, req.query, ["academicyear", "regulation", "program", "programcode", "panelname", "approvalstatus", "status"]);
     const data = await PhdExamPanel.find(query).sort({ createdAt: -1 }).lean();
     res.json({ success: true, data });
   } catch (error) {
@@ -848,6 +924,148 @@ exports.deleteExamPanelMembers = async (req, res) => {
     const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
     const result = await PhdExamPanelMember.deleteMany({ colid: num(req.body.colid), _id: { $in: ids } });
     res.json({ success: true, deleted: result.deletedCount || 0 });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.listExamPanelWorkflows = async (req, res) => {
+  try {
+    const query = { colid: num(req.query.colid) };
+    applyFilters(query, req.query, ["academicyear", "regulation", "program", "programcode", "role", "approvername", "approveremail", "status"]);
+    const data = await PhdExamPanelWorkflow.find(query).sort({ programcode: 1, level: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.saveExamPanelWorkflow = async (req, res) => {
+  try {
+    const payload = examPanelWorkflowPayload(req.body);
+    if (!payload.colid || !payload.program || !payload.programcode || !payload.level || !payload.approveremail) {
+      return res.status(400).json({ success: false, message: "Program, program code, level and approver are required." });
+    }
+    const data = req.body._id
+      ? await PhdExamPanelWorkflow.findOneAndUpdate({ _id: req.body._id, colid: payload.colid }, payload, { new: true })
+      : await PhdExamPanelWorkflow.create(payload);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteExamPanelWorkflows = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+    const result = await PhdExamPanelWorkflow.deleteMany({ colid: num(req.body.colid), _id: { $in: ids } });
+    res.json({ success: true, deleted: result.deletedCount || 0 });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.submitExamPanelForApproval = async (req, res) => {
+  try {
+    const panel = await PhdExamPanel.findOne({ colid: num(req.body.colid), _id: req.body.id });
+    if (!panel) return res.status(404).json({ success: false, message: "Examiner panel not found." });
+    const members = await PhdExamPanelMember.countDocuments({ colid: panel.colid, panelid: String(panel._id) });
+    if (!members) return res.status(400).json({ success: false, message: "Add at least one examiner panel member before submission." });
+    const data = await submitExamPanelMembers(panel, { name: req.body.name, user: req.body.user, comments: req.body.comments });
+    res.json({ success: true, data: data.panel, submitted: data.submitted });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.examPanelApprovalList = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const finalOnly = /^yes$/i.test(text(req.query.finalOnly));
+    const user = text(req.query.user).toLowerCase();
+    const memberQuery = { colid, approvalstatus: /^Submitted$/i };
+    applyFilters(memberQuery, req.query, ["academicyear", "regulation", "program", "programcode", "panelname", "examinername", "examineremail", "type", "eligible", "currentapprovername", "currentapproveremail"]);
+    if (user) memberQuery.currentapproveremail = regex(user);
+    const candidates = await PhdExamPanelMember.find(memberQuery).sort({ panelname: 1, examinername: 1 }).lean();
+    const filtered = [];
+    for (const member of candidates) {
+      const workflow = await examPanelWorkflowFor(member);
+      const maxLevel = workflow.reduce((max, row) => Math.max(max, Number(row.level || 0)), 0);
+      const current = Number(member.currentlevel || 0);
+      if (finalOnly && maxLevel && current >= maxLevel) filtered.push(member);
+      else if (!finalOnly && maxLevel && current < maxLevel) filtered.push(member);
+    }
+    const panelIds = [...new Set(filtered.map((row) => row.panelid).filter(Boolean))];
+    const panels = panelIds.length ? await PhdExamPanel.find({ colid, _id: { $in: panelIds } }).sort({ updatedAt: -1 }).lean() : [];
+    res.json({ success: true, data: filtered, panels });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.examPanelApprovalAction = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+    const comments = text(req.body.comments);
+    const action = text(req.body.action);
+    const actorEmail = text(req.body.user);
+    const members = await PhdExamPanelMember.find({ colid, _id: { $in: ids }, approvalstatus: /^Submitted$/i });
+    let updated = 0;
+    const linked = [];
+    for (const member of members) {
+      if (member.currentapproveremail && !exactRegex(actorEmail).test(member.currentapproveremail)) continue;
+      if (/^reject/i.test(action)) {
+        member.approvalstatus = "Rejected";
+        member.rejecteddate = new Date();
+        member.approvalcomments = comments;
+        member.history.push({ action: "Rejected", level: member.currentlevel, approvername: text(req.body.name), approveremail: actorEmail, comments, date: new Date() });
+      } else {
+        const workflow = await examPanelWorkflowFor(member);
+        const next = workflow.find((row) => Number(row.level) > Number(member.currentlevel || 0));
+        member.history.push({ action: "Approved", level: member.currentlevel, approvername: text(req.body.name), approveremail: actorEmail, comments, date: new Date() });
+        if (next) {
+          member.approvalstatus = "Submitted";
+          member.currentlevel = next.level;
+          member.currentapprovername = next.approvername;
+          member.currentapproveremail = next.approveremail;
+          member.approvalcomments = comments;
+        } else {
+          const link = await ensureExaminerUser(member, { name: req.body.name, user: actorEmail });
+          member.approvalstatus = "Approved";
+          member.currentlevel = 0;
+          member.currentapprovername = "";
+          member.currentapproveremail = "";
+          member.approvedby = text(req.body.name);
+          member.approvedbyemail = actorEmail;
+          member.approveddate = new Date();
+          member.approvalcomments = comments;
+          member.user = link.user;
+          member.useremail = link.useremail;
+          linked.push({ examineremail: member.examineremail, useremail: member.useremail });
+        }
+      }
+      await member.save();
+      updated += 1;
+    }
+    const panelIds = [...new Set(members.map((row) => row.panelid).filter(Boolean))];
+    for (const panelid of panelIds) {
+      const panel = await PhdExamPanel.findOne({ colid, _id: panelid });
+      if (!panel) continue;
+      const remainingSubmitted = await PhdExamPanelMember.countDocuments({ colid, panelid, approvalstatus: /^Submitted$/i });
+      const approvedCount = await PhdExamPanelMember.countDocuments({ colid, panelid, approvalstatus: /^Approved$/i });
+      const rejectedCount = await PhdExamPanelMember.countDocuments({ colid, panelid, approvalstatus: /^Rejected$/i });
+      panel.approvalstatus = remainingSubmitted ? "Submitted" : (approvedCount ? "Approved" : (rejectedCount ? "Rejected" : "Draft"));
+      panel.currentlevel = 0;
+      panel.currentapprovername = "";
+      panel.currentapproveremail = "";
+      panel.comments = comments;
+      if (!remainingSubmitted && approvedCount) panel.approveddate = new Date();
+      if (!remainingSubmitted && !approvedCount && rejectedCount) panel.rejecteddate = new Date();
+      panel.history.push({ action: `${action} selected examiner panel members`, level: 0, approvername: text(req.body.name), approveremail: actorEmail, comments, date: new Date() });
+      await panel.save();
+    }
+    res.json({ success: true, updated, linked });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

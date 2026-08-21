@@ -8,6 +8,7 @@ const RegulationCourseMap = require("../Models/regulationcoursemapds");
 const RoomResource = require("../Models/roomresourceds");
 const User = require("../Models/user");
 const AcademicCalendar = require("../Models/macadcal");
+const HrLeaveHolidayList = require("../Models/hrleaveholidaylistds");
 const AiConfiguration = require("../Models/aiconfigurationds");
 const OllamaConfiguration = require("../Models/ollamaconfigurationds");
 const InsDetails = require("../Models/insdetails");
@@ -96,12 +97,24 @@ const buildExamCodeOnlyScheduleFilter = (body = {}) => {
   return filter;
 };
 
-const loadHolidayRows = async (colid, fromDate, toDate) => {
+const loadHolidayRows = async (colid, fromDate, toDate, useHrHolidayList = false) => {
   const rows = await AcademicCalendar.find({
     colid,
     type: /^holiday$/i,
     activitydate: { $gte: fromDate, $lte: toDate }
   }).lean();
+  if (useHrHolidayList) {
+    const hrRows = await HrLeaveHolidayList.find({
+      colid,
+      holidaydate: { $gte: fromDate, $lte: toDate },
+      status: { $not: /^inactive$/i }
+    }).lean();
+    rows.push(...hrRows.map((row) => ({
+      ...row,
+      activitydate: row.holidaydate,
+      type: row.holidaytype || "Holiday"
+    })));
+  }
   const map = new Map();
   rows.forEach((row) => {
     const key = dateKey(row.activitydate);
@@ -137,7 +150,7 @@ const buildAvailableSlots = (rows, holidaysByDate, fromDate, toDate, slots) => {
   return available;
 };
 
-const scheduleExamCourseRows = async ({ colid, filter, fromdate, todate, slot1, slot2, aiOrder = [] }) => {
+const scheduleExamCourseRows = async ({ colid, filter, fromdate, todate, slot1, slot2, slots: inputSlots = [], useHrHolidayList = false, aiOrder = [] }) => {
   const fromDate = parseDateOnly(fromdate);
   const toDate = parseDateOnly(todate);
   if (!fromDate || !toDate) throw new Error("Valid from date and to date are required");
@@ -146,8 +159,13 @@ const scheduleExamCourseRows = async ({ colid, filter, fromdate, todate, slot1, 
   const rows = await ConductExamCourse.find({ ...filter, colid }).sort({ semester: 1, program: 1, subject: 1, course: 1 }).lean();
   if (!rows.length) throw new Error("No exam course rows found for scheduling");
 
-  const slots = [text(slot1) || "Slot 1", text(slot2) || "Slot 2"];
-  const holidaysByDate = await loadHolidayRows(colid, fromDate, toDate);
+  const slots = (Array.isArray(inputSlots) ? inputSlots : [])
+    .map((slot) => typeof slot === "string" ? text(slot) : text(slot?.slot || slot?.name || slot?.label))
+    .filter(Boolean);
+  if (!slots.length) {
+    slots.push(text(slot1) || "Slot 1", text(slot2) || "Slot 2");
+  }
+  const holidaysByDate = await loadHolidayRows(colid, fromDate, toDate, useHrHolidayList);
   const rowAllowedSlotKeys = buildAvailableSlots(rows, holidaysByDate, fromDate, toDate, slots).reduce((acc, item) => {
     if (!acc.has(item.rowKey)) acc.set(item.rowKey, []);
     acc.get(item.rowKey).push(`${item.date}||${item.slot}`);
@@ -775,7 +793,9 @@ exports.autoScheduleExamCourses = async (req, res) => {
       fromdate: req.body.fromdate,
       todate: req.body.todate,
       slot1: req.body.slot1,
-      slot2: req.body.slot2
+      slot2: req.body.slot2,
+      slots: req.body.slots,
+      useHrHolidayList: req.body.useHrHolidayList === true || /^yes$/i.test(text(req.body.useHrHolidayList))
     });
     res.json({ success: true, ...result, message: `${result.saved} papers scheduled.` });
   } catch (err) {
@@ -793,11 +813,11 @@ exports.aiScheduleExamCourses = async (req, res) => {
     if (!rows.length) return res.status(400).json({ success: false, message: "No exam course rows found for scheduling" });
     const prompt = [
       "Create an exam paper scheduling order from the following papers.",
-      "Hard rules: only two slots per day, do not schedule two courses of the same semester in the same slot, no Saturday or Sunday, skip holidays handled separately by software.",
+      "Hard rules: use only the slots provided by the user, do not schedule two courses of the same semester in the same slot, no Saturday or Sunday, skip holidays handled separately by software.",
       "Return a concise recommendation and a JSON array named coursecodes in preferred scheduling order.",
       `User rules: ${text(req.body.rules) || "Use balanced scheduling."}`,
       `Date range: ${text(req.body.fromdate)} to ${text(req.body.todate)}.`,
-      `Slots: ${text(req.body.slot1) || "Slot 1"}, ${text(req.body.slot2) || "Slot 2"}.`,
+      `Slots: ${(Array.isArray(req.body.slots) && req.body.slots.length ? req.body.slots : [text(req.body.slot1) || "Slot 1", text(req.body.slot2) || "Slot 2"]).map((slot) => typeof slot === "string" ? text(slot) : text(slot?.slot || slot?.name || slot?.label)).filter(Boolean).join(", ")}.`,
       `Papers: ${JSON.stringify(rows.map((row) => ({ coursecode: row.coursecode, course: row.course, semester: row.semester, programcode: row.programcode, subject: row.subject })))}`
     ].join("\n");
     let aiText = "";
@@ -825,6 +845,8 @@ exports.aiScheduleExamCourses = async (req, res) => {
       todate: req.body.todate,
       slot1: req.body.slot1,
       slot2: req.body.slot2,
+      slots: req.body.slots,
+      useHrHolidayList: req.body.useHrHolidayList === true || /^yes$/i.test(text(req.body.useHrHolidayList)),
       aiOrder
     });
     res.json({ success: true, ...result, aiText, message: `${result.saved} papers scheduled with Gemini guidance.` });

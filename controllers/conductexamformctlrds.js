@@ -13,6 +13,7 @@ const ExamModel2Marks = require("../Models/examinationmodel2marksds");
 const Ledgerstud = require("../Models/ledgerstud");
 const User = require("../Models/user");
 const Awsconfig = require("../Models/awsconfig");
+const Institution = require("../Models/insdetails");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -23,6 +24,8 @@ const num = (value, fallback = 0) => {
 };
 const regex = (value) => new RegExp(`^${clean(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
 const sortText = (a, b) => clean(a).localeCompare(clean(b), undefined, { numeric: true });
+const uniqueSorted = (values = []) => [...new Set(values.map((value) => clean(value)).filter(Boolean))]
+  .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 
 const encodeS3Key = (key) => String(key || "").split("/").map(encodeURIComponent).join("/");
 const s3Url = (bucket, region, key) => {
@@ -243,6 +246,26 @@ const feeMapFor = async ({ colid, academicyear, examcode, programcode, semester 
   return map;
 };
 
+const examLedgerFilter = ({ colid, academicyear, regno, regnos, programcode, semester }) => {
+  const filter = {
+    colid,
+    academicyear,
+    $or: [
+      { feegroup: { $regex: "exam", $options: "i" } },
+      { feeitem: { $regex: "exam", $options: "i" } }
+    ]
+  };
+  if (regno) filter.regno = regno;
+  if (Array.isArray(regnos) && regnos.length) filter.regno = { $in: regnos };
+  if (programcode) filter.programcode = programcode;
+  if (semester) filter.semester = semester;
+  return filter;
+};
+
+const examFeeLedgerForStudent = async ({ colid, academicyear, regno, programcode, semester }) => Ledgerstud.find(
+  examLedgerFilter({ colid, academicyear, regno, programcode, semester })
+).sort({ classdate: 1, feeitem: 1 }).lean();
+
 exports.studentContext = async (req, res) => {
   try {
     const colid = num(req.query.colid);
@@ -320,9 +343,129 @@ exports.studentContext = async (req, res) => {
       .map((row) => enrich(row, "supplementaryfee", "Supplementary"))
       .filter((row, index, arr) => row.coursecode && arr.findIndex((item) => item.coursecode === row.coursecode) === index)
       .sort((a, b) => sortText(a.coursecode, b.coursecode));
-    res.json({ data: { student, exam, forms, regularCourses, supplementaryCourses } });
+    const examFeeLedger = await examFeeLedgerForStudent({ colid, academicyear, regno, programcode: student.programcode, semester });
+    res.json({ data: { student, exam, forms, regularCourses, supplementaryCourses, examFeeLedger } });
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to load student exam form context" });
+  }
+};
+
+const distinctFromRows = (rows, field) => uniqueSorted(rows.map((row) => row[field]));
+
+exports.studentExamFormReportOptions = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    if (!colid) return res.status(400).json({ message: "colid is required" });
+    const query = { colid, ...queryFrom(req.query, ["academicyear", "exam", "examcode", "program", "programcode", "semester"]) };
+    const rows = await ConductExamRoll.find(query)
+      .select("academicyear exam examcode regulation program programcode semester")
+      .sort({ academicyear: 1, examcode: 1, program: 1, semester: 1 })
+      .lean();
+    const exams = [];
+    const examSeen = new Set();
+    rows.forEach((row) => {
+      const key = `${clean(row.academicyear)}||${clean(row.examcode)}`;
+      if (!clean(row.examcode) || examSeen.has(key)) return;
+      examSeen.add(key);
+      exams.push({ academicyear: clean(row.academicyear), exam: clean(row.exam), examcode: clean(row.examcode) });
+    });
+    const programs = [];
+    const programSeen = new Set();
+    rows.forEach((row) => {
+      const key = `${clean(row.programcode)}||${clean(row.program)}`;
+      if (!clean(row.programcode) || programSeen.has(key)) return;
+      programSeen.add(key);
+      programs.push({ program: clean(row.program), programcode: clean(row.programcode) });
+    });
+    res.json({
+      data: {
+        academicyears: distinctFromRows(rows, "academicyear"),
+        regulations: distinctFromRows(rows, "regulation"),
+        semesters: distinctFromRows(rows, "semester"),
+        exams,
+        programs
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message || "Unable to load student exam form options" });
+  }
+};
+
+exports.studentExamFormReport = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    if (!colid) return res.status(400).json({ message: "colid is required" });
+    const filter = { colid, ...queryFrom(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "semester", "regno"]) };
+    if (!filter.academicyear || !filter.examcode || !filter.programcode) {
+      return res.status(400).json({ message: "Academic year, exam code and program code are required" });
+    }
+    const rows = await ConductExamRoll.find(filter).sort({ regno: 1, semester: 1, coursecode: 1, course: 1 }).lean();
+    const regnos = uniqueSorted(rows.map((row) => row.regno));
+    const users = regnos.length
+      ? await User.find({ colid, regno: { $in: regnos } }).lean()
+      : [];
+    const userMap = new Map(users.map((user) => [clean(user.regno), user]));
+    const ledgerRows = regnos.length
+      ? await Ledgerstud.find(examLedgerFilter({ colid, academicyear: filter.academicyear, regnos, programcode: filter.programcode, semester: filter.semester }))
+        .sort({ regno: 1, classdate: 1, feeitem: 1 })
+        .lean()
+      : [];
+    const ledgerMap = new Map();
+    ledgerRows.forEach((row) => {
+      const key = clean(row.regno);
+      if (!ledgerMap.has(key)) ledgerMap.set(key, []);
+      ledgerMap.get(key).push(row);
+    });
+    const students = regnos.map((regno) => {
+      const user = userMap.get(regno) || {};
+      const rollRows = rows.filter((row) => clean(row.regno) === regno);
+      const first = rollRows[0] || {};
+      const courses = rollRows.map((row) => ({
+        id: String(row._id),
+        academicyear: clean(row.academicyear),
+        regulation: clean(row.regulation),
+        exam: clean(row.exam),
+        examcode: clean(row.examcode),
+        program: clean(row.program),
+        programcode: clean(row.programcode),
+        semester: clean(row.semester),
+        subject: clean(row.subject),
+        type: clean(row.type),
+        course: clean(row.course),
+        coursecode: clean(row.coursecode),
+        examdate: clean(row.examdate),
+        examslot: clean(row.examslot),
+        examsection: clean(row.examsection),
+        seatno: clean(row.seatno),
+        examseatno: clean(row.examseatno) || String(row._id),
+        admitcardeligible: clean(row.admitcardeligible),
+        attendance: clean(row.attendance),
+        fees: clean(row.fees),
+        disciplinary: clean(row.disciplinary),
+        atkt: clean(row.atkt)
+      }));
+      return {
+        id: regno,
+        student: {
+          ...user,
+          name: clean(user.name) || clean(first.student),
+          regno,
+          email: clean(user.email) || clean(first.email),
+          phone: clean(user.phone) || clean(first.phone),
+          program: clean(user.program) || clean(first.program),
+          programcode: clean(user.programcode) || clean(first.programcode),
+          regulation: clean(user.regulation) || clean(first.regulation),
+          semester: clean(user.semester) || clean(first.semester),
+          section: clean(user.section) || clean(first.section)
+        },
+        courses,
+        examFeeLedger: ledgerMap.get(regno) || []
+      };
+    });
+    const institution = await Institution.findOne({ colid }).sort({ _id: -1 }).lean();
+    res.json({ data: { students, institution } });
+  } catch (err) {
+    res.status(500).json({ message: err.message || "Unable to load student exam form report" });
   }
 };
 
@@ -403,15 +546,11 @@ exports.submitStudentExamForm = async (req, res) => {
       user: clean(student.email)
     });
 
-    const feeRows = await feeMapFor({ colid, academicyear, examcode, programcode: student.programcode, semester });
     let ledgerCreated = 0;
     let examRollCreated = 0;
-    for (const course of selectedCourses) {
-      const coursecode = clean(course.coursecode);
-      if (!coursecode) continue;
-      const feeRow = feeRows[coursecode.toLowerCase()] || {};
-      const feeAmount = num(course.fee || (examtype === "Supplementary" ? feeRow.supplementaryfee : feeRow.regularfee));
-      const feeid = `${submission._id}-${examtype}-${coursecode}`;
+    let examFeeLedger = [];
+    if (totalfee > 0) {
+      const feeid = `${submission._id}-${examtype}-ExamFeeTotal`;
       await Ledgerstud.findOneAndUpdate(
         { colid, feeid, regno },
         {
@@ -420,17 +559,19 @@ exports.submitStudentExamForm = async (req, res) => {
           regno,
           student: clean(student.name),
           feegroup: "Exam Fee",
-          feeitem: `${examtype} Exam Fee - ${clean(course.course)} (${coursecode})`,
+          feeitem: "Exam Fee",
           feeid,
+          feecategory: "Exam Fee",
+          feetype: examtype,
           academicyear,
-          regulation: clean(course.regulation) || clean(student.regulation),
-          program: clean(course.program) || clean(student.program),
-          programcode: clean(course.programcode) || clean(student.programcode),
+          regulation: clean(req.body.regulation) || clean(student.regulation),
+          program: clean(student.program),
+          programcode: clean(student.programcode),
           semester,
-          amount: feeAmount,
+          amount: totalfee,
           paid: 0,
           concession: 0,
-          balance: feeAmount,
+          balance: totalfee,
           duedate: new Date(),
           classdate: new Date(),
           status: "Active",
@@ -438,7 +579,12 @@ exports.submitStudentExamForm = async (req, res) => {
         },
         { upsert: true, runValidators: true, setDefaultsOnInsert: true }
       );
-      ledgerCreated += 1;
+      ledgerCreated = 1;
+      examFeeLedger = await examFeeLedgerForStudent({ colid, academicyear, regno, programcode: student.programcode, semester });
+    }
+    for (const course of selectedCourses) {
+      const coursecode = clean(course.coursecode);
+      if (!coursecode) continue;
       const examCourse = await ConductExamCourse.findOne({ colid, academicyear, examcode, programcode: student.programcode, semester, coursecode }).lean();
       const roll = await ConductExamRoll.findOneAndUpdate(
         { colid, academicyear, regulation: clean(course.regulation) || clean(student.regulation), examcode, programcode: clean(student.programcode), semester, coursecode, regno },
@@ -476,7 +622,7 @@ exports.submitStudentExamForm = async (req, res) => {
       }
       examRollCreated += 1;
     }
-    res.json({ data: submission, ledgerCreated, examRollCreated, deficiencies });
+    res.json({ data: submission, ledgerCreated, examRollCreated, deficiencies, examFeeLedger });
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to submit exam form" });
   }

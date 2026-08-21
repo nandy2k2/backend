@@ -9,6 +9,21 @@ const phdExamPanelSchema = new mongoose.Schema(
     programcode: { type: String, trim: true, required: true },
     panelname: { type: String, trim: true, required: true },
     description: { type: String, trim: true, default: "" },
+    approvalstatus: { type: String, trim: true, default: "Draft" },
+    currentlevel: { type: Number, default: 0 },
+    currentapprovername: { type: String, trim: true, default: "" },
+    currentapproveremail: { type: String, trim: true, default: "" },
+    comments: { type: String, trim: true, default: "" },
+    approveddate: { type: Date },
+    rejecteddate: { type: Date },
+    history: [{
+      action: { type: String, trim: true, default: "" },
+      level: { type: Number, default: 0 },
+      approvername: { type: String, trim: true, default: "" },
+      approveremail: { type: String, trim: true, default: "" },
+      comments: { type: String, trim: true, default: "" },
+      date: { type: Date, default: Date.now }
+    }],
     status: { type: String, trim: true, default: "Active" },
     name: { type: String, trim: true, default: "" },
     user: { type: String, trim: true, default: "" }
