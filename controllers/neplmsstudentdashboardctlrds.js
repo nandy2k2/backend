@@ -42,10 +42,53 @@ const compactCourse = (course) => ({
   semester: course.semester || "",
   course: course.course || "",
   coursecode: course.coursecode || "",
-  faculty: course.facultyname || "",
+  faculty: course.facultyname || course.faculty || "",
   facultyemail: course.facultyemail || "",
   facultydepartment: course.facultydepartment || ""
 });
+
+const courseKey = (item = {}) => [
+  text(item.academicyear),
+  text(item.semester),
+  text(item.coursecode)
+].join("||");
+
+const uniqueCourseKey = (item = {}) => [
+  text(item.academicyear),
+  text(item.regulation),
+  text(item.programcode),
+  text(item.semester),
+  text(item.coursecode)
+].join("||");
+
+const uniqueCourses = (rows = []) => {
+  const map = new Map();
+  rows.forEach((row = {}) => {
+    const key = uniqueCourseKey(row);
+    if (!key.replace(/\|/g, "")) return;
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, {
+        ...row,
+        facultyNames: new Set([text(row.facultyname || row.faculty)].filter(Boolean)),
+        facultyEmails: new Set([text(row.facultyemail)].filter(Boolean))
+      });
+      return;
+    }
+    if (!existing.course && row.course) existing.course = row.course;
+    if (!existing.program && row.program) existing.program = row.program;
+    if (!existing.type && row.type) existing.type = row.type;
+    if (!existing.subject && row.subject) existing.subject = row.subject;
+    if (text(row.facultyname || row.faculty)) existing.facultyNames.add(text(row.facultyname || row.faculty));
+    if (text(row.facultyemail)) existing.facultyEmails.add(text(row.facultyemail));
+  });
+  return Array.from(map.values()).map((row) => ({
+    ...row,
+    facultyname: Array.from(row.facultyNames || []).join(", "),
+    faculty: Array.from(row.facultyNames || []).join(", "),
+    facultyemail: Array.from(row.facultyEmails || []).join(", ")
+  }));
+};
 
 const courseBaseQueries = (courses, colid) => courses.map((course) => ({
   colid,
@@ -53,12 +96,6 @@ const courseBaseQueries = (courses, colid) => courses.map((course) => ({
   semester: course.semester,
   coursecode: course.coursecode
 }));
-
-const courseKey = (item = {}) => [
-  text(item.academicyear),
-  text(item.semester),
-  text(item.coursecode)
-].join("||");
 
 const maxDate = (...values) => {
   const dates = values
@@ -128,11 +165,12 @@ exports.getStudentDashboard = async (req, res) => {
     const semesterOptionQuery = courseQueryForStudent(req.query, student);
     delete semesterOptionQuery.semester;
     const semesterOptions = await WorkloadAssignment.distinct("semester", semesterOptionQuery);
-    const courses = await WorkloadAssignment.find(courseQueryForStudent(req.query, student))
+    const workloadRows = await WorkloadAssignment.find(courseQueryForStudent(req.query, student))
       .sort({ semester: 1, course: 1 })
       .lean();
+    const courses = uniqueCourses(workloadRows);
     const baseQueries = courseBaseQueries(courses, colid);
-    const courseCodes = courses.map((course) => course.coursecode).filter(Boolean);
+    const courseCodes = [...new Set(courses.map((course) => course.coursecode).filter(Boolean))];
     const today = new Date().toISOString().slice(0, 10);
     const now = new Date();
 

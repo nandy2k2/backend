@@ -9,10 +9,13 @@ const AiCodingPageSchema = new mongoose.Schema({
   provider: { type: String, default: "Gemini" },
   geminiModel: { type: String, default: "gemini-2.5-flash-lite" },
   ollamaConfigId: { type: String, default: "" },
+  crudMode: { type: String, default: "CRUD" },
+  dropdownRules: { type: String, default: "" },
   selectedModels: { type: [String], default: [] },
   modelDetails: { type: mongoose.Schema.Types.Mixed, default: {} },
   pageCode: { type: String, default: "" },
   pageSchema: { type: mongoose.Schema.Types.Mixed, default: {} },
+  refinementHistory: { type: [mongoose.Schema.Types.Mixed], default: [] },
   status: { type: String, default: "Generated" },
   createdby: { type: String, default: "" },
   user: { type: String, default: "" }

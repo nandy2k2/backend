@@ -254,6 +254,11 @@ const fallbackSuggestModelsForPage = (page = {}, modelDetails = {}) => (
     .map((item) => item.modelName)
 );
 
+const modelSuggestionsForPage = (page = {}, modelDetails = {}) => {
+  const exact = suggestModelsForPage(page, modelDetails);
+  return exact.length ? exact : fallbackSuggestModelsForPage(page, modelDetails);
+};
+
 const loadStaticMenuPages = () => {
   try {
     const filePath = path.join(__dirname, "../../ep3-main/src/pages/menuall.js");
@@ -402,6 +407,13 @@ Cards are calculated from loaded backend rows after filters are applied.
 For charts, use exact model fields. Use labelField for grouping and valueField plus aggregate for values. Use aggregate "count" when there is no numeric field.
 The runtime renderer will call generic backend APIs to load, save, update, delete and filter actual rows from pageSchema.dataSource.model.
 Use exact field names from selected model details for filters, formFields, and tableColumns.
+When dropdown data should come from backend data, define the filter or form field like:
+{"name":"program","label":"Program","type":"select","optionsSource":{"model":"exactMongooseModelName","valueField":"program","labelField":"program","staticFilters":{"status":"Active"},"dependsOn":[{"sourceField":"academicyear","targetField":"academicyear"}]}}
+For cascading dropdowns, dependsOn maps the current page field sourceField to the dropdown source model targetField.
+Use optionsSource for both filter dropdowns and save/form dropdowns whenever the user specifies where dropdown values must be loaded from.
+If page mode is View Only, do not include data entry formFields and use dataSource.mode "report".
+Requested page mode: ${text(body.crudMode) || "CRUD"}
+User dropdown/cascading rules: ${text(body.dropdownRules)}
 All generated pages and all data access MUST be scoped by colid. This is mandatory and cannot be disabled by user instructions.
 Every backend request in pageCode must pass colid from global1.colid.
 Every database query in pageCode must include colid. Never fetch all institutions.
@@ -412,6 +424,43 @@ Selected database models: ${JSON.stringify(body.selectedModels || [])}
 Known selected model details: ${JSON.stringify(modelDetails || {})}
 User requirement: ${text(body.requirement)}
 Additional page description: ${text(body.description)}
+`;
+
+const buildRefinePrompt = (body, modelDetails, existingPage = {}) => `
+You are refining an existing React MUI ERP page for CampusTechnology.
+Return ONLY JSON. No markdown.
+The JSON must have:
+{
+  "title": "page title",
+  "slug": "url-safe-slug",
+  "pageCode": "complete updated React component code as a string for developer review",
+  "pageSchema": {
+    "title": "title",
+    "layout": "dashboard|crud|report",
+    "primaryModel": "selected model name",
+    "dataSource": {"model":"selected model name", "mode":"crud|report", "colidScoped":true, "loadOnRun":false, "pageSize":100},
+    "cards": [],
+    "filters": [],
+    "formFields": [],
+    "tableColumns": [],
+    "charts": [],
+    "sampleRows": []
+  }
+}
+Refine the existing generated page according to the new command. Preserve useful existing functionality unless the command says to change it.
+Keep all backend access colid-scoped using global1.colid and never expose colid as a filter/form/table field.
+If dropdown data should come from backend data, use optionsSource with model, valueField, labelField, staticFilters, and dependsOn.
+If page mode is View Only, keep formFields empty and use dataSource.mode "report".
+Requested page mode: ${text(body.crudMode || existingPage.crudMode) || "CRUD"}
+Dropdown/cascading rules: ${text(body.dropdownRules || existingPage.dropdownRules)}
+Selected database models: ${JSON.stringify(body.selectedModels || existingPage.selectedModels || [])}
+Known selected model details: ${JSON.stringify(modelDetails || {})}
+Original requirement: ${text(existingPage.requirement)}
+Existing description: ${text(existingPage.description)}
+Existing page schema JSON: ${JSON.stringify(existingPage.pageSchema || {})}
+Existing page code: ${text(existingPage.pageCode)}
+New refinement command: ${text(body.refinementCommand)}
+Additional content/rules from user: ${text(body.description)}
 `;
 
 const getModelForPage = async ({ colid, pageId, modelName }) => {
@@ -471,6 +520,7 @@ const sanitizePayload = (Model, body = {}) => {
 const normalizePageSchema = (schema = {}, body = {}) => {
   const selectedModels = Array.isArray(body.selectedModels) ? body.selectedModels : [];
   const primaryModel = text(schema.primaryModel || schema.dataSource?.model || selectedModels[0]);
+  const viewOnly = /^view\s*only$/i.test(text(body.crudMode)) || /^view$/i.test(text(body.crudMode));
   const blockedField = (item = {}) => text(item.name || item.field).toLowerCase() !== "colid";
   const cleaned = { ...schema };
   delete cleaned.colidScoped;
@@ -481,13 +531,13 @@ const normalizePageSchema = (schema = {}, body = {}) => {
     dataSource: {
       ...(schema.dataSource || {}),
       model: text(schema.dataSource?.model || primaryModel),
-      mode: text(schema.dataSource?.mode) || "crud",
+      mode: viewOnly ? "report" : (text(schema.dataSource?.mode) || "crud"),
       colidScoped: true,
       loadOnRun: !!schema.dataSource?.loadOnRun,
       pageSize: Math.min(Math.max(num(schema.dataSource?.pageSize) || 100, 1), 1000)
     },
     filters: Array.isArray(schema.filters) ? schema.filters.filter(blockedField) : [],
-    formFields: Array.isArray(schema.formFields) ? schema.formFields.filter(blockedField) : [],
+    formFields: viewOnly ? [] : (Array.isArray(schema.formFields) ? schema.formFields.filter(blockedField) : []),
     tableColumns: Array.isArray(schema.tableColumns) ? schema.tableColumns.filter(blockedField) : []
   };
 };
@@ -501,11 +551,18 @@ const withColidPolicyComment = (code = "") => {
 exports.options = async (req, res) => {
   try {
     const colid = num(req.query.colid);
+    const roleMenuOnly = /^true$/i.test(text(req.query.roleMenuOnly));
+    const role = text(req.query.role);
     const modelDetails = loadedModelDetails();
+    const isAllRole = /^all$/i.test(role);
+    const roleVariants = Array.from(new Set([role, role.toLowerCase(), role.toUpperCase(), role.replace(/\b\w/g, (char) => char.toUpperCase()), "All", "ALL", "all"].filter(Boolean)));
+    const menuQuery = { colid, access: { $ne: "Deny" } };
+    if (roleMenuOnly && roleVariants.length && !isAllRole) menuQuery.role = { $in: roleVariants };
+    const chatbotQuery = roleMenuOnly && roleVariants.length && !isAllRole ? { colid, role: { $in: roleVariants } } : { colid };
     const [ollamaConfigs, menuRows, chatbotRows] = await Promise.all([
       colid === undefined ? [] : OllamaConfiguration.find({ colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean(),
-      colid === undefined ? [] : MenuAccess.find({ colid }).select("menugroup groupname title path").sort({ menugroup: 1, title: 1 }).lean(),
-      colid === undefined ? [] : AiChatbotDefinition.find({ colid }).select("menugroup pagename pagelink").sort({ menugroup: 1, pagename: 1 }).lean()
+      colid === undefined ? [] : MenuAccess.find(menuQuery).select("menugroup groupname title path role access").sort({ menugroup: 1, title: 1 }).lean(),
+      colid === undefined ? [] : AiChatbotDefinition.find(chatbotQuery).select("menugroup pagename pagelink role").sort({ menugroup: 1, pagename: 1 }).lean()
     ]);
     const pageMap = new Map();
     const addPage = (group, page, path) => {
@@ -515,12 +572,12 @@ exports.options = async (req, res) => {
       const key = `${text(group) || "Other"}|${cleanPage}|${cleanPath}`;
       pageMap.set(key, { group: text(group) || "Other", page: cleanPage || cleanPath, path: cleanPath });
     };
-    loadStaticMenuPages().forEach((row) => addPage(row.group, row.page, row.path));
+    if (!roleMenuOnly) loadStaticMenuPages().forEach((row) => addPage(row.group, row.page, row.path));
     menuRows.forEach((row) => addPage(row.groupname || row.menugroup, row.title, row.path));
     chatbotRows.forEach((row) => addPage(row.menugroup, row.pagename, row.pagelink));
     const pageOptions = Array.from(pageMap.values()).map((page) => ({
       ...page,
-      suggestedModels: suggestModelsForPage(page, modelDetails)
+      suggestedModels: modelSuggestionsForPage(page, modelDetails)
     }));
     res.json({
       success: true,
@@ -587,13 +644,15 @@ exports.generate = async (req, res) => {
 
     const payload = {
       colid,
-      title: text(parsed.title || req.body.title) || "Generated Page",
-      slug: slugify(parsed.slug || parsed.title || req.body.title || req.body.requirement),
+      title: text(req.body.title || parsed.title) || "Generated Page",
+      slug: slugify(req.body.title || parsed.slug || parsed.title || req.body.requirement),
       description: text(req.body.description),
       requirement: text(req.body.requirement),
       provider: text(req.body.provider) || "Gemini",
       geminiModel: text(req.body.geminiModel) || "gemini-2.5-flash-lite",
       ollamaConfigId: text(req.body.ollamaConfigId),
+      crudMode: text(req.body.crudMode) || "CRUD",
+      dropdownRules: text(req.body.dropdownRules),
       selectedModels: req.body.selectedModels || [],
       modelDetails,
       pageCode: withColidPolicyComment(parsed.pageCode || raw),
@@ -603,6 +662,79 @@ exports.generate = async (req, res) => {
       user: text(req.body.user)
     };
     const row = await AiCodingPage.create(payload);
+    res.json({ success: true, row, raw });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.refine = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const id = text(req.body.id || req.body.pageId);
+    if (!id) return res.status(400).json({ success: false, message: "Generated page id is required" });
+    if (!text(req.body.refinementCommand)) return res.status(400).json({ success: false, message: "Refinement command is required" });
+    const existingPage = await AiCodingPage.findOne({ _id: id, colid }).lean();
+    if (!existingPage) return res.status(404).json({ success: false, message: "Generated page not found" });
+
+    const selectedModels = Array.from(new Set([...(existingPage.selectedModels || []), ...(req.body.selectedModels || [])].filter(Boolean)));
+    const allDetails = loadedModelDetails();
+    const modelDetails = {};
+    selectedModels.forEach((name) => { modelDetails[name] = allDetails[name] || []; });
+    const refineBody = {
+      ...req.body,
+      selectedModels,
+      crudMode: text(req.body.crudMode || existingPage.crudMode) || "CRUD",
+      dropdownRules: text(req.body.dropdownRules || existingPage.dropdownRules)
+    };
+    const prompt = buildRefinePrompt(refineBody, modelDetails, existingPage);
+    const raw = /^ollama$/i.test(text(req.body.provider || existingPage.provider))
+      ? await callOllama({ colid, ollamaConfigId: req.body.ollamaConfigId || existingPage.ollamaConfigId, prompt })
+      : await callGemini({ colid, model: req.body.geminiModel || existingPage.geminiModel, prompt });
+
+    let parsed;
+    try {
+      parsed = extractJson(raw);
+    } catch {
+      parsed = {
+        title: existingPage.title,
+        slug: existingPage.slug,
+        pageCode: raw || existingPage.pageCode || "",
+        pageSchema: existingPage.pageSchema || fallbackSchema(refineBody)
+      };
+    }
+
+    const updateFields = {
+      title: text(req.body.title || parsed.title || existingPage.title) || existingPage.title,
+      slug: slugify(req.body.title || parsed.slug || parsed.title || existingPage.slug || existingPage.title),
+      description: text(req.body.description || existingPage.description),
+      requirement: text(existingPage.requirement),
+      provider: text(req.body.provider || existingPage.provider) || "Gemini",
+      geminiModel: text(req.body.geminiModel || existingPage.geminiModel) || "gemini-2.5-flash-lite",
+      ollamaConfigId: text(req.body.ollamaConfigId || existingPage.ollamaConfigId),
+      crudMode: refineBody.crudMode,
+      dropdownRules: refineBody.dropdownRules,
+      selectedModels,
+      modelDetails,
+      pageCode: withColidPolicyComment(parsed.pageCode || raw),
+      pageSchema: normalizePageSchema(parsed.pageSchema || existingPage.pageSchema || fallbackSchema(refineBody), refineBody),
+      status: "Refined",
+      user: text(existingPage.user || req.body.user),
+      createdby: text(existingPage.createdby || req.body.createdby || req.body.name)
+    };
+    const update = {
+      $set: updateFields,
+      $push: {
+        refinementHistory: {
+          command: text(req.body.refinementCommand),
+          user: text(req.body.user),
+          name: text(req.body.createdby || req.body.name),
+          createdAt: new Date()
+        }
+      }
+    };
+    const row = await AiCodingPage.findOneAndUpdate({ _id: id, colid }, update, { new: true });
     res.json({ success: true, row, raw });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -621,6 +753,8 @@ exports.save = async (req, res) => {
       provider: text(req.body.provider) || "Gemini",
       geminiModel: text(req.body.geminiModel),
       ollamaConfigId: text(req.body.ollamaConfigId),
+      crudMode: text(req.body.crudMode) || "CRUD",
+      dropdownRules: text(req.body.dropdownRules),
       selectedModels: req.body.selectedModels || [],
       modelDetails: req.body.modelDetails || {},
       pageCode: withColidPolicyComment(req.body.pageCode),
@@ -665,6 +799,51 @@ exports.modelData = async (req, res) => {
     const limit = Math.min(Math.max(num(req.body.limit) || 100, 1), 1000);
     const rows = await Model.find(query).sort({ _id: -1 }).limit(limit).lean();
     res.json({ success: true, rows, count: rows.length });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.modelOptions = async (req, res) => {
+  try {
+    const colid = num(req.body.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const modelName = text(req.body.modelName);
+    const valueField = text(req.body.valueField);
+    const labelField = text(req.body.labelField || req.body.valueField);
+    if (!mongoose.modelNames().includes(modelName)) return res.status(400).json({ success: false, message: "Model is not available" });
+    const Model = mongoose.model(modelName);
+    const fields = schemaFields(Model);
+    if (!fields.has("colid")) return res.status(400).json({ success: false, message: "Dropdown source model must contain colid" });
+    if (!fields.has(valueField)) return res.status(400).json({ success: false, message: "Dropdown value field is not available" });
+    const query = { colid };
+    Object.entries(req.body.filters || {}).forEach(([field, value]) => {
+      if (!fields.has(field) || value === undefined || value === null || value === "") return;
+      const path = Model.schema.paths[field];
+      if (path?.instance === "Number") {
+        const parsed = num(value);
+        if (parsed !== undefined) query[field] = parsed;
+      } else if (path?.instance === "Date") {
+        query[field] = new Date(value);
+      } else {
+        query[field] = new RegExp(text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      }
+    });
+    const selectFields = [valueField, fields.has(labelField) ? labelField : ""].filter(Boolean).join(" ");
+    const limit = Math.min(Math.max(num(req.body.limit) || 500, 1), 1000);
+    const rows = await Model.find(query).select(selectFields).limit(limit).lean();
+    const seen = new Set();
+    const options = rows.map((row) => ({
+      value: row[valueField],
+      label: text(row[labelField] || row[valueField])
+    })).filter((option) => {
+      const key = `${text(option.value)}|${option.label}`;
+      if (!text(option.value) && !option.label) return false;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).sort((a, b) => a.label.localeCompare(b.label));
+    res.json({ success: true, options });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
