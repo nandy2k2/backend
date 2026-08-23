@@ -36,6 +36,8 @@ const personalDataValidationController = require("./controllers/personaldatavali
 const accreditationFinalController = require("./controllers/accreditationfinalctlrds");
 const nbaMcaSarController = require("./controllers/nbamcasarctlrds");
 const phdModuleController = require("./controllers/phdmodulectlrds");
+const aiCodingAgentSchedulerController = require("./controllers/aicodingagentctlrds");
+aiCodingAgentSchedulerController.registerScheduler();
 
 const DB=process.env.DATABASE.replace('<PASSWORD>',process.env.DATABASE_PASSWORD);
 const DB1=process.env.DATABASE2;
@@ -170,6 +172,7 @@ const institutionPolicyController = require('./controllers/institutionpolicyctlr
 const centralTicketController = require('./controllers/centralticketctlrds');
 const aiCodingController = require('./controllers/aicodingctlrds');
 const myCodeEditorController = require('./controllers/mycodeeditorctlrds');
+const aiCodingAgentController = require('./controllers/aicodingagentctlrds');
 const dummyMarksDataController = require('./controllers/dummymarksdatactlrds');
 const mcpServerController = require('./controllers/mcpserverctlrds');
 const centralAiHelpController = require('./controllers/centralaihelpctlrds');
@@ -1000,10 +1003,16 @@ app.post('/api/v2/ai-coding/model-data', aiCodingController.modelData);
 app.post('/api/v2/ai-coding/model-options', aiCodingController.modelOptions);
 app.post('/api/v2/ai-coding/model-save', aiCodingController.modelSave);
 app.post('/api/v2/ai-coding/model-delete', aiCodingController.modelDelete);
+app.get('/api/v2/ai-coding-agents/options', aiCodingAgentController.options);
+app.get('/api/v2/ai-coding-agents', aiCodingAgentController.list);
+app.post('/api/v2/ai-coding-agents', aiCodingAgentController.save);
+app.post('/api/v2/ai-coding-agents-run', aiCodingAgentController.run);
+app.post('/api/v2/ai-coding-agents-generate', aiCodingAgentController.generate);
 app.get('/api/v2/my-code-editor-options', myCodeEditorController.options);
 app.get('/api/v2/my-code-editor', myCodeEditorController.list);
 app.post('/api/v2/my-code-editor', myCodeEditorController.save);
 app.post('/api/v2/my-code-editor-delete', myCodeEditorController.remove);
+app.post('/api/v2/my-code-editor-generate', myCodeEditorController.generate);
 app.post('/api/v2/my-code-editor-run', myCodeEditorController.runBackend);
 app.post('/api/v2/my-code-editor-interact', myCodeEditorController.interact);
 app.get('/api/v2/my-code-editor-custom-data', myCodeEditorController.customDataList);

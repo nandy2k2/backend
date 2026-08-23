@@ -35,7 +35,11 @@ const models = {
   vendorpayschds: require("../Models/vendorpayschds"),
   vendorpaymentscheduleds2: require("../Models/vendorpayschds"),
   usersignatureds: require("../Models/usersignatureds"),
-  storepoapprovalworkflowds2: require("../Models/storepoapprovalworkflowds2")
+  storepoapprovalworkflowds2: require("../Models/storepoapprovalworkflowds2"),
+  purchase2mailconfigds2: require("../Models/purchase2mailconfigds2"),
+  cashapprovalds2: require("../Models/CashApprovalds2"),
+  CashApprovalds2: require("../Models/CashApprovalds2"),
+  pimprestds2: require("../Models/pimprestds2")
 };
 
 function getModel(key) {

@@ -73,6 +73,9 @@ const storepoorderdsschema = new mongoose.Schema({
     warranty: { type: String },
     remarks: { type: String },
     approvalhistory: { type: Array, default: [] },
+    createdtime: { type: String },
+    submittedtime: { type: String },
+    approvedtime: { type: String },
 
     // Phase 1 Additions (SAP-Inspired Flow)
     postatus: {

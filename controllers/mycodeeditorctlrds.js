@@ -2,6 +2,8 @@ const vm = require("vm");
 const mongoose = require("mongoose");
 const MyCodeEditor = require("../Models/mycodeeditords");
 const MyCodeCustomData = require("../Models/mycodecustomdatads");
+const AiConfiguration = require("../Models/aiconfigurationds");
+const OllamaConfiguration = require("../Models/ollamaconfigurationds");
 
 const text = (value) => String(value ?? "").trim();
 const num = (value) => {
@@ -18,6 +20,21 @@ const parseJson = (value, fallback) => {
     return fallback;
   }
 };
+
+const geminiModels = [
+  "gemini-3.5-pro",
+  "gemini-3.5-flash",
+  "gemini-3.0-pro",
+  "gemini-3.0-flash",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-2.0-flash",
+  "gemini-2.0-flash-lite",
+  "gemini-1.5-pro",
+  "gemini-1.5-flash",
+  "gemini-1.5-flash-8b"
+];
 
 const customModelNames = (value) => {
   const parsed = parseJson(value, []);
@@ -217,7 +234,7 @@ const createCustomDb = ({ allowedNames = [], colid, user, pageId, createdby }) =
 
 exports.options = async (req, res) => {
   try {
-    userScopedQuery(req.query);
+    const scope = userScopedQuery(req.query);
     const modelDetails = loadedModelDetails();
     const models = Object.keys(modelDetails)
       .filter((name) => {
@@ -228,7 +245,158 @@ exports.options = async (req, res) => {
         }
       })
       .sort((a, b) => a.localeCompare(b));
-    res.json({ success: true, models, modelDetails });
+    const ollamaConfigs = await OllamaConfiguration.find({ colid: scope.colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean();
+    res.json({ success: true, models, modelDetails, geminiModels, ollamaConfigs });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+const getGeminiConfig = async (colid) => AiConfiguration.findOne({ colid, type: /^gemini$/i, active: /^yes$/i, default: /^yes$/i }).lean()
+  || AiConfiguration.findOne({ colid, type: /^gemini$/i, active: /^yes$/i }).lean();
+
+const getOllamaConfig = async (colid, id) => (id ? OllamaConfiguration.findOne({ _id: id, colid, active: /^yes$/i }).lean() : null)
+  || OllamaConfiguration.findOne({ colid, active: /^yes$/i, default: /^yes$/i }).lean()
+  || OllamaConfiguration.findOne({ colid, active: /^yes$/i }).lean();
+
+const readGeminiText = (payload = {}) => payload?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("\n").trim() || "";
+
+const callGemini = async ({ colid, model, prompt }) => {
+  const config = await getGeminiConfig(colid);
+  if (!config?.apikey) throw new Error("Active/default Gemini configuration is missing");
+  const requested = text(model) || "gemini-2.5-flash-lite";
+  const candidates = [...new Set([requested, "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-1.5-flash"])];
+  let lastError = "";
+  for (const geminiModel of candidates) {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent?key=${encodeURIComponent(config.apikey)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok) return readGeminiText(data);
+    lastError = data?.error?.message || `Gemini request failed for ${geminiModel}`;
+  }
+  throw new Error(lastError || "Gemini request failed");
+};
+
+const callOllama = async ({ colid, ollamaConfigId, prompt }) => {
+  const config = await getOllamaConfig(colid, ollamaConfigId);
+  if (!config?.serveraddress || !config?.modelname) throw new Error("Active Ollama configuration is missing");
+  const response = await fetch(`${String(config.serveraddress).replace(/\/$/, "")}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: config.modelname, prompt, stream: false })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error || "Ollama request failed");
+  return data.response || "";
+};
+
+const extractGeneratedCodeJson = (raw) => {
+  const cleaned = text(raw).replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start >= 0 && end > start) return JSON.parse(cleaned.slice(start, end + 1));
+  throw new Error("AI response did not include valid JSON");
+};
+
+const unwrapGeneratedBackendCode = (code = "") => {
+  let value = String(code || "").trim();
+  value = value.replace(/^```(?:javascript|js)?/i, "").replace(/```$/i, "").trim();
+  const patterns = [
+    /^\(?\s*async\s*\(\s*input\s*\)\s*=>\s*\{([\s\S]*)\}\s*\)?\s*;?\s*$/i,
+    /^\(?\s*\(\s*input\s*\)\s*=>\s*\{([\s\S]*)\}\s*\)?\s*;?\s*$/i,
+    /^async\s+function\s*[A-Za-z0-9_$]*\s*\(\s*input\s*\)\s*\{([\s\S]*)\}\s*;?\s*$/i,
+    /^function\s+[A-Za-z0-9_$]*\s*\(\s*input\s*\)\s*\{([\s\S]*)\}\s*;?\s*$/i,
+    /^\(\s*async\s*\(\s*\)\s*=>\s*\{([\s\S]*)\}\s*\)\s*\(\s*\)\s*;?\s*$/i
+  ];
+  for (const pattern of patterns) {
+    const match = value.match(pattern);
+    if (match?.[1]) {
+      value = match[1].trim();
+      break;
+    }
+  }
+  value = value.replace(/^\s*return\s+\{([\s\S]*)\}\s*;?\s*$/i, "result = {$1};").trim();
+  return value;
+};
+
+const buildAiCodeEditorPrompt = (body = {}, modelDetails = {}) => `
+You are generating code for CampusTechnology AI Code Editor.
+Return ONLY JSON. No markdown.
+Required JSON shape:
+{
+  "title": "page title",
+  "description": "short description",
+  "selectedModels": ["exact existing model names to connect"],
+  "customModels": "[{ \\"name\\": \\"LocalModel\\", \\"fields\\": [\\"field1\\"] }]",
+  "virtualModels": "{}",
+  "sampleInput": "{}",
+  "backendCode": "complete JavaScript backend code string",
+  "frontendCode": "complete pure HTML/CSS/JavaScript code string"
+}
+
+Runtime rules:
+- Backend code runs in the interactive code editor sandbox.
+- backendCode MUST be raw executable statements only. Do NOT wrap backendCode in async (input) => {}, function(input) {}, module.exports, export default, or an IIFE.
+- Correct backendCode starts like: const action = input.action || "initial"; const payload = input.payload || {}; if (action === "loadAcademicYears") { ... result = {...}; }
+- Existing ERP models are available as db.ModelName.find(filters, limit), db.ModelName.count(filters), db.ModelName.distinct(field, filters) only.
+- Existing ERP models are read only. Do not use db.Model.create/update/delete/findOneAndUpdate/save/bulkWrite.
+- Existing ERP reads are automatically scoped by colid. Do not ask the user to enter colid.
+- For local page-owned CRUD, define customModels and use custom.ModelName.create/find/update/delete in backend code.
+- Backend receives input.action and input.payload. It must branch by action and set result = {...}.
+- Backend must set result to a non-null object for every possible action, including initial/default.
+- Backend action names must exactly match the action names used in frontend window.myCodeApi.call("actionName", payload).
+- For dropdown loaders such as academic years, programs, courses or students, return arrays with stable names, for example result = { academicYears: [], programs: [], rows: [] }.
+- Frontend must be pure HTML/CSS/JavaScript. Do not use React imports.
+- Frontend must call backend using window.myCodeApi.call("actionName", payload).
+- Frontend must never assume a response is non-null. Use guards like const academicYears = Array.isArray(data.academicYears) ? data.academicYears : [].
+- Frontend DOM code must run after elements exist: place custom inline scripts just before </body> or wrap initialization in document.addEventListener("DOMContentLoaded", init).
+- Every getElementById/querySelector result must be null-checked before reading properties or assigning innerHTML/value/listeners.
+- Include loading states, error display, professional layout, charts if requested, and tables with wrapped text.
+- Never include external CSS imports. If using a chart library, load it from a CDN script tag in frontendCode.
+- Do not expose or edit colid anywhere.
+
+Selected existing models: ${JSON.stringify(body.selectedModels || [])}
+Selected model details: ${JSON.stringify(modelDetails || {})}
+Current customModels JSON: ${String(body.customModels || "[]")}
+Current sample input: ${String(body.sampleInput || "{}")}
+Requested mode: ${text(body.outputMode) || "Interactive CRUD / Report"}
+User prompt: ${text(body.prompt)}
+`;
+
+exports.generate = async (req, res) => {
+  try {
+    const scope = userScopedQuery(req.body);
+    if (!text(req.body.prompt)) return res.status(400).json({ success: false, message: "Prompt is required" });
+    const allDetails = loadedModelDetails();
+    const modelDetails = {};
+    (Array.isArray(req.body.selectedModels) ? req.body.selectedModels : []).forEach((name) => {
+      if (allDetails[name]) modelDetails[name] = allDetails[name];
+    });
+    const prompt = buildAiCodeEditorPrompt(req.body, modelDetails);
+    const raw = /^ollama$/i.test(text(req.body.provider))
+      ? await callOllama({ colid: scope.colid, ollamaConfigId: req.body.ollamaConfigId, prompt })
+      : await callGemini({ colid: scope.colid, model: req.body.geminiModel, prompt });
+    let generated;
+    try {
+      generated = extractGeneratedCodeJson(raw);
+    } catch {
+      generated = {
+        title: text(req.body.title) || "AI generated interactive page",
+        description: text(req.body.description),
+        selectedModels: Array.isArray(req.body.selectedModels) ? req.body.selectedModels : [],
+        customModels: String(req.body.customModels || "[]"),
+        virtualModels: String(req.body.virtualModels || "{}"),
+        sampleInput: String(req.body.sampleInput || "{}"),
+        backendCode: "",
+        frontendCode: raw || ""
+      };
+    }
+    generated.backendCode = unwrapGeneratedBackendCode(generated.backendCode || "");
+    assertNoExistingModelMutation(generated.backendCode || "");
+    res.json({ success: true, generated });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -261,7 +429,7 @@ exports.save = async (req, res) => {
       selectedModels: Array.isArray(req.body.selectedModels) ? req.body.selectedModels.filter(Boolean) : [],
       customModels: String(req.body.customModels || ""),
       virtualModels: String(req.body.virtualModels || ""),
-      backendCode: String(req.body.backendCode || ""),
+      backendCode: unwrapGeneratedBackendCode(req.body.backendCode || ""),
       frontendCode: String(req.body.frontendCode || ""),
       sampleInput: String(req.body.sampleInput || "{}"),
       createdby: text(req.body.createdby || req.body.name)
@@ -294,7 +462,8 @@ const executeCodePage = async ({ scope, id, inputValue, persistLastRun = false }
     err.statusCode = 404;
     throw err;
   }
-  assertNoExistingModelMutation(row.backendCode || "");
+  const executableBackendCode = unwrapGeneratedBackendCode(row.backendCode || "");
+  assertNoExistingModelMutation(executableBackendCode);
 
   const input = parseJson(inputValue ?? row.sampleInput, {});
     const virtualModels = parseJson(row.virtualModels, {});
@@ -330,7 +499,7 @@ const executeCodePage = async ({ scope, id, inputValue, persistLastRun = false }
     const script = new vm.Script(`
       "use strict";
       (async () => {
-        ${row.backendCode || ""}
+        ${executableBackendCode}
       })()
     `, { timeout: 1000 });
   const output = await script.runInContext(sandbox, { timeout: 2000 });
