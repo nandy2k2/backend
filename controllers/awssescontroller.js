@@ -1,7 +1,9 @@
 const AWS = require('aws-sdk');
 const { promisify } = require("util");
 const jwt = require("jsonwebtoken");
+const nodemailer = require("nodemailer");
 const User = require("./../Models/user");
+const EmailConfiguration = require("./../Models/emailconfigurationds");
 
 const SES_CONFIG = {
     accessKeyId: 'AKIAUAC655EBDHJUEUDZ',
@@ -204,14 +206,15 @@ const sendanyEmail = (recipientEmail, emaildata, subject) => {
 exports.sendawsemail= async (req,res) => {
   try{
 
-      const email=req.query.email;
+      const source = req.body && Object.keys(req.body).length ? req.body : req.query;
+      const email=source.email;
       
-      const emailbody=req.query.emailbody;
-      const subject=req.query.subject;
+      const emailbody=source.emailbody;
+      const subject=source.subject;
 
       
 
-      sendanyEmail(email,emailbody, subject);
+      await sendanyEmail(email,emailbody, subject);
 
       return  res.status(200).json({
         status:'Success'
@@ -220,9 +223,45 @@ exports.sendawsemail= async (req,res) => {
       
      
   } catch(err) {
-      // res.status(201).json({
-      //     status:'Error ' + err,
-      // });
-
+      return res.status(500).json({
+          status:'Error',
+          message: err.message
+      });
   }  
+};
+
+exports.sendconfiguredemail = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const configid = req.body.configid;
+    const email = String(req.body.email || "").trim();
+    const emailbody = req.body.emailbody || "";
+    const subject = req.body.subject || "Purchase 2 Notification";
+    if (!colid || !configid) return res.status(400).json({ status: "Error", message: "colid and configid are required" });
+    if (!email) return res.status(400).json({ status: "Error", message: "Recipient email is required" });
+    const config = await EmailConfiguration.findOne({ _id: configid, colid }).lean();
+    if (!config?.username || !config?.password) return res.status(400).json({ status: "Error", message: "Selected email configuration is incomplete" });
+    const smtpHost = config.smtp || config.smptp || (/gmail/i.test(String(config.provider || "")) ? "smtp.gmail.com" : "");
+    const port = Number(config.port) || (/gmail/i.test(String(config.provider || "")) ? 465 : 587);
+    const secureText = String(config.secure || "").toLowerCase();
+    const transporter = nodemailer.createTransport(smtpHost ? {
+      host: smtpHost,
+      port,
+      secure: secureText === "yes" || secureText === "true" || port === 465,
+      auth: { user: config.username, pass: config.password }
+    } : {
+      service: config.provider || "Gmail",
+      auth: { user: config.username, pass: config.password }
+    });
+    await transporter.sendMail({
+      from: config.username,
+      to: email,
+      subject,
+      html: emailbody,
+      text: String(emailbody).replace(/<[^>]+>/g, " ")
+    });
+    return res.status(200).json({ status: "Success", email, from: config.username });
+  } catch (err) {
+    return res.status(500).json({ status: "Error", message: err.message });
+  }
 };

@@ -4467,6 +4467,8 @@ app.get('/api/v1/sendvacmail',  aivaccontroller.sendvacmail);
 const awssescontroller=require('./controllers/awssescontroller');
 
 app.get('/api/v2/sendawsemail',  awssescontroller.sendawsemail);
+app.post('/api/v2/sendawsemail',  awssescontroller.sendawsemail);
+app.post('/api/v2/sendconfiguredemail',  awssescontroller.sendconfiguredemail);
 app.get('/api/v2/sendwelcome',  awssescontroller.sendwelcome);
 app.get('/api/v2/sendsesemail',  awssescontroller.sendsesemail);
 app.get('/api/v2/sendpassword',  awssescontroller.sendpassword);
