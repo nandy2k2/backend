@@ -26,8 +26,10 @@ class ICICIPaymentHandler {
     );
   }
 
-  generateSecureHash(params) {
-    const keys = Object.keys(params || {})
+  generateSecureHash(params, fieldOrder) {
+    const keys = Array.isArray(fieldOrder) && fieldOrder.length
+      ? fieldOrder.filter((key) => Object.prototype.hasOwnProperty.call(params || {}, key))
+      : Object.keys(params || {})
       .filter((key) => key !== 'secureHash' && key !== 'securehash')
       .sort();
 
@@ -119,7 +121,13 @@ class ICICIPaymentHandler {
 
   async command(params) {
     const payload = { ...params };
-    payload.secureHash = this.generateSecureHash(payload);
+    payload.secureHash = this.generateSecureHash(payload, [
+      'amount',
+      'merchantId',
+      'merchantTxnNo',
+      'originalTxnNo',
+      'transactionType'
+    ]);
 
     const response = await fetch(this.commandUrl, {
       method: 'POST',

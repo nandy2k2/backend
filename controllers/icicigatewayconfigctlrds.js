@@ -13,13 +13,22 @@ function escapeRegex(value) {
   return text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function isCommonMode(source = {}) {
+  return text(source.mode || source.configmode || source.programMode).toLowerCase() === "common";
+}
+
+function isProgramMode(source = {}) {
+  return text(source.mode || source.configmode || source.programMode).toLowerCase() === "program";
+}
+
 function payload(body = {}) {
+  const commonMode = isCommonMode(body);
   return {
     name: text(body.name),
     user: text(body.user),
     colid: Number(body.colid),
-    program: text(body.program),
-    programcode: text(body.programcode),
+    program: commonMode ? "" : text(body.program),
+    programcode: commonMode ? "" : text(body.programcode),
     merchantid: text(body.merchantid),
     aggregatorid: text(body.aggregatorid),
     secretkey: text(body.secretkey),
@@ -34,6 +43,18 @@ function payload(body = {}) {
 
 function queryFrom(source = {}) {
   const query = { colid: Number(source.colid) };
+  if (isCommonMode(source)) {
+    query.$and = [
+      { $or: [{ programcode: "" }, { programcode: { $exists: false } }, { programcode: null }] },
+      { $or: [{ program: "" }, { program: { $exists: false } }, { program: null }] }
+    ];
+  }
+  if (isProgramMode(source)) {
+    query.$or = [
+      { programcode: { $exists: true, $nin: ["", null] } },
+      { program: { $exists: true, $nin: ["", null] } }
+    ];
+  }
   if (text(source.environment)) query.environment = text(source.environment);
   if (text(source.isactive)) query.isactive = bool(source.isactive);
   if (text(source.program)) query.program = { $regex: escapeRegex(source.program), $options: "i" };
@@ -47,7 +68,10 @@ exports.getIciciGatewayConfigs = async (req, res) => {
   try {
     const colid = Number(req.query.colid);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
-    const data = await IciciGateway.find(queryFrom(req.query)).sort({ createdAt: -1 }).lean();
+    const data = isCommonMode(req.query)
+      ? (await IciciGateway.findOne(queryFrom(req.query)).sort({ updatedAt: -1, createdAt: -1 }).lean()
+          .then((row) => row ? [row] : []))
+      : await IciciGateway.find(queryFrom(req.query)).sort({ createdAt: -1 }).lean();
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -56,7 +80,20 @@ exports.getIciciGatewayConfigs = async (req, res) => {
 
 exports.createIciciGatewayConfig = async (req, res) => {
   try {
-    const data = await IciciGateway.create(payload(req.body));
+    const row = payload(req.body);
+    const data = isCommonMode(req.body)
+      ? await IciciGateway.findOneAndUpdate(
+          {
+            colid: row.colid,
+            $and: [
+              { $or: [{ programcode: "" }, { programcode: { $exists: false } }, { programcode: null }] },
+              { $or: [{ program: "" }, { program: { $exists: false } }, { program: null }] }
+            ]
+          },
+          row,
+          { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true, sort: { updatedAt: -1 } }
+        )
+      : await IciciGateway.create(row);
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

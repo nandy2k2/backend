@@ -2,6 +2,7 @@ const Ledgerstud = require("../Models/ledgerstud");
 const MasterGateway = require("../Models/mastergatewayds");
 const StudentOnlinePayment = require("../Models/studentonlinepaymentds");
 const IciciPayment = require("../Models/icicipaymentds");
+const User = require("../Models/user");
 
 function text(value) {
   return String(value || "").trim();
@@ -36,6 +37,20 @@ function feeItemSnapshot(row, payingAmount) {
     balancebefore,
     payingamount: Math.min(number(payingAmount), balancebefore)
   };
+}
+
+async function getStudentUser(colid, regno, source = {}) {
+  const candidates = [regno, source.regno, source.email, source.studentemail, source.user]
+    .map(text)
+    .filter(Boolean);
+  const or = [];
+  candidates.forEach((value) => {
+    or.push({ regno: value }, { email: value });
+  });
+  if (!or.length) return null;
+  return User.findOne({ colid: Number(colid), role: /^student$/i, $or: or })
+    .select("name email phone regno program programcode regulation academicyear semester section admissionyear")
+    .lean();
 }
 
 function isSuccessfulGatewayPayment(payment = {}) {
@@ -73,8 +88,16 @@ exports.getPendingStudentFees = async (req, res) => {
     const regno = text(req.query.regno);
     if (!colid || !regno) return res.status(400).json({ success: false, message: "colid and regno are required" });
     await exports.reconcileSuccessfulStudentOnlinePayments({ colid, regno });
-    const rows = await Ledgerstud.find({ colid, regno, balance: { $gt: 0 } }).sort({ academicyear: 1, feegroup: 1, feeitem: 1 }).lean();
-    res.json({ success: true, data: rows });
+    const [rows, studentuser] = await Promise.all([
+      Ledgerstud.find({ colid, regno, balance: { $gt: 0 } }).sort({ academicyear: 1, feegroup: 1, feeitem: 1 }).lean(),
+      getStudentUser(colid, regno, req.query)
+    ]);
+    const enrichedRows = rows.map((row) => ({
+      ...row,
+      program: text(row.program) || text(studentuser?.program),
+      programcode: text(row.programcode) || text(studentuser?.programcode)
+    }));
+    res.json({ success: true, data: enrichedRows, studentuser });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -93,7 +116,10 @@ exports.createStudentPaymentSession = async (req, res) => {
     const gateway = await MasterGateway.findOne({ _id: gatewayid, colid, status: "Active" }).lean();
     if (!gateway) return res.status(404).json({ success: false, message: "Active payment gateway not found" });
 
-    const ledgerRows = await Ledgerstud.find({ _id: { $in: ledgerids }, colid, regno, balance: { $gt: 0 } }).lean();
+    const [ledgerRows, studentuser] = await Promise.all([
+      Ledgerstud.find({ _id: { $in: ledgerids }, colid, regno, balance: { $gt: 0 } }).lean(),
+      getStudentUser(colid, regno, req.body)
+    ]);
     if (ledgerRows.length === 0) return res.status(400).json({ success: false, message: "No pending fee items found for payment" });
 
     const ledgeritems = ledgerRows.map((row) => feeItemSnapshot(row, row.balance));
@@ -101,21 +127,27 @@ exports.createStudentPaymentSession = async (req, res) => {
     if (totalamount <= 0) return res.status(400).json({ success: false, message: "Total payable amount must be greater than zero" });
 
     const first = ledgerRows[0] || {};
+    const studentProgram = text(studentuser?.program) || text(req.body.program || first.program);
+    const studentProgramCode = text(studentuser?.programcode) || text(req.body.programcode || first.programcode);
+    const studentRegulation = text(studentuser?.regulation) || text(req.body.regulation || first.regulation);
+    const studentAcademicYear = text(studentuser?.academicyear) || text(req.body.academicyear || first.academicyear);
+    const studentSemester = text(studentuser?.semester) || text(req.body.semester || first.semester);
+    const studentSection = text(studentuser?.section) || text(req.body.section || first.section);
     const refno = `STUFEE_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     const payment = await StudentOnlinePayment.create({
       name: text(req.body.name),
       user: text(req.body.user),
       colid,
-      student: text(req.body.student) || text(first.student),
+      student: text(studentuser?.name) || text(req.body.student) || text(first.student),
       regno,
-      studentemail: text(req.body.email || req.body.studentemail || first.user),
-      phone: text(req.body.phone),
-      program: text(req.body.program || first.program),
-      programcode: text(req.body.programcode || first.programcode),
-      regulation: text(req.body.regulation || first.regulation),
-      academicyear: text(req.body.academicyear || first.academicyear),
-      semester: text(req.body.semester || first.semester),
-      section: text(req.body.section),
+      studentemail: text(studentuser?.email) || text(req.body.email || req.body.studentemail || first.user),
+      phone: text(studentuser?.phone) || text(req.body.phone),
+      program: studentProgram,
+      programcode: studentProgramCode,
+      regulation: studentRegulation,
+      academicyear: studentAcademicYear,
+      semester: studentSemester,
+      section: studentSection,
       gateway: text(gateway.gatewayname),
       gatewaytype: text(gateway.type),
       refno,
@@ -129,6 +161,7 @@ exports.createStudentPaymentSession = async (req, res) => {
       data: {
         payment,
         gateway,
+        studentuser,
         gatewayPayload: {
           colid,
           student: payment.student || regno,
@@ -138,6 +171,8 @@ exports.createStudentPaymentSession = async (req, res) => {
           type: "Student",
           email: payment.studentemail,
           phone: payment.phone,
+          program: payment.program,
+          programcode: payment.programcode,
           description: payment.description,
           source: "StudentFeesOnline",
           sourceid: String(payment._id),

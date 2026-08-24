@@ -73,14 +73,30 @@ function buildHandler(config) {
 async function findIciciConfigForPayment(colid, body = {}) {
   const program = text(body.program);
   const programcode = text(body.programcode);
-  if (program || programcode) {
+  if (program && programcode) {
+    const exactProgramAndCodeConfig = await IciciGateway.findOne({
+      colid,
+      isactive: true,
+      program: exactRegex(program),
+      programcode: exactRegex(programcode)
+    }).sort({ updatedAt: -1 }).lean();
+    if (exactProgramAndCodeConfig) return exactProgramAndCodeConfig;
+  }
+  if (programcode) {
+    const programCodeConfig = await IciciGateway.findOne({
+      colid,
+      isactive: true,
+      programcode: exactRegex(programcode),
+      ...(program ? { $or: [{ program: "" }, { program: { $exists: false } }, { program: null }] } : {})
+    }).sort({ updatedAt: -1 }).lean();
+    if (programCodeConfig) return programCodeConfig;
+  }
+  if (program) {
     const programConfig = await IciciGateway.findOne({
       colid,
       isactive: true,
-      $or: [
-        ...(programcode ? [{ programcode: exactRegex(programcode) }] : []),
-        ...(program ? [{ program: exactRegex(program) }] : [])
-      ]
+      program: exactRegex(program),
+      $or: [{ programcode: "" }, { programcode: { $exists: false } }, { programcode: null }]
     }).sort({ updatedAt: -1 }).lean();
     if (programConfig) return programConfig;
   }
@@ -92,7 +108,7 @@ async function findIciciConfigForPayment(colid, body = {}) {
       { $or: [{ program: "" }, { program: { $exists: false } }, { program: null }] }
     ]
   }).sort({ updatedAt: -1 }).lean();
-  return defaultConfig || IciciGateway.findOne({ colid, isactive: true }).sort({ updatedAt: -1 }).lean();
+  return defaultConfig;
 }
 
 function normalizeStatus(params = {}) {
@@ -193,7 +209,17 @@ exports.initiateIciciPayment = async (req, res) => {
     });
 
     const paymenturl = handler.getAuthRedirectUrl(result.response);
-    payment.gatewayresponse = { initiateRequest: result.request, initiateResponse: result.response };
+    if (!paymenturl) {
+      const configScope = text(config.programcode)
+        ? `program code ${text(config.programcode)}`
+        : text(config.program)
+          ? `program ${text(config.program)}`
+          : "default ICICI configuration";
+      payment.gatewayresponse = { initiateRequest: result.request, initiateResponse: result.response, selectedGatewayConfigId: String(config._id || ""), selectedMerchantId: text(config.merchantid) };
+      await payment.save();
+      throw new Error(`ICICI gateway did not return redirect URL for ${configScope} using merchant ${text(config.merchantid)}. ${text(result.response?.respDescription || result.response?.message || result.response?.statusDesc)}`);
+    }
+    payment.gatewayresponse = { initiateRequest: result.request, initiateResponse: result.response, selectedGatewayConfigId: String(config._id || ""), selectedMerchantId: text(config.merchantid) };
     await payment.save();
 
     if (paymentType === "Admission" && text(req.body.applicationid)) {
