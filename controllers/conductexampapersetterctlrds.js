@@ -1,16 +1,20 @@
 const path = require("path");
 const multer = require("multer");
 const AWS = require("aws-sdk");
+const ConductExam = require("../Models/conductexamds");
 const ConductExamCourse = require("../Models/conductexamcourseds");
 const PaperSetter = require("../Models/conductexampapersetterds");
 const PaperSetterPanel = require("../Models/conductexampapersetterpanelds");
 const PaperSetterPanelMember = require("../Models/conductexampapersetterpanelmemberds");
 const QuestionPaper = require("../Models/conductexamquestionpaperds");
+const QuestionPattern = require("../Models/conductexamquestionpatternds");
+const QuestionPatternDetail = require("../Models/conductexamquestionpatterndetailds");
 const CourseOutcome = require("../Models/courseoutcomeds");
 const Syllabus = require("../Models/syllabusds");
 const NepLmsTimetable = require("../Models/neplmstimetableds");
 const AiConfiguration = require("../Models/aiconfigurationds");
 const Awsconfig = require("../Models/awsconfig");
+const Institution = require("../Models/insdetails");
 const User = require("../Models/user");
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -58,6 +62,8 @@ const courseFields = ["academicyear", "regulation", "exam", "examcode", "program
 const setterFields = [...courseFields, "papersettername", "papersetteremail", "status"];
 const panelFields = ["academicyear", "regulation", "program", "programcode", "panelname", "status"];
 const panelMemberFields = [...panelFields, "membername", "memberemail", "role", "department", "approvalstatus", "status"];
+const patternFields = ["academicyear", "program", "programcode", "pattern", "status"];
+const patternDetailFields = ["patternid", "academicyear", "program", "programcode", "pattern", "section", "question", "group", "subquestion", "status"];
 
 const buildFilter = (source = {}, fields = []) => {
   const filter = {};
@@ -189,6 +195,53 @@ const validatePanelMember = (item) => {
   return "";
 };
 
+const patternPayload = (body = {}) => ({
+  colid: number(body.colid),
+  academicyear: text(body.academicyear),
+  program: text(body.program),
+  programcode: text(body.programcode),
+  pattern: text(body.pattern),
+  description: text(body.description),
+  status: text(body.status) || "Active",
+  name: text(body.name),
+  user: text(body.user)
+});
+
+const patternDetailPayload = (body = {}) => ({
+  colid: number(body.colid),
+  patternid: text(body.patternid),
+  academicyear: text(body.academicyear),
+  program: text(body.program),
+  programcode: text(body.programcode),
+  pattern: text(body.pattern),
+  section: text(body.section),
+  question: text(body.question),
+  group: text(body.group),
+  subquestion: text(body.subquestion),
+  order: Number(body.order || 0),
+  marks: Number(body.marks || 0),
+  instructions: text(body.instructions),
+  status: text(body.status) || "Active",
+  name: text(body.name),
+  user: text(body.user)
+});
+
+const validatePattern = (item) => {
+  if (item.colid === undefined) return "colid is required";
+  for (const field of ["academicyear", "program", "programcode", "pattern"]) {
+    if (!item[field]) return `${field} is required`;
+  }
+  return "";
+};
+
+const validatePatternDetail = (item) => {
+  if (item.colid === undefined) return "colid is required";
+  for (const field of ["patternid", "academicyear", "program", "programcode", "pattern", "section", "question"]) {
+    if (!item[field]) return `${field} is required`;
+  }
+  return "";
+};
+
 const getAiConfig = async (colid) => (
   await AiConfiguration.findOne({ colid: Number(colid), type: /^gemini$/i, active: /^yes$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
   || await AiConfiguration.findOne({ colid: Number(colid), type: /^gemini$/i, active: /^yes$/i }).sort({ _id: -1 }).lean()
@@ -222,12 +275,150 @@ exports.options = async (req, res) => {
     const colid = number(req.query.colid);
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const courseFilter = buildFilter(req.query, courseFields);
-    const [courses, setters, users] = await Promise.all([
+    const examFilter = buildFilter(req.query, ["academicyear", "examcode", "programcode", "semester", "type"]);
+    const [courses, exams, setters, users] = await Promise.all([
       ConductExamCourse.find(courseFilter).sort({ academicyear: -1, examcode: 1, program: 1, course: 1 }).lean(),
+      ConductExam.find(examFilter).sort({ academicyear: -1, examcode: 1, examname: 1 }).lean(),
       PaperSetter.find({ colid }).sort({ papersettername: 1 }).lean(),
       User.find({ colid, role: { $not: /^Student$/i } }).select("name email role department").sort({ name: 1, email: 1 }).lean()
     ]);
-    res.json({ success: true, courses, setters, users, academicyears: uniq(courses.map((row) => row.academicyear)), examcodes: uniq(courses.map((row) => row.examcode)) });
+    res.json({
+      success: true,
+      courses,
+      exams,
+      setters,
+      users,
+      academicyears: uniq([...courses.map((row) => row.academicyear), ...exams.map((row) => row.academicyear)]),
+      examcodes: uniq([...courses.map((row) => row.examcode), ...exams.map((row) => row.examcode)])
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getQuestionPatterns = async (req, res) => {
+  try {
+    const filter = buildFilter(req.query, patternFields);
+    if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const data = await QuestionPattern.find(filter).sort({ academicyear: -1, program: 1, pattern: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.saveQuestionPattern = async (req, res) => {
+  try {
+    const item = patternPayload(req.body);
+    const validation = validatePattern(item);
+    if (validation) return res.status(400).json({ success: false, message: validation });
+    const id = text(req.body._id);
+    const filter = id ? { _id: id, colid: item.colid } : { colid: item.colid, academicyear: item.academicyear, programcode: item.programcode, pattern: item.pattern };
+    const data = await QuestionPattern.findOneAndUpdate(filter, item, { upsert: !id, new: true, setDefaultsOnInsert: true, runValidators: true });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.code === 11000 ? "This question pattern already exists." : error.message });
+  }
+};
+
+exports.deleteQuestionPatterns = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(text).filter(Boolean) : [text(req.body.id)].filter(Boolean);
+    if (colid === undefined || !ids.length) return res.status(400).json({ success: false, message: "colid and ids are required" });
+    await QuestionPattern.deleteMany({ colid, _id: { $in: ids } });
+    await QuestionPatternDetail.deleteMany({ colid, patternid: { $in: ids } });
+    res.json({ success: true, deleted: ids.length });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkQuestionPatterns = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    let saved = 0;
+    const errors = [];
+    for (const [index, row] of rows.entries()) {
+      const item = patternPayload({ ...row, colid: req.body.colid || row.colid, name: req.body.name || row.name, user: req.body.user || row.user });
+      const validation = validatePattern(item);
+      if (validation) {
+        errors.push(`Row ${index + 1}: ${validation}`);
+        continue;
+      }
+      await QuestionPattern.findOneAndUpdate(
+        { colid: item.colid, academicyear: item.academicyear, programcode: item.programcode, pattern: item.pattern },
+        item,
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      saved += 1;
+    }
+    res.json({ success: true, saved, errors });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getQuestionPatternDetails = async (req, res) => {
+  try {
+    const filter = buildFilter(req.query, patternDetailFields);
+    if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const data = await QuestionPatternDetail.find(filter).sort({ order: 1, section: 1, question: 1, group: 1, subquestion: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.saveQuestionPatternDetail = async (req, res) => {
+  try {
+    const item = patternDetailPayload(req.body);
+    const validation = validatePatternDetail(item);
+    if (validation) return res.status(400).json({ success: false, message: validation });
+    const id = text(req.body._id);
+    const filter = id ? { _id: id, colid: item.colid } : {
+      colid: item.colid,
+      patternid: item.patternid,
+      section: item.section,
+      question: item.question,
+      group: item.group,
+      subquestion: item.subquestion
+    };
+    const data = await QuestionPatternDetail.findOneAndUpdate(filter, item, { upsert: !id, new: true, setDefaultsOnInsert: true, runValidators: true });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.deleteQuestionPatternDetails = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(text).filter(Boolean) : [text(req.body.id)].filter(Boolean);
+    if (colid === undefined || !ids.length) return res.status(400).json({ success: false, message: "colid and ids are required" });
+    await QuestionPatternDetail.deleteMany({ colid, _id: { $in: ids } });
+    res.json({ success: true, deleted: ids.length });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkQuestionPatternDetails = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    let saved = 0;
+    const errors = [];
+    for (const [index, row] of rows.entries()) {
+      const item = patternDetailPayload({ ...row, colid: req.body.colid || row.colid, name: req.body.name || row.name, user: req.body.user || row.user });
+      const validation = validatePatternDetail(item);
+      if (validation) {
+        errors.push(`Row ${index + 1}: ${validation}`);
+        continue;
+      }
+      await QuestionPatternDetail.create(item);
+      saved += 1;
+    }
+    res.json({ success: true, saved, errors });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -545,12 +736,31 @@ exports.saveQuestionPaper = async (req, res) => {
       status: requestedStatus,
       paperattachmenturl: text(req.body.paperattachmenturl),
       paperattachmentfilename: text(req.body.paperattachmentfilename),
+      syllabussourceurl: text(req.body.syllabussourceurl),
+      syllabussourcefilename: text(req.body.syllabussourcefilename),
       paperdocuments: docs(req.body.paperdocuments),
+      patternid: text(req.body.patternid) || undefined,
+      pattern: text(req.body.pattern),
+      patterndescription: text(req.body.patterndescription),
+      patternrows: Array.isArray(req.body.patternrows) ? req.body.patternrows.map((row) => ({
+        section: text(row.section),
+        question: text(row.question),
+        group: text(row.group),
+        subquestion: text(row.subquestion),
+        order: Number(row.order || 0),
+        marks: Number(row.marks || 0),
+        instructions: text(row.instructions)
+      })) : [],
+      translationlanguages: arr(req.body.translationlanguages),
       sections: Array.isArray(req.body.sections) ? req.body.sections.map((section) => ({
         title: text(section.title),
         instructions: text(section.instructions),
         marks: Number(section.marks || 0),
         questions: Array.isArray(section.questions) ? section.questions.map((question) => ({
+          patternsection: text(question.patternsection),
+          patternquestion: text(question.patternquestion),
+          patterngroup: text(question.patterngroup),
+          patternsubquestion: text(question.patternsubquestion),
           question: text(question.question),
           answer: text(question.answer),
           questiontype: text(question.questiontype) || "Short Answer Type",
@@ -562,7 +772,12 @@ exports.saveQuestionPaper = async (req, res) => {
           co: text(question.co),
           attachmenturl: text(question.attachmenturl),
           attachmentfilename: text(question.attachmentfilename),
-          aimappingcomments: text(question.aimappingcomments)
+          aimappingcomments: text(question.aimappingcomments),
+          translations: Array.isArray(question.translations) ? question.translations.map((translation) => ({
+            language: text(translation.language),
+            question: text(translation.question),
+            answer: text(translation.answer)
+          })).filter((translation) => translation.language && (translation.question || translation.answer)) : []
         })) : []
       })) : [],
       airesponse: text(req.body.airesponse),
@@ -655,6 +870,26 @@ Selected modules: ${selectedModules.join(", ") || "Not specified"}
 Selected topics/content: ${selectedTopics.join(" | ") || "Not specified"}
 Important restriction: Generate questions only from the selected modules and selected topics/content above. Do not use topics outside this selected syllabus context.`
       : "";
+    const sourceFileText = text(req.body.syllabusSourceUrl)
+      ? `
+Additional syllabus/source file URL uploaded to AWS: ${text(req.body.syllabusSourceUrl)}
+Use this file link as source material for question generation. If the file content is accessible, extract and follow it.`
+      : "";
+    const patternRows = Array.isArray(req.body.patternRows) ? req.body.patternRows : [];
+    const patternText = patternRows.length ? `
+Question paper pattern selected: ${text(req.body.pattern)}
+Pattern description: ${text(req.body.patterndescription)}
+Generate exactly one question for each pattern row below. Preserve section, question, group, subquestion, order and marks exactly as supplied. If group or subquestion is blank, keep it blank.
+Pattern rows: ${JSON.stringify(patternRows.map((row, index) => ({
+  section: text(row.section),
+  question: text(row.question),
+  group: text(row.group),
+  subquestion: text(row.subquestion),
+  order: Number(row.order || index + 1),
+  marks: Number(row.marks || 0),
+  instructions: text(row.instructions)
+})))}`
+      : "";
     const prompt = `Return valid JSON only as {"questions":[...]}.
 Create ${Number(req.body.count || 5)} exam questions.
 Course: ${text(req.body.course)} (${text(req.body.coursecode)})
@@ -665,10 +900,64 @@ Language: ${text(req.body.language)}
 Bloom levels allowed: ${arr(req.body.bloomlevels).join(", ")}
 Course outcomes available: ${JSON.stringify(req.body.cos || [])}
 ${contextText}
-For each question include: question, marks, questiontype, difficultylevel, language, bloomlevels array, conumber, co.`;
+${sourceFileText}
+${patternText}
+For each question include: patternsection, patternquestion, patterngroup, patternsubquestion, question, marks, questiontype, difficultylevel, language, bloomlevels array, conumber, co.`;
     const raw = await callGemini(colid, text(req.body.geminiModel), prompt);
     const parsed = parseJson(raw);
     res.json({ success: true, data: Array.isArray(parsed) ? parsed : (parsed.questions || []), raw });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.formatPatternwiseQuestionPaper = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const institution = await Institution.findOne({ colid }).lean() || {};
+    const rules = text(req.body.rules) || "Create a professional compact A4 university question paper in the exact supplied pattern order.";
+    const payload = {
+      selectedPaper: req.body.selectedPaper || {},
+      pattern: req.body.pattern || {},
+      patternRows: req.body.patternRows || [],
+      sections: req.body.sections || [],
+      translationlanguages: req.body.translationlanguages || []
+    };
+    const prompt = `Return valid JSON only as {"html":"..."}.
+Create clean printable HTML for the question body of an A4 portrait question paper.
+Use inline styles only. Do not include scripts, markdown, html, head, body, or style tags.
+Institution details: ${JSON.stringify(institution)}
+Formatting rules from user: ${rules}
+Question paper payload: ${JSON.stringify(payload)}
+Requirements:
+- Do not repeat institution logo, institution name, address, exam, program, course, course code, or pattern name because the print wrapper already adds those.
+- Display questions strictly as per pattern: section, question number, optional group, optional subquestion.
+- Include marks at the right side for every question when available.
+- Include translations below the main question text where available.
+- Keep the layout compact, black text, bordered outer sheet, professional examination format.`;
+    const raw = await callGemini(colid, text(req.body.geminiModel), prompt);
+    const parsed = parseJson(raw);
+    res.json({ success: true, html: parsed.html || raw });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.translateQuestionPaper = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const languages = arr(req.body.languages);
+    if (!languages.length) return res.status(400).json({ success: false, message: "Select at least one language" });
+    const prompt = `Return valid JSON only as {"sections":[...]}.
+Translate the question text and answer text of this question paper into these languages: ${languages.join(", ")}.
+Preserve all sections, questions, marks, CO, Bloom mapping, patternsection, patternquestion, patterngroup and patternsubquestion exactly.
+For every question return translations as an array of {language, question, answer}.
+Question paper sections: ${JSON.stringify(req.body.sections || [])}`;
+    const raw = await callGemini(colid, text(req.body.geminiModel), prompt);
+    const parsed = parseJson(raw);
+    res.json({ success: true, data: Array.isArray(parsed) ? parsed : (parsed.sections || []), raw });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

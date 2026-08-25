@@ -5851,6 +5851,14 @@ app.get("/api/v2/conductexam/examiner-marks-components", conductexamexaminerctlr
 app.get("/api/v2/conductexam/examiner-marks-students", conductexamexaminerctlrds.getExaminerStudentsForMarks);
 app.post("/api/v2/conductexam/examiner-marks-save", conductexamexaminerctlrds.saveExaminerExternalMarks);
 app.get("/api/v2/conductexam/papersetter-options", conductexampapersetterctlrds.options);
+app.get("/api/v2/conductexam/question-patterns", conductexampapersetterctlrds.getQuestionPatterns);
+app.post("/api/v2/conductexam/question-patterns", conductexampapersetterctlrds.saveQuestionPattern);
+app.post("/api/v2/conductexam/question-patterns-delete", conductexampapersetterctlrds.deleteQuestionPatterns);
+app.post("/api/v2/conductexam/question-patterns-bulk", conductexampapersetterctlrds.bulkQuestionPatterns);
+app.get("/api/v2/conductexam/question-pattern-details", conductexampapersetterctlrds.getQuestionPatternDetails);
+app.post("/api/v2/conductexam/question-pattern-details", conductexampapersetterctlrds.saveQuestionPatternDetail);
+app.post("/api/v2/conductexam/question-pattern-details-delete", conductexampapersetterctlrds.deleteQuestionPatternDetails);
+app.post("/api/v2/conductexam/question-pattern-details-bulk", conductexampapersetterctlrds.bulkQuestionPatternDetails);
 app.get("/api/v2/conductexam/papersetter-panels", conductexampapersetterctlrds.getPanels);
 app.post("/api/v2/conductexam/papersetter-panels", conductexampapersetterctlrds.savePanel);
 app.post("/api/v2/conductexam/papersetter-panels-delete", conductexampapersetterctlrds.deletePanel);
@@ -5872,6 +5880,8 @@ app.post("/api/v2/conductexam/question-paper-submit", conductexampapersetterctlr
 app.post("/api/v2/conductexam/question-paper-upload", conductexampapersetterctlrds.uploadMiddleware, conductexampapersetterctlrds.uploadAttachment);
 app.post("/api/v2/conductexam/question-paper-generate", conductexampapersetterctlrds.generateQuestions);
 app.post("/api/v2/conductexam/question-paper-ai-map", conductexampapersetterctlrds.analyzeMapping);
+app.post("/api/v2/conductexam/question-paper-translate", conductexampapersetterctlrds.translateQuestionPaper);
+app.post("/api/v2/conductexam/question-paper-pattern-format", conductexampapersetterctlrds.formatPatternwiseQuestionPaper);
 app.get("/api/v2/conductexam/moderator-options", conductexammoderatorctlrds.options);
 app.get("/api/v2/conductexam/moderator-panels", conductexammoderatorctlrds.getPanels);
 app.post("/api/v2/conductexam/moderator-panels", conductexammoderatorctlrds.savePanel);

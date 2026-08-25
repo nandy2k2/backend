@@ -1,6 +1,10 @@
 const mongoose = require("mongoose");
 
 const questionSchema = new mongoose.Schema({
+  patternsection: { type: String, trim: true },
+  patternquestion: { type: String, trim: true },
+  patterngroup: { type: String, trim: true },
+  patternsubquestion: { type: String, trim: true },
   question: { type: String, trim: true },
   answer: { type: String, trim: true },
   questiontype: { type: String, trim: true, default: "Short Answer Type" },
@@ -12,7 +16,12 @@ const questionSchema = new mongoose.Schema({
   co: { type: String, trim: true },
   attachmenturl: { type: String, trim: true },
   attachmentfilename: { type: String, trim: true },
-  aimappingcomments: { type: String, trim: true }
+  aimappingcomments: { type: String, trim: true },
+  translations: [{
+    language: { type: String, trim: true },
+    question: { type: String, trim: true },
+    answer: { type: String, trim: true }
+  }]
 }, { timestamps: true });
 
 const sectionSchema = new mongoose.Schema({
@@ -42,6 +51,8 @@ const conductExamQuestionPaperSchema = new mongoose.Schema({
   paperstatus: { type: String, trim: true, default: "Default" },
   paperattachmenturl: { type: String, trim: true },
   paperattachmentfilename: { type: String, trim: true },
+  syllabussourceurl: { type: String, trim: true },
+  syllabussourcefilename: { type: String, trim: true },
   paperdocuments: [{
     title: { type: String, trim: true },
     filename: { type: String, trim: true },
@@ -49,6 +60,19 @@ const conductExamQuestionPaperSchema = new mongoose.Schema({
     uploadedby: { type: String, trim: true },
     uploadeddate: { type: Date, default: Date.now }
   }],
+  patternid: { type: mongoose.Schema.Types.ObjectId, ref: "conductexamquestionpatternds" },
+  pattern: { type: String, trim: true },
+  patterndescription: { type: String, trim: true },
+  patternrows: [{
+    section: { type: String, trim: true },
+    question: { type: String, trim: true },
+    group: { type: String, trim: true },
+    subquestion: { type: String, trim: true },
+    order: { type: Number, default: 0 },
+    marks: { type: Number, default: 0 },
+    instructions: { type: String, trim: true }
+  }],
+  translationlanguages: [{ type: String, trim: true }],
   moderationdocuments: [{
     title: { type: String, trim: true },
     filename: { type: String, trim: true },
