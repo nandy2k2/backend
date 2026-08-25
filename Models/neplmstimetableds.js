@@ -29,6 +29,7 @@ const nepLmsTimetableSchema = new mongoose.Schema(
     durationminutes: { type: Number, default: 0 },
     module: { type: String, trim: true },
     topic: { type: String, trim: true },
+    lecturetype: { type: String, trim: true, default: "Theory" },
     workcompleted: { type: String, trim: true, default: "" },
     onlineenabled: { type: String, trim: true, default: "No" },
     onlineclassstatus: { type: String, trim: true, default: "Scheduled" },

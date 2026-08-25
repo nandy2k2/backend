@@ -10,6 +10,7 @@ const libraryBookSchema = new mongoose.Schema(
     title: { type: String, required: true, trim: true },
     author: { type: String, trim: true },
     classification: { type: String, trim: true },
+    classificationnumber: { type: String, trim: true },
     publisher: { type: String, trim: true },
     publisheraddress: { type: String, trim: true },
     isbn: { type: String, trim: true },

@@ -25,13 +25,13 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 const libraryFields = ["libraryname", "description", "type", "status"];
 const bookFields = [
-  "libraryid", "libraryname", "accessionno", "title", "author", "classification", "publisher", "publisheraddress",
+  "libraryid", "libraryname", "accessionno", "title", "author", "classification", "classificationnumber", "publisher", "publisheraddress",
   "isbn", "category", "subject", "edition", "publicationyear", "language", "rackno", "shelfno", "location",
   "supplier", "invoiceno", "invoicedate", "keywords", "purchasedate",
   "price", "pages", "status", "remarks"
 ];
 const studentFields = ["academicyear", "program", "programcode", "semester", "section", "name", "email", "phone", "regno", "major", "minor"];
-const issueFields = ["libraryid", "libraryname", "accessionno", "title", "classification", "publisher", "publisheraddress", "category", "keywords", "invoiceno", "student", "regno", "email", "programcode", "academicyear", "semester", "issuetype", "status"];
+const issueFields = ["libraryid", "libraryname", "accessionno", "title", "classification", "classificationnumber", "publisher", "publisheraddress", "category", "keywords", "invoiceno", "student", "regno", "email", "programcode", "academicyear", "semester", "issuetype", "status"];
 const roleMaxBooksFields = ["role", "bookcategory", "noofbooks", "default"];
 const roleMaxDaysFields = ["role", "bookcategory", "noofdays"];
 const ledgerFields = ["academicyear", "program", "programcode", "regulation", "semester", "student", "regno", "feegroup", "feeitem", "status"];
@@ -133,7 +133,7 @@ function applyFilters(query, source, fields) {
   fields.forEach((field) => {
     const value = source[field];
     if (!text(value)) return;
-    if (["title", "author", "classification", "publisher", "publisheraddress", "keywords", "invoiceno", "student", "name", "email", "phone", "regno", "feeitem", "feegroup", "accessionno", "libraryname", "description"].includes(field)) query[field] = regex(value);
+    if (["title", "author", "classification", "classificationnumber", "publisher", "publisheraddress", "keywords", "invoiceno", "student", "name", "email", "phone", "regno", "feeitem", "feegroup", "accessionno", "libraryname", "description"].includes(field)) query[field] = regex(value);
     else query[field] = value;
   });
 }

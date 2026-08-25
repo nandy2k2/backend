@@ -90,6 +90,7 @@ const timetablePayload = (body = {}) => ({
   durationminutes: number(body.durationminutes || body.durationMinutes),
   module: text(body.module),
   topic: text(body.topic),
+  lecturetype: text(body.lecturetype) || "Theory",
   workcompleted: body.workcompleted === undefined ? "" : text(body.workcompleted),
   onlineenabled: text(body.onlineenabled) || "No",
   onlineclassstatus: text(body.onlineclassstatus) || "Scheduled",
@@ -128,6 +129,7 @@ const courseFilter = (source = {}) => {
     "roomno",
     "classdate",
     "period",
+    "lecturetype",
     "resourcetype",
     "status",
     "user"
