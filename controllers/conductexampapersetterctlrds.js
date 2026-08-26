@@ -40,7 +40,11 @@ const docs = (value) => Array.isArray(value) ? value.map((doc) => ({
   uploadedby: text(doc.uploadedby),
   uploadeddate: dateOrUndefined(doc.uploadeddate) || new Date()
 })).filter((doc) => doc.url) : [];
-const stripCodeFence = (content) => text(content).replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```$/i, "").trim();
+const stripCodeFence = (content) => text(content)
+  .replace(/^\uFEFF/, "")
+  .replace(/^```(?:json)?\s*/i, "")
+  .replace(/```$/i, "")
+  .trim();
 const splitTopics = (value) => String(value || "")
   .split(/\r?\n|[,;|]/)
   .map((item) => item.replace(/^\s*[-*0-9.)]+\s*/, "").trim())
@@ -51,7 +55,15 @@ const parseJson = (content) => {
   const startArr = clean.indexOf("[");
   const start = startArr >= 0 && (startObj < 0 || startArr < startObj) ? startArr : startObj;
   const end = startArr >= 0 && start === startArr ? clean.lastIndexOf("]") : clean.lastIndexOf("}");
-  return JSON.parse(start >= 0 && end > start ? clean.slice(start, end + 1) : clean);
+  const candidate = start >= 0 && end > start ? clean.slice(start, end + 1) : clean;
+  try {
+    return JSON.parse(candidate);
+  } catch (error) {
+    const repaired = candidate
+      .replace(/,\s*([}\]])/g, "$1")
+      .replace(/[\u0000-\u001F]+/g, " ");
+    return JSON.parse(repaired);
+  }
 };
 const encodeS3Key = (key) => String(key || "").split("/").map(encodeURIComponent).join("/");
 const s3Url = (bucket, region, key) => region === "us-east-1"
@@ -266,6 +278,102 @@ const callGemini = async (colid, model, prompt) => {
     lastError = data.error?.message || `Gemini API request failed for ${geminiModel}`;
   }
   throw new Error(lastError || "Gemini API request failed");
+};
+
+const callGeminiText = async (colid, model, prompt) => {
+  const config = await getAiConfig(colid);
+  if (!config?.apikey) throw new Error("Default active Gemini AI configuration is missing");
+  const models = model ? [model] : ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+  let lastError = "";
+  for (const geminiModel of models) {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent?key=${encodeURIComponent(config.apikey)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.2 }
+      })
+    });
+    const data = await response.json();
+    if (response.ok) return data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("\n").trim() || "";
+    lastError = data.error?.message || `Gemini API request failed for ${geminiModel}`;
+  }
+  throw new Error(lastError || "Gemini API request failed");
+};
+
+const parseOrRepairJson = async (colid, model, raw, expectedShape) => {
+  try {
+    return parseJson(raw);
+  } catch (error) {
+    const repairPrompt = `Return valid JSON only. Do not include markdown or commentary.
+The previous AI response was intended to be ${expectedShape}, but it is invalid JSON.
+Repair it into strictly valid JSON. Escape all quotes and newlines inside strings.
+Invalid response:
+${raw}`;
+    const repairedRaw = await callGemini(colid, model, repairPrompt);
+    return parseJson(repairedRaw);
+  }
+};
+
+const flattenQuestionSections = (sections = []) => (sections || []).flatMap((section, sectionIndex) =>
+  (section.questions || []).map((question, questionIndex) => ({
+    sectionIndex,
+    questionIndex,
+    sectionTitle: text(section.title),
+    patternsection: text(question.patternsection),
+    patternquestion: text(question.patternquestion),
+    patterngroup: text(question.patterngroup),
+    patternsubquestion: text(question.patternsubquestion),
+    question: text(question.question),
+    answer: text(question.answer)
+  }))
+);
+
+const mergeQuestionTranslations = (sections = [], translations = []) => {
+  const nextSections = JSON.parse(JSON.stringify(sections || []));
+  (translations || []).forEach((item) => {
+    const sectionIndex = Number(item.sectionIndex);
+    const questionIndex = Number(item.questionIndex);
+    if (!Number.isInteger(sectionIndex) || !Number.isInteger(questionIndex)) return;
+    const question = nextSections?.[sectionIndex]?.questions?.[questionIndex];
+    if (!question || !text(item.language)) return;
+    const existing = Array.isArray(question.translations) ? question.translations : [];
+    const withoutLanguage = existing.filter((row) => text(row.language).toLowerCase() !== text(item.language).toLowerCase());
+    question.translations = [...withoutLanguage, {
+      language: text(item.language),
+      question: text(item.question),
+      answer: text(item.answer)
+    }];
+  });
+  return nextSections;
+};
+
+const translateInSmallChunks = async (colid, model, sections = [], languages = []) => {
+  const questions = flattenQuestionSections(sections);
+  const translations = [];
+  for (const language of languages) {
+    for (const item of questions) {
+      if (!item.question && !item.answer) continue;
+      const questionPrompt = `Translate the text below to ${language}.
+Return only the translated text. Do not return JSON, markdown, bullets, labels, or commentary.
+
+${item.question}`;
+      const answerPrompt = `Translate the text below to ${language}.
+Return only the translated text. Do not return JSON, markdown, bullets, labels, or commentary.
+
+${item.answer}`;
+      const translatedQuestion = item.question ? await callGeminiText(colid, model, questionPrompt) : "";
+      const translatedAnswer = item.answer ? await callGeminiText(colid, model, answerPrompt) : "";
+      translations.push({
+        sectionIndex: item.sectionIndex,
+        questionIndex: item.questionIndex,
+        language,
+        question: stripCodeFence(translatedQuestion),
+        answer: stripCodeFence(translatedAnswer)
+      });
+    }
+  }
+  return mergeQuestionTranslations(sections, translations);
 };
 
 const getDefaultAwsConfig = async (colid) => Awsconfig.findOne({ colid: Number(colid), type: /^aws$/i, default: /^yes$/i }).sort({ _id: -1 }).lean();
@@ -950,14 +1058,9 @@ exports.translateQuestionPaper = async (req, res) => {
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const languages = arr(req.body.languages);
     if (!languages.length) return res.status(400).json({ success: false, message: "Select at least one language" });
-    const prompt = `Return valid JSON only as {"sections":[...]}.
-Translate the question text and answer text of this question paper into these languages: ${languages.join(", ")}.
-Preserve all sections, questions, marks, CO, Bloom mapping, patternsection, patternquestion, patterngroup and patternsubquestion exactly.
-For every question return translations as an array of {language, question, answer}.
-Question paper sections: ${JSON.stringify(req.body.sections || [])}`;
-    const raw = await callGemini(colid, text(req.body.geminiModel), prompt);
-    const parsed = parseJson(raw);
-    res.json({ success: true, data: Array.isArray(parsed) ? parsed : (parsed.sections || []), raw });
+    const sections = Array.isArray(req.body.sections) ? req.body.sections : [];
+    const nextSections = await translateInSmallChunks(colid, text(req.body.geminiModel), sections, languages);
+    res.json({ success: true, data: nextSections });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
