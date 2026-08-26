@@ -1,6 +1,8 @@
 const path = require("path");
 const multer = require("multer");
 const AWS = require("aws-sdk");
+const pdfParse = require("pdf-parse");
+const mammoth = require("mammoth");
 const ConductExam = require("../Models/conductexamds");
 const ConductExamCourse = require("../Models/conductexamcourseds");
 const PaperSetter = require("../Models/conductexampapersetterds");
@@ -72,6 +74,28 @@ const encodeS3Key = (key) => String(key || "").split("/").map(encodeURIComponent
 const s3Url = (bucket, region, key) => region === "us-east-1"
   ? `https://${bucket}.s3.amazonaws.com/${encodeS3Key(key)}`
   : `https://${bucket}.s3.${region}.amazonaws.com/${encodeS3Key(key)}`;
+
+const extractTextFromUrl = async (url, filename = "") => {
+  const link = text(url);
+  if (!link) return "";
+  try {
+    const response = await fetch(link);
+    if (!response.ok) return "";
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const lower = `${filename} ${link}`.toLowerCase();
+    if (lower.includes(".pdf")) {
+      const parsed = await pdfParse(buffer);
+      return text(parsed.text).slice(0, 24000);
+    }
+    if (lower.includes(".docx") || lower.includes(".doc")) {
+      const parsed = await mammoth.extractRawText({ buffer });
+      return text(parsed.value).slice(0, 24000);
+    }
+    return buffer.toString("utf8").slice(0, 24000);
+  } catch (error) {
+    return "";
+  }
+};
 
 const courseFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode"];
 const setterFields = [...courseFields, "papersettername", "papersetteremail", "status"];
@@ -238,6 +262,7 @@ const patternDetailPayload = (body = {}) => ({
   order: Number(body.order || 0),
   marks: Number(body.marks || 0),
   instructions: text(body.instructions),
+  questionprompt: text(body.questionprompt || body.prompt || body.additionalprompt),
   status: text(body.status) || "Active",
   name: text(body.name),
   user: text(body.user)
@@ -276,7 +301,8 @@ const getOllamaConfig = async (colid, id) => (
 const callGemini = async (colid, model, prompt) => {
   const config = await getAiConfig(colid);
   if (!config?.apikey) throw new Error("Default active Gemini AI configuration is missing");
-  const models = model ? [model] : ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+  const fallbackModels = ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+  const models = [...new Set([text(model), ...fallbackModels].filter(Boolean))];
   let lastError = "";
   for (const geminiModel of models) {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent?key=${encodeURIComponent(config.apikey)}`, {
@@ -366,7 +392,8 @@ const callQuestionAi = async (body, prompt) => {
 const callGeminiText = async (colid, model, prompt) => {
   const config = await getAiConfig(colid);
   if (!config?.apikey) throw new Error("Default active Gemini AI configuration is missing");
-  const models = model ? [model] : ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+  const fallbackModels = ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+  const models = [...new Set([text(model), ...fallbackModels].filter(Boolean))];
   let lastError = "";
   for (const geminiModel of models) {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent?key=${encodeURIComponent(config.apikey)}`, {
@@ -929,6 +956,9 @@ exports.saveQuestionPaper = async (req, res) => {
       paperattachmentfilename: text(req.body.paperattachmentfilename),
       syllabussourceurl: text(req.body.syllabussourceurl),
       syllabussourcefilename: text(req.body.syllabussourcefilename),
+      samplequestionpaperurl: text(req.body.samplequestionpaperurl),
+      samplequestionpaperfilename: text(req.body.samplequestionpaperfilename),
+      additionalaiprompt: text(req.body.additionalaiprompt || req.body.additionalAiPrompt),
       paperdocuments: docs(req.body.paperdocuments),
       patternid: text(req.body.patternid) || undefined,
       pattern: text(req.body.pattern),
@@ -943,7 +973,8 @@ exports.saveQuestionPaper = async (req, res) => {
         subquestion: text(row.subquestion),
         order: Number(row.order || 0),
         marks: Number(row.marks || 0),
-        instructions: text(row.instructions)
+        instructions: text(row.instructions),
+        questionprompt: text(row.questionprompt || row.prompt || row.additionalprompt)
       })) : [],
       translationlanguages: arr(req.body.translationlanguages),
       sections: Array.isArray(req.body.sections) ? req.body.sections.map((section) => ({
@@ -968,6 +999,7 @@ exports.saveQuestionPaper = async (req, res) => {
           attachmenturl: text(question.attachmenturl),
           attachmentfilename: text(question.attachmentfilename),
           aimappingcomments: text(question.aimappingcomments),
+          questionprompt: text(question.questionprompt || question.prompt || question.additionalprompt),
           translations: Array.isArray(question.translations) ? question.translations.map((translation) => ({
             language: text(translation.language),
             question: text(translation.question),
@@ -1058,17 +1090,38 @@ exports.generateQuestions = async (req, res) => {
     const selectedModules = arr(req.body.selectedModules);
     const selectedTopics = arr(req.body.selectedTopics);
     const syllabusMode = text(req.body.syllabusMode) || "Complete Syllabus";
-    const contextText = selectedModules.length || selectedTopics.length
+    const templatewise = text(req.body.templatewise) === "Yes" || req.body.templatewise === true;
+    const additionalAiPrompt = text(req.body.additionalAiPrompt || req.body.additionalaiprompt);
+    const [extractedSyllabusText, extractedSampleText] = await Promise.all([
+      extractTextFromUrl(req.body.syllabusSourceUrl, req.body.syllabusSourceFilename),
+      extractTextFromUrl(req.body.sampleQuestionPaperUrl, req.body.sampleQuestionPaperFilename)
+    ]);
+    const selectedSyllabusDetails = Array.isArray(req.body.selectedSyllabusDetails) ? req.body.selectedSyllabusDetails : [];
+    const contextText = selectedModules.length || selectedTopics.length || selectedSyllabusDetails.length
       ? `
 Syllabus source: ${syllabusMode}
 Selected modules: ${selectedModules.join(", ") || "Not specified"}
 Selected topics/content: ${selectedTopics.join(" | ") || "Not specified"}
-Important restriction: Generate questions only from the selected modules and selected topics/content above. Do not use topics outside this selected syllabus context.`
+Selected syllabus details from ERP: ${JSON.stringify(selectedSyllabusDetails)}
+Important restriction: Generate questions only from the selected modules, selected topics/content, and selected syllabus details above. Do not use topics outside this selected syllabus context.`
       : "";
     const sourceFileText = text(req.body.syllabusSourceUrl)
       ? `
 Additional syllabus/source file URL uploaded to AWS: ${text(req.body.syllabusSourceUrl)}
-Use this file link as source material for question generation. If the file content is accessible, extract and follow it.`
+Extracted syllabus/source content from uploaded file:
+${extractedSyllabusText || "The file text could not be extracted. Use the URL if the AI provider can access it, but do not ignore the selected ERP syllabus context."}`
+      : "";
+    const sampleQuestionPaperText = text(req.body.sampleQuestionPaperUrl)
+      ? `
+Sample question paper/template URL uploaded to AWS: ${text(req.body.sampleQuestionPaperUrl)}
+Extracted sample paper/template text:
+${extractedSampleText || "The file text could not be extracted. Use the uploaded URL if the AI provider can access it."}
+STRICT TEMPLATE REQUIREMENT:
+- Read this sample question paper/template URL and follow its format exactly.
+- Match the same number of sections, number of questions, numbering style, sub-question style, mark distribution, instructions, and visual order.
+- Use the sample only as a template for format/look/structure. Generate fresh questions strictly from the selected syllabus/course context.
+- If the sample has tables, groups, case blocks, MCQ blocks, or descriptive sections, preserve that layout in the returned sections/questions.
+- Do not add extra questions, remove questions, rename sections, change marks, or change optional/compulsory rules unless the additional AI prompt explicitly says so.`
       : "";
     const patternRows = Array.isArray(req.body.patternRows) ? req.body.patternRows : [];
     const includeMath = text(req.body.includeMathematicalExpressions || req.body.includemathematicalexpressions) === "Yes"
@@ -1087,26 +1140,44 @@ Pattern rows: ${JSON.stringify(patternRows.map((row, index) => ({
   subquestion: text(row.subquestion),
   order: Number(row.order || index + 1),
   marks: Number(row.marks || 0),
-  instructions: text(row.instructions)
+  instructions: text(row.instructions),
+  questionprompt: text(row.questionprompt || row.prompt || row.additionalprompt)
 })))}`
       : "";
-    const prompt = `Return valid JSON only as {"questions":[...]}.
+    const patternDriven = patternRows.length > 0;
+    const responseShape = templatewise
+      ? `{"sections":[{"title":"","instructions":"","marks":0,"questions":[...]}],"html":"printable question paper body html that follows the sample template exactly"}`
+      : `{"questions":[...]}`;
+    const generationQuantityRule = patternDriven
+      ? `Generate exactly ${patternRows.length} question item(s), one for each supplied question format row. Do not ask for, infer, or use any separate question count. Do not merge rows and do not create extra rows.`
+      : templatewise
+        ? "Do not use any manually supplied question count or question type. Read the uploaded sample question paper/template and generate exactly the same number of sections and questions, with the same question numbering, sub-numbering, optional choices, marks and instruction layout."
+      : `Create ${Number(req.body.count || 5)} exam questions.`;
+    const prompt = `Return valid JSON only as ${responseShape}.
 Important JSON rule: escape every backslash in mathematical notation. For example write "\\\\(x^2\\\\)" and "\\\\frac{a}{b}" inside JSON strings, not "\\(x^2\\)" or "\\frac{a}{b}".
-Create ${Number(req.body.count || 5)} exam questions.
+Critical format rule: The selected/sample pattern is authoritative. The output must match the sample/pattern exactly in number of sections, number of questions, numbering, sub-numbering, marks, choice labels, tables, and order. If you cannot read an uploaded sample URL, still follow the explicit pattern rows and selected data exactly and do not invent extra structure.
+${generationQuantityRule}
 Course: ${text(req.body.course)} (${text(req.body.coursecode)})
 Subject: ${text(req.body.subject)}
-Question type: ${text(req.body.questiontype)}
+${patternDriven ? "Question type, marks, group, subquestion and math requirement must come only from each supplied format row." : templatewise ? "Question type, marks, sections, choices, groups and subquestions must come only from the uploaded sample format." : `Question type: ${text(req.body.questiontype)}`}
 Difficulty: ${text(req.body.difficultylevel)}
 Language: ${text(req.body.language)}
 Bloom levels allowed: ${arr(req.body.bloomlevels).join(", ")}
 Course outcomes available: ${JSON.stringify(req.body.cos || [])}
 ${includeMath ? "Mathematical mode: Include mathematical expressions and mathematical questions wherever relevant. Use clear Unicode mathematical symbols for simple notation and LaTeX delimiters \\(...\\) or \\[...\\] for equations, matrices, fractions, roots, summations, integrals and multi-line formulae. Ensure symbols are syntactically correct and printable." : ""}
+${additionalAiPrompt ? `Additional AI prompt from user: ${additionalAiPrompt}` : ""}
+${patternDriven ? "Question-specific prompt rule: if a format row has questionprompt, that prompt applies only to that row and must be followed for that row without affecting other rows." : ""}
 ${contextText}
 ${sourceFileText}
+${sampleQuestionPaperText}
 ${patternText}
-For each question include: patternsection, patternquestion, patterngroup, patternsubquestion, question, marks, questiontype, includemathematicalexpressions, difficultylevel, language, bloomlevels array, conumber, co.`;
+${templatewise ? "For templatewise generation, return sections directly and also return html. Each section must include title, instructions, marks and questions. Each question must include question, marks, questiontype, includemathematicalexpressions, difficultylevel, language, bloomlevels array, conumber, co. The section/question count and order must follow the sample template exactly. The html must be only the question-paper body, use inline styles, and reproduce the sample template look/feel, spacing, headings, tables, numbering, section structure and mark placement exactly. Mathematical symbols must be valid Unicode, MathML, or LaTeX delimited with \\\\( ... \\\\) / \\\\[ ... \\\\] so MathJax can render them. Do not return plain malformed slash commands like \\frac inside JSON." : "For each question include: patternsection, patternquestion, patterngroup, patternsubquestion, question, marks, questiontype, includemathematicalexpressions, difficultylevel, language, bloomlevels array, conumber, co."}`;
     const raw = await callQuestionAi({ ...req.body, colid }, prompt);
-    const parsed = parseJson(raw);
+    const selectedRepairModel = text(req.body.geminiModel) || "gemini-2.5-flash";
+    const parsed = await parseOrRepairJson(colid, selectedRepairModel, raw, responseShape);
+    if (templatewise && Array.isArray(parsed.sections)) {
+      return res.json({ success: true, sections: parsed.sections, html: parsed.html || "", data: parsed.sections.flatMap((section) => section.questions || []), raw });
+    }
     res.json({ success: true, data: Array.isArray(parsed) ? parsed : (parsed.questions || []), raw });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1125,24 +1196,40 @@ exports.formatPatternwiseQuestionPaper = async (req, res) => {
       patternRows: req.body.patternRows || [],
       sections: req.body.sections || [],
       translationlanguages: req.body.translationlanguages || [],
-      includemathematicalexpressions: text(req.body.includemathematicalexpressions || req.body.includeMathematicalExpressions) === "Yes" ? "Yes" : "No"
+      includemathematicalexpressions: text(req.body.includemathematicalexpressions || req.body.includeMathematicalExpressions) === "Yes" ? "Yes" : "No",
+      samplequestionpaperurl: text(req.body.sampleQuestionPaperUrl || req.body.samplequestionpaperurl),
+      samplequestionpaperfilename: text(req.body.sampleQuestionPaperFilename || req.body.samplequestionpaperfilename),
+      additionalaiprompt: text(req.body.additionalAiPrompt || req.body.additionalaiprompt),
+      aiProvider: text(req.body.aiProvider || req.body.provider || "Gemini"),
+      openaiModel: text(req.body.openaiModel),
+      claudeModel: text(req.body.claudeModel),
+      ollamaConfigId: text(req.body.ollamaConfigId)
     };
+    const [extractedSampleText, extractedSyllabusText] = await Promise.all([
+      extractTextFromUrl(payload.samplequestionpaperurl, payload.samplequestionpaperfilename),
+      extractTextFromUrl(req.body.syllabusSourceUrl || req.body.syllabussourceurl, req.body.syllabusSourceFilename || req.body.syllabussourcefilename)
+    ]);
     const prompt = `Return valid JSON only as {"html":"..."}.
 Important JSON rule: escape every backslash in mathematical notation. For example write "\\\\(x^2\\\\)" and "\\\\frac{a}{b}" inside JSON strings.
 Create clean printable HTML for the question body of an A4 portrait question paper.
 Use inline styles only. Do not include scripts, markdown, html, head, body, or style tags.
 Institution details: ${JSON.stringify(institution)}
 Formatting rules from user: ${rules}
+Extracted sample paper/template text: ${extractedSampleText || "Not available"}
+Extracted syllabus/source text: ${extractedSyllabusText || "Not available"}
 Question paper payload: ${JSON.stringify(payload)}
 Requirements:
 - Do not repeat institution logo, institution name, address, exam, program, course, course code, or pattern name because the print wrapper already adds those.
 - Display questions strictly as per pattern: section, question number, optional group, optional subquestion.
+- If a sample question paper/template URL is supplied, follow its visible look and feel, ordering, section structure, numbering style, table structure, mark display, spacing and instruction placement as closely as possible.
+- The formatted HTML must preserve the exact number of sections/questions already present in the payload. Do not create new questions or remove questions during formatting.
+- Honor the additional AI prompt exactly unless it conflicts with the selected paper data.
 - Include marks at the right side for every question when available.
 - Include translations below the main question text where available.
 - If mathematical expressions are present, preserve Unicode symbols and LaTeX delimiters exactly so MathJax can render them in the print preview.
 - Keep the layout compact, black text, bordered outer sheet, professional examination format.`;
-    const raw = await callGemini(colid, text(req.body.geminiModel), prompt);
-    const parsed = parseJson(raw);
+    const raw = await callQuestionAi({ ...req.body, colid }, prompt);
+    const parsed = await parseOrRepairJson(colid, text(req.body.geminiModel) || "gemini-2.5-flash", raw, `{"html":"..."}`);
     res.json({ success: true, html: parsed.html || raw });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

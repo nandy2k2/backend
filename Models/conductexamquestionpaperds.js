@@ -18,6 +18,7 @@ const questionSchema = new mongoose.Schema({
   attachmenturl: { type: String, trim: true },
   attachmentfilename: { type: String, trim: true },
   aimappingcomments: { type: String, trim: true },
+  questionprompt: { type: String, trim: true },
   translations: [{
     language: { type: String, trim: true },
     question: { type: String, trim: true },
@@ -54,6 +55,9 @@ const conductExamQuestionPaperSchema = new mongoose.Schema({
   paperattachmentfilename: { type: String, trim: true },
   syllabussourceurl: { type: String, trim: true },
   syllabussourcefilename: { type: String, trim: true },
+  samplequestionpaperurl: { type: String, trim: true },
+  samplequestionpaperfilename: { type: String, trim: true },
+  additionalaiprompt: { type: String, trim: true },
   paperdocuments: [{
     title: { type: String, trim: true },
     filename: { type: String, trim: true },
@@ -73,7 +77,8 @@ const conductExamQuestionPaperSchema = new mongoose.Schema({
     subquestion: { type: String, trim: true },
     order: { type: Number, default: 0 },
     marks: { type: Number, default: 0 },
-    instructions: { type: String, trim: true }
+    instructions: { type: String, trim: true },
+    questionprompt: { type: String, trim: true }
   }],
   translationlanguages: [{ type: String, trim: true }],
   includemathematicalexpressions: { type: String, enum: ["Yes", "No"], default: "No" },

@@ -16,6 +16,7 @@ const conductExamQuestionPatternDetailSchema = new mongoose.Schema({
   order: { type: Number, default: 0 },
   marks: { type: Number, default: 0 },
   instructions: { type: String, trim: true },
+  questionprompt: { type: String, trim: true },
   status: { type: String, trim: true, default: "Active" },
   name: { type: String, trim: true },
   user: { type: String, trim: true }
