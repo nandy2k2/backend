@@ -9,6 +9,8 @@ const conductExamQuestionPatternDetailSchema = new mongoose.Schema({
   pattern: { type: String, required: true, trim: true },
   section: { type: String, required: true, trim: true },
   question: { type: String, required: true, trim: true },
+  questiontype: { type: String, trim: true, enum: ["MCQ", "Descriptive", "Case Studies"], default: "Descriptive" },
+  includemathematicalexpressions: { type: String, trim: true, enum: ["Yes", "No"], default: "No" },
   group: { type: String, trim: true },
   subquestion: { type: String, trim: true },
   order: { type: Number, default: 0 },

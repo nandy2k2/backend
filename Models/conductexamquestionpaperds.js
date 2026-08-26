@@ -7,6 +7,7 @@ const questionSchema = new mongoose.Schema({
   patternsubquestion: { type: String, trim: true },
   question: { type: String, trim: true },
   answer: { type: String, trim: true },
+  includemathematicalexpressions: { type: String, trim: true, enum: ["Yes", "No"], default: "No" },
   questiontype: { type: String, trim: true, default: "Short Answer Type" },
   difficultylevel: { type: String, trim: true },
   language: { type: String, trim: true },
@@ -66,6 +67,8 @@ const conductExamQuestionPaperSchema = new mongoose.Schema({
   patternrows: [{
     section: { type: String, trim: true },
     question: { type: String, trim: true },
+    questiontype: { type: String, trim: true },
+    includemathematicalexpressions: { type: String, trim: true },
     group: { type: String, trim: true },
     subquestion: { type: String, trim: true },
     order: { type: Number, default: 0 },
@@ -73,6 +76,7 @@ const conductExamQuestionPaperSchema = new mongoose.Schema({
     instructions: { type: String, trim: true }
   }],
   translationlanguages: [{ type: String, trim: true }],
+  includemathematicalexpressions: { type: String, enum: ["Yes", "No"], default: "No" },
   moderationdocuments: [{
     title: { type: String, trim: true },
     filename: { type: String, trim: true },

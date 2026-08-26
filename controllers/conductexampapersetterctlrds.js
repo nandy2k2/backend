@@ -13,6 +13,7 @@ const CourseOutcome = require("../Models/courseoutcomeds");
 const Syllabus = require("../Models/syllabusds");
 const NepLmsTimetable = require("../Models/neplmstimetableds");
 const AiConfiguration = require("../Models/aiconfigurationds");
+const OllamaConfiguration = require("../Models/ollamaconfigurationds");
 const Awsconfig = require("../Models/awsconfig");
 const Institution = require("../Models/insdetails");
 const User = require("../Models/user");
@@ -56,12 +57,14 @@ const parseJson = (content) => {
   const start = startArr >= 0 && (startObj < 0 || startArr < startObj) ? startArr : startObj;
   const end = startArr >= 0 && start === startArr ? clean.lastIndexOf("]") : clean.lastIndexOf("}");
   const candidate = start >= 0 && end > start ? clean.slice(start, end + 1) : clean;
+  const repairJsonEscapes = (value) => String(value || "")
+    .replace(/\\(?!["\\/bfnrtu])/g, "\\\\")
+    .replace(/,\s*([}\]])/g, "$1")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]+/g, " ");
   try {
     return JSON.parse(candidate);
   } catch (error) {
-    const repaired = candidate
-      .replace(/,\s*([}\]])/g, "$1")
-      .replace(/[\u0000-\u001F]+/g, " ");
+    const repaired = repairJsonEscapes(candidate);
     return JSON.parse(repaired);
   }
 };
@@ -75,7 +78,7 @@ const setterFields = [...courseFields, "papersettername", "papersetteremail", "s
 const panelFields = ["academicyear", "regulation", "program", "programcode", "panelname", "status"];
 const panelMemberFields = [...panelFields, "membername", "memberemail", "role", "department", "approvalstatus", "status"];
 const patternFields = ["academicyear", "program", "programcode", "pattern", "status"];
-const patternDetailFields = ["patternid", "academicyear", "program", "programcode", "pattern", "section", "question", "group", "subquestion", "status"];
+const patternDetailFields = ["patternid", "academicyear", "program", "programcode", "pattern", "section", "question", "questiontype", "includemathematicalexpressions", "group", "subquestion", "status"];
 
 const buildFilter = (source = {}, fields = []) => {
   const filter = {};
@@ -228,6 +231,8 @@ const patternDetailPayload = (body = {}) => ({
   pattern: text(body.pattern),
   section: text(body.section),
   question: text(body.question),
+  questiontype: text(body.questiontype) || "Descriptive",
+  includemathematicalexpressions: text(body.includemathematicalexpressions || body.includeMathematicalExpressions) === "Yes" ? "Yes" : "No",
   group: text(body.group),
   subquestion: text(body.subquestion),
   order: Number(body.order || 0),
@@ -254,9 +259,18 @@ const validatePatternDetail = (item) => {
   return "";
 };
 
-const getAiConfig = async (colid) => (
-  await AiConfiguration.findOne({ colid: Number(colid), type: /^gemini$/i, active: /^yes$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
-  || await AiConfiguration.findOne({ colid: Number(colid), type: /^gemini$/i, active: /^yes$/i }).sort({ _id: -1 }).lean()
+const getAiConfigByType = async (colid, typeRegex) => (
+  await AiConfiguration.findOne({ colid: Number(colid), type: typeRegex, active: /^yes$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
+  || await AiConfiguration.findOne({ colid: Number(colid), type: typeRegex, active: /^yes$/i }).sort({ _id: -1 }).lean()
+);
+
+const getAiConfig = async (colid) => getAiConfigByType(colid, /^gemini$/i);
+
+const getOllamaConfig = async (colid, id) => (
+  text(id)
+    ? await OllamaConfiguration.findOne({ _id: text(id), colid: Number(colid), active: /^yes$/i }).lean()
+    : await OllamaConfiguration.findOne({ colid: Number(colid), active: /^yes$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
+      || await OllamaConfiguration.findOne({ colid: Number(colid), active: /^yes$/i }).sort({ _id: -1 }).lean()
 );
 
 const callGemini = async (colid, model, prompt) => {
@@ -278,6 +292,75 @@ const callGemini = async (colid, model, prompt) => {
     lastError = data.error?.message || `Gemini API request failed for ${geminiModel}`;
   }
   throw new Error(lastError || "Gemini API request failed");
+};
+
+const callOpenAi = async (colid, model, prompt) => {
+  const config = await getAiConfigByType(colid, /^(openai|chatgpt)$/i);
+  if (!config?.apikey) throw new Error("Default active OpenAI AI configuration is missing");
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.apikey}`
+    },
+    body: JSON.stringify({
+      model: text(model) || "gpt-4.1-mini",
+      messages: [
+        { role: "system", content: "Return valid JSON only for academic question paper generation." },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.35,
+      response_format: { type: "json_object" }
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error?.message || "OpenAI API request failed");
+  return data.choices?.[0]?.message?.content || "";
+};
+
+const callClaude = async (colid, model, prompt) => {
+  const config = await getAiConfigByType(colid, /^(claude|anthropic)$/i);
+  if (!config?.apikey) throw new Error("Default active Claude AI configuration is missing");
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": config.apikey,
+      "anthropic-version": "2023-06-01"
+    },
+    body: JSON.stringify({
+      model: text(model) || "claude-3-5-haiku-latest",
+      max_tokens: 6000,
+      temperature: 0.35,
+      messages: [{ role: "user", content: prompt }]
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error?.message || "Claude API request failed");
+  return data.content?.map((part) => part.text || "").join("\n") || "";
+};
+
+const callOllama = async (colid, ollamaConfigId, prompt) => {
+  const config = await getOllamaConfig(colid, ollamaConfigId);
+  if (!config) throw new Error("Active Ollama configuration is missing");
+  const baseUrl = text(config.serveraddress || config.baseurl || config.url).replace(/\/$/, "") || "http://localhost:11434";
+  const model = text(config.modelname || config.model || "llama3.1");
+  const response = await fetch(`${baseUrl}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, prompt, stream: false, format: "json", options: { temperature: 0.35 } })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Ollama API request failed");
+  return data.response || "";
+};
+
+const callQuestionAi = async (body, prompt) => {
+  const provider = text(body.aiProvider || body.provider || "gemini").toLowerCase();
+  if (provider === "openai" || provider === "chatgpt") return callOpenAi(body.colid, body.openaiModel, prompt);
+  if (provider === "claude" || provider === "anthropic") return callClaude(body.colid, body.claudeModel, prompt);
+  if (provider === "ollama") return callOllama(body.colid, body.ollamaConfigId || body.ollamaId, prompt);
+  return callGemini(body.colid, text(body.geminiModel), prompt);
 };
 
 const callGeminiText = async (colid, model, prompt) => {
@@ -850,9 +933,12 @@ exports.saveQuestionPaper = async (req, res) => {
       patternid: text(req.body.patternid) || undefined,
       pattern: text(req.body.pattern),
       patterndescription: text(req.body.patterndescription),
+      includemathematicalexpressions: text(req.body.includemathematicalexpressions || req.body.includeMathematicalExpressions) === "Yes" ? "Yes" : "No",
       patternrows: Array.isArray(req.body.patternrows) ? req.body.patternrows.map((row) => ({
         section: text(row.section),
         question: text(row.question),
+        questiontype: text(row.questiontype) || "Descriptive",
+        includemathematicalexpressions: text(row.includemathematicalexpressions || row.includeMathematicalExpressions) === "Yes" ? "Yes" : "No",
         group: text(row.group),
         subquestion: text(row.subquestion),
         order: Number(row.order || 0),
@@ -871,6 +957,7 @@ exports.saveQuestionPaper = async (req, res) => {
           patternsubquestion: text(question.patternsubquestion),
           question: text(question.question),
           answer: text(question.answer),
+          includemathematicalexpressions: text(question.includemathematicalexpressions || question.includeMathematicalExpressions) === "Yes" ? "Yes" : "No",
           questiontype: text(question.questiontype) || "Short Answer Type",
           difficultylevel: text(question.difficultylevel),
           language: text(question.language),
@@ -984,13 +1071,18 @@ Additional syllabus/source file URL uploaded to AWS: ${text(req.body.syllabusSou
 Use this file link as source material for question generation. If the file content is accessible, extract and follow it.`
       : "";
     const patternRows = Array.isArray(req.body.patternRows) ? req.body.patternRows : [];
+    const includeMath = text(req.body.includeMathematicalExpressions || req.body.includemathematicalexpressions) === "Yes"
+      || patternRows.some((row) => text(row.includemathematicalexpressions || row.includeMathematicalExpressions) === "Yes");
     const patternText = patternRows.length ? `
 Question paper pattern selected: ${text(req.body.pattern)}
 Pattern description: ${text(req.body.patterndescription)}
 Generate exactly one question for each pattern row below. Preserve section, question, group, subquestion, order and marks exactly as supplied. If group or subquestion is blank, keep it blank.
+Honor the questiontype and includemathematicalexpressions value for each row. If questiontype is MCQ, include four answer options and mark the correct option inside the question/answer text. If questiontype is Case Studies, include a brief case stem and the requested question. If includemathematicalexpressions is Yes, include valid mathematical notation for that row.
 Pattern rows: ${JSON.stringify(patternRows.map((row, index) => ({
   section: text(row.section),
   question: text(row.question),
+  questiontype: text(row.questiontype) || text(req.body.questiontype) || "Descriptive",
+  includemathematicalexpressions: text(row.includemathematicalexpressions || row.includeMathematicalExpressions) === "Yes" ? "Yes" : "No",
   group: text(row.group),
   subquestion: text(row.subquestion),
   order: Number(row.order || index + 1),
@@ -999,6 +1091,7 @@ Pattern rows: ${JSON.stringify(patternRows.map((row, index) => ({
 })))}`
       : "";
     const prompt = `Return valid JSON only as {"questions":[...]}.
+Important JSON rule: escape every backslash in mathematical notation. For example write "\\\\(x^2\\\\)" and "\\\\frac{a}{b}" inside JSON strings, not "\\(x^2\\)" or "\\frac{a}{b}".
 Create ${Number(req.body.count || 5)} exam questions.
 Course: ${text(req.body.course)} (${text(req.body.coursecode)})
 Subject: ${text(req.body.subject)}
@@ -1007,11 +1100,12 @@ Difficulty: ${text(req.body.difficultylevel)}
 Language: ${text(req.body.language)}
 Bloom levels allowed: ${arr(req.body.bloomlevels).join(", ")}
 Course outcomes available: ${JSON.stringify(req.body.cos || [])}
+${includeMath ? "Mathematical mode: Include mathematical expressions and mathematical questions wherever relevant. Use clear Unicode mathematical symbols for simple notation and LaTeX delimiters \\(...\\) or \\[...\\] for equations, matrices, fractions, roots, summations, integrals and multi-line formulae. Ensure symbols are syntactically correct and printable." : ""}
 ${contextText}
 ${sourceFileText}
 ${patternText}
-For each question include: patternsection, patternquestion, patterngroup, patternsubquestion, question, marks, questiontype, difficultylevel, language, bloomlevels array, conumber, co.`;
-    const raw = await callGemini(colid, text(req.body.geminiModel), prompt);
+For each question include: patternsection, patternquestion, patterngroup, patternsubquestion, question, marks, questiontype, includemathematicalexpressions, difficultylevel, language, bloomlevels array, conumber, co.`;
+    const raw = await callQuestionAi({ ...req.body, colid }, prompt);
     const parsed = parseJson(raw);
     res.json({ success: true, data: Array.isArray(parsed) ? parsed : (parsed.questions || []), raw });
   } catch (error) {
@@ -1030,9 +1124,11 @@ exports.formatPatternwiseQuestionPaper = async (req, res) => {
       pattern: req.body.pattern || {},
       patternRows: req.body.patternRows || [],
       sections: req.body.sections || [],
-      translationlanguages: req.body.translationlanguages || []
+      translationlanguages: req.body.translationlanguages || [],
+      includemathematicalexpressions: text(req.body.includemathematicalexpressions || req.body.includeMathematicalExpressions) === "Yes" ? "Yes" : "No"
     };
     const prompt = `Return valid JSON only as {"html":"..."}.
+Important JSON rule: escape every backslash in mathematical notation. For example write "\\\\(x^2\\\\)" and "\\\\frac{a}{b}" inside JSON strings.
 Create clean printable HTML for the question body of an A4 portrait question paper.
 Use inline styles only. Do not include scripts, markdown, html, head, body, or style tags.
 Institution details: ${JSON.stringify(institution)}
@@ -1043,6 +1139,7 @@ Requirements:
 - Display questions strictly as per pattern: section, question number, optional group, optional subquestion.
 - Include marks at the right side for every question when available.
 - Include translations below the main question text where available.
+- If mathematical expressions are present, preserve Unicode symbols and LaTeX delimiters exactly so MathJax can render them in the print preview.
 - Keep the layout compact, black text, bordered outer sheet, professional examination format.`;
     const raw = await callGemini(colid, text(req.body.geminiModel), prompt);
     const parsed = parseJson(raw);
@@ -1071,6 +1168,7 @@ exports.analyzeMapping = async (req, res) => {
     const colid = number(req.body.colid);
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const prompt = `Return valid JSON only as {"sections":[...]}.
+Important JSON rule: escape every backslash in mathematical notation. For example write "\\\\(x^2\\\\)" and "\\\\frac{a}{b}" inside JSON strings.
 Analyze the following question paper. For each question, choose the most suitable CO and Bloom taxonomy mapping from the available CO list and Bloom levels. Preserve the existing section/question order and text.
 Available CO list: ${JSON.stringify(req.body.cos || [])}
 Question paper sections: ${JSON.stringify(req.body.sections || [])}
