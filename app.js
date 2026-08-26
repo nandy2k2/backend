@@ -135,6 +135,7 @@ const dynamicAdmissionToUserController = require('./controllers/dynamicadmission
 const provisionalAdmissionLetterController = require('./controllers/provisionaladmissionletterctlr');
 const offerLetterController = require('./controllers/offerletterctlr');
 const emailConfigurationController = require('./controllers/emailconfigurationdsctlr');
+const bulkEmailController = require('./controllers/bulkemailctlrds');
 const aiConfigurationController = require('./controllers/aiconfigurationdsctlr');
 const ollamaConfigurationController = require('./controllers/ollamaconfigurationdsctlr');
 const countryConfigurationController = require('./controllers/countryconfigurationctlrds');
@@ -1068,6 +1069,15 @@ app.get('/api/v2/email-configuration', emailConfigurationController.getEmailConf
 app.post('/api/v2/email-configuration', emailConfigurationController.createEmailConfiguration);
 app.post('/api/v2/email-configuration-update', emailConfigurationController.updateEmailConfiguration);
 app.post('/api/v2/email-configuration-delete', emailConfigurationController.deleteEmailConfiguration);
+app.get('/api/v2/bulk-email/options', bulkEmailController.getEmailOptions);
+app.get('/api/v2/bulk-email/distinct-values', bulkEmailController.distinctValues);
+app.post('/api/v2/bulk-email/users/search', bulkEmailController.searchUsers);
+app.post('/api/v2/bulk-email/leads/search', bulkEmailController.searchLeads);
+app.get('/api/v2/bulk-email/campaigns', bulkEmailController.getCampaigns);
+app.post('/api/v2/bulk-email/campaigns', bulkEmailController.saveCampaign);
+app.post('/api/v2/bulk-email/send', bulkEmailController.bulkSend);
+app.get('/api/v2/bulk-email/track/:token', bulkEmailController.trackOpen);
+app.post('/api/v2/bulk-email/campaign-report', bulkEmailController.campaignReport);
 app.get('/api/v2/country-configuration', countryConfigurationController.getCountryConfigurations);
 app.get('/api/v2/country-configuration-default', countryConfigurationController.getDefaultCountryConfiguration);
 app.post('/api/v2/country-configuration', countryConfigurationController.createCountryConfiguration);
