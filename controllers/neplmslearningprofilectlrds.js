@@ -3,6 +3,9 @@ const Institution = require("../Models/insdetails");
 const Attendance = require("../Models/neplmsattendanceds");
 const AssignmentSubmission = require("../Models/neplmsassignmentsubmissionds");
 const QuizAttempt = require("../Models/neplmsquizattemptds");
+const LiveQuizAttempt = require("../Models/neplmslivequizattemptds");
+const LessonContentProgress = require("../Models/neplmslessoncontentprogressds");
+const CourseMaterialWatch = require("../Models/neplmscoursematerialwatchds");
 const DescriptiveAttempt = require("../Models/neplmsdescriptiveattemptds");
 const AssessmentMark = require("../Models/neplmsassessmentmarksds");
 const FinalMark = require("../Models/neplmsfinalmarksds");
@@ -126,6 +129,9 @@ exports.getProfile = async (req, res) => {
       quizzes,
       descriptiveAttempts,
       assessmentMarks,
+      liveQuizAttempts,
+      sequentialProgress,
+      courseMaterialWatch,
       timetable,
       mentoringWorkspaces
     ] = await Promise.all([
@@ -136,6 +142,9 @@ exports.getProfile = async (req, res) => {
       QuizAttempt.find({ colid, regno: studentRegno }).sort({ submitteddate: -1 }).lean(),
       DescriptiveAttempt.find({ colid, regno: studentRegno }).sort({ submitteddate: -1 }).lean(),
       AssessmentMark.find({ colid, regno: studentRegno }).sort({ academicyear: 1, semester: 1, course: 1, assessmentcomponent: 1 }).lean(),
+      LiveQuizAttempt.find({ colid, regno: studentRegno }).sort({ lastactivitydate: -1, submitteddate: -1 }).lean(),
+      LessonContentProgress.find({ colid, regno: studentRegno }).sort({ completedat: -1 }).lean(),
+      CourseMaterialWatch.find({ colid, regno: studentRegno }).sort({ lastwatchedat: -1 }).lean(),
       Timetable.find({
         colid,
         academicyear: student.academicyear,
@@ -257,10 +266,23 @@ exports.getProfile = async (req, res) => {
         item.credits = number(row.credits);
         item.passstatus = row.passstatus || "";
       }
+      return item;
     };
     attendance.forEach((row) => absorbCourse(row, "attendance"));
     assignments.forEach((row) => absorbCourse(row, "assignment"));
     quizzes.forEach((row) => absorbCourse(row, "quiz"));
+    liveQuizAttempts.forEach((row) => absorbCourse(row, "quiz"));
+    sequentialProgress.forEach((row) => {
+      const item = absorbCourse(row, "sequence");
+      if (item) item.sequenceCompleted = (item.sequenceCompleted || 0) + (row.completed ? 1 : 0);
+    });
+    courseMaterialWatch.forEach((row) => {
+      const item = absorbCourse(row, "material");
+      if (item) {
+        item.courseMaterials = (item.courseMaterials || 0) + 1;
+        item.averageWatchedPercentTotal = (item.averageWatchedPercentTotal || 0) + number(row.watchedpercent);
+      }
+    });
     descriptiveAttempts.forEach((row) => absorbCourse(row, "assessment"));
     finalMarks.forEach((row) => absorbCourse(row, "final"));
 
@@ -269,7 +291,8 @@ exports.getProfile = async (req, res) => {
       attendancePercentage: row.attendanceClasses ? round2((row.attendancePresent / row.attendanceClasses) * 100) : 0,
       averageAssignmentMarks: row.assignments ? round2(row.assignmentMarks / row.assignments) : 0,
       averageQuizMarks: row.quizzes ? round2(row.quizMarks / row.quizzes) : 0,
-      averageAssessmentMarks: row.assessments ? round2(row.assessmentMarks / row.assessments) : 0
+      averageAssessmentMarks: row.assessments ? round2(row.assessmentMarks / row.assessments) : 0,
+      averageMaterialWatch: row.courseMaterials ? round2(row.averageWatchedPercentTotal / row.courseMaterials) : 0
     })).sort((a, b) => Number(a.semester) - Number(b.semester) || clean(a.course).localeCompare(clean(b.course)));
 
     const semesterActivityMap = new Map();
@@ -285,6 +308,7 @@ exports.getProfile = async (req, res) => {
     });
     countActivity(assignments, "assignments");
     countActivity(quizzes, "quizzes");
+    countActivity(liveQuizAttempts, "quizzes");
     countActivity(descriptiveAttempts, "assessments");
     countActivity(assessmentMarks, "marksEntries");
     const semesterActivity = Array.from(semesterActivityMap.values()).sort((a, b) => Number(a.semester) - Number(b.semester));
@@ -331,6 +355,10 @@ exports.getProfile = async (req, res) => {
       attendancePercentage: attendance.length ? round2((attendance.reduce((sum, row) => sum + number(row.attendance), 0) / attendance.length) * 100) : 0,
       assignments: assignments.length,
       quizzes: quizzes.length,
+      liveQuizzes: liveQuizAttempts.length,
+      sequentialCompleted: sequentialProgress.filter((row) => row.completed).length,
+      courseMaterialsWatched: courseMaterialWatch.length,
+      averageMaterialWatch: courseMaterialWatch.length ? round2(courseMaterialWatch.reduce((sum, row) => sum + number(row.watchedpercent), 0) / courseMaterialWatch.length) : 0,
       assessments: descriptiveAttempts.length,
       finalMarkCourses: finalMarks.length,
       cgpa,
@@ -351,6 +379,9 @@ exports.getProfile = async (req, res) => {
       semesterResults,
       assignments,
       quizzes,
+      liveQuizAttempts,
+      sequentialProgress,
+      courseMaterialWatch,
       descriptiveAttempts,
       assessmentMarks,
       timetable,

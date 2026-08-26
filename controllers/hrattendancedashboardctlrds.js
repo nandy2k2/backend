@@ -251,3 +251,113 @@ exports.teamReport = async (req, res) => {
     res.status(500).json({ success: false, message: error.message || "Unable to load team attendance report" });
   }
 };
+
+exports.dailyAbsentReport = async (req, res) => {
+  try {
+    const built = baseDateQuery(req.query);
+    if (built.error) return res.status(400).json({ success: false, message: built.error });
+    const department = text(req.query.department);
+    const role = text(req.query.role);
+    const employeeemail = text(req.query.employeeemail);
+    const rowQuery = {
+      ...built.query,
+      $or: [
+        { attendance: 0 },
+        { status: /^Absent$/i }
+      ]
+    };
+    if (role) rowQuery.role = role;
+    if (employeeemail) rowQuery.employeeemail = new RegExp(`^${employeeemail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+
+    const userQuery = { colid: built.colid, role: { $not: /^Student$/i } };
+    if (department) userQuery.department = department;
+    if (role) userQuery.role = role;
+    if (employeeemail) {
+      userQuery.$or = [
+        { email: new RegExp(`^${employeeemail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+        { user: new RegExp(`^${employeeemail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") }
+      ];
+    }
+
+    const [attendanceRows, users, institution] = await Promise.all([
+      HrEmployeeAttendance.find(rowQuery).sort({ date: 1, employeename: 1 }).lean(),
+      User.find(userQuery).select("name email user role department designation").lean(),
+      getInstitution(built.colid)
+    ]);
+    const userMap = new Map(users.map((user) => [text(user.email || user.user).toLowerCase(), user]));
+    const allowedEmails = new Set(users.map((user) => text(user.email || user.user).toLowerCase()).filter(Boolean));
+    const filteredRows = department || employeeemail
+      ? attendanceRows.filter((row) => allowedEmails.has(text(row.employeeemail).toLowerCase()))
+      : attendanceRows;
+
+    const daywise = new Map();
+    const departmentwise = new Map();
+    const rolewise = new Map();
+    const employeeMap = new Map();
+    const table = filteredRows.map((row, index) => {
+      const user = userMap.get(text(row.employeeemail).toLowerCase()) || {};
+      const rowDepartment = text(user.department || row.department) || "Not specified";
+      const rowRole = text(user.role || row.role) || "Not specified";
+      const date = text(row.date);
+      daywise.set(date, (daywise.get(date) || 0) + 1);
+      departmentwise.set(rowDepartment, (departmentwise.get(rowDepartment) || 0) + 1);
+      rolewise.set(rowRole, (rolewise.get(rowRole) || 0) + 1);
+      employeeMap.set(text(row.employeeemail).toLowerCase(), {
+        employeename: text(row.employeename || user.name),
+        employeeemail: text(row.employeeemail),
+        department: rowDepartment,
+        role: rowRole
+      });
+      return {
+        id: String(row._id || `${date}-${index}`),
+        date,
+        day: date ? new Date(date).toLocaleDateString("en-US", { weekday: "long" }) : "",
+        employeename: text(row.employeename || user.name),
+        employeeemail: text(row.employeeemail),
+        department: rowDepartment,
+        role: rowRole,
+        designation: text(user.designation),
+        status: text(row.status) || "Absent",
+        attendance: num(row.attendance),
+        approvalstatus: text(row.approvalstatus),
+        intime: text(row.intime),
+        outtime: text(row.outtime),
+        remarks: text(row.finalcomment)
+      };
+    });
+    const mapToChart = (map, labelKey = "label") => [...map.entries()]
+      .map(([label, count]) => ({ [labelKey]: label || "Not specified", label: label || "Not specified", count }))
+      .sort((a, b) => b.count - a.count);
+    const daywiseChart = [...daywise.entries()]
+      .map(([date, count]) => ({ date, label: date, count }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const maxDay = daywiseChart.reduce((best, row) => (row.count > (best?.count || 0) ? row : best), null);
+    res.json({
+      success: true,
+      data: {
+        cards: [
+          { key: "absences", label: "Absent Records", value: table.length, tone: "#dc2626" },
+          { key: "employees", label: "Unique Employees", value: employeeMap.size, tone: "#2563eb" },
+          { key: "days", label: "Days With Absence", value: daywise.size, tone: "#7c3aed" },
+          { key: "peak", label: "Peak Day Absences", value: maxDay?.count || 0, tone: "#ea580c" }
+        ],
+        totals: {
+          absentRecords: table.length,
+          uniqueEmployees: employeeMap.size,
+          daysWithAbsence: daywise.size,
+          peakDate: maxDay?.date || "",
+          peakCount: maxDay?.count || 0
+        },
+        table,
+        charts: {
+          daywise: daywiseChart,
+          departmentwise: mapToChart(departmentwise),
+          rolewise: mapToChart(rolewise)
+        },
+        institution: institution || {}
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || "Unable to load daily absent report" });
+  }
+};

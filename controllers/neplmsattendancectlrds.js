@@ -5,6 +5,7 @@ const NepLmsOnlineClassJoin = require("../Models/neplmsonlineclassjoinds");
 const User = require("../Models/user");
 const NepLmsClassGroup = require("../Models/neplmsclassgroupds");
 const NepLmsAttendanceOtp = require("../Models/neplmsattendanceotpds");
+const RegulationCourseMap = require("../Models/regulationcoursemapds");
 const { emitActivityEvent } = require("./activitymonitoringctlrds");
 
 const text = (value) => String(value || "").trim();
@@ -55,6 +56,13 @@ const buildOtpValidityWindow = (classInfo = {}) => {
   return { validfrom, validtill };
 };
 const formatValidity = (date) => date ? date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : "";
+const monthKeyFromDate = (value) => {
+  const parsed = parseClassDate(value);
+  if (!parsed) return { key: "No Date", label: "No Date", order: "9999-99" };
+  const key = `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}`;
+  const label = parsed.toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+  return { key, label, order: key };
+};
 
 const classFields = [
   "academicyear",
@@ -288,6 +296,161 @@ exports.getAttendanceDiagnostic = async (req, res) => {
       totals,
       courseRows,
       mismatches
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getStudentMonthwiseTheoryPracticalReport = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const buildOptions = async () => {
+      const options = {
+        academicyear: await NepLmsAttendance.distinct("academicyear", { colid }),
+        program: await NepLmsAttendance.distinct("program", { colid }),
+        programcode: await NepLmsAttendance.distinct("programcode", { colid }),
+        semester: await NepLmsAttendance.distinct("semester", { colid }),
+        section: await NepLmsAttendance.distinct("section", { colid }),
+        coursecode: await NepLmsAttendance.distinct("coursecode", { colid })
+      };
+      return Object.fromEntries(Object.entries(options).map(([key, values]) => [key, [...new Set(values.map(text).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))]));
+    };
+
+    const required = ["academicyear", "program", "programcode", "semester"];
+    const missing = required.filter((field) => !text(req.query[field]));
+    if (missing.length) {
+      return res.json({
+        success: true,
+        rows: [],
+        summary: { students: 0, months: 0, theory: 0, practical: 0, total: 0 },
+        charts: { byMonth: [] },
+        options: await buildOptions(),
+        message: `${missing.join(", ")} required`
+      });
+    }
+
+    const base = {
+      colid,
+      academicyear: text(req.query.academicyear),
+      program: text(req.query.program),
+      programcode: text(req.query.programcode),
+      semester: text(req.query.semester)
+    };
+    const attendanceQuery = { ...base, attendance: 1 };
+    if (text(req.query.regulation)) attendanceQuery.regulation = text(req.query.regulation);
+    if (text(req.query.section)) attendanceQuery.section = text(req.query.section);
+    if (text(req.query.coursecode)) attendanceQuery.coursecode = text(req.query.coursecode);
+    if (text(req.query.fromdate) || text(req.query.todate)) {
+      attendanceQuery.classdate = {};
+      if (text(req.query.fromdate)) attendanceQuery.classdate.$gte = text(req.query.fromdate);
+      if (text(req.query.todate)) attendanceQuery.classdate.$lte = text(req.query.todate);
+    }
+
+    const courseMapQuery = { ...base, status: { $ne: "Inactive" } };
+    if (text(req.query.regulation)) courseMapQuery.regulation = text(req.query.regulation);
+    if (text(req.query.coursecode)) courseMapQuery.coursecode = text(req.query.coursecode);
+
+    const [attendanceRows, courseMaps, students] = await Promise.all([
+      NepLmsAttendance.find(attendanceQuery).sort({ student: 1, regno: 1, classdate: 1 }).lean(),
+      RegulationCourseMap.find(courseMapQuery).select("course coursecode coursetype").lean(),
+      User.find({
+        colid,
+        role: /^Student$/i,
+        academicyear: regexText(base.academicyear),
+        program: regexText(base.program),
+        programcode: regexText(base.programcode),
+        semester: regexText(base.semester),
+        ...(text(req.query.section) ? { section: regexText(req.query.section) } : {})
+      }).select("name email phone regno rollno academicyear program programcode semester section").sort({ name: 1, regno: 1 }).lean()
+    ]);
+
+    const courseTypeMap = new Map();
+    courseMaps.forEach((row) => {
+      courseTypeMap.set(text(row.coursecode).toLowerCase(), /prac/i.test(text(row.coursetype)) ? "Practical" : "Theory");
+    });
+
+    const studentMap = new Map();
+    students.forEach((student) => {
+      const key = text(student.regno) || text(student.email) || String(student._id);
+      studentMap.set(key, {
+        student: text(student.name),
+        regno: text(student.regno),
+        rollno: text(student.rollno),
+        email: text(student.email),
+        phone: text(student.phone),
+        academicyear: text(student.academicyear),
+        program: text(student.program),
+        programcode: text(student.programcode),
+        semester: text(student.semester),
+        section: text(student.section)
+      });
+    });
+
+    const bucketMap = new Map();
+    attendanceRows.forEach((row) => {
+      const studentKey = text(row.regno) || text(row.studentemail) || String(row.studentid || "");
+      const student = studentMap.get(studentKey) || {
+        student: text(row.student),
+        regno: text(row.regno),
+        rollno: text(row.rollno),
+        email: text(row.studentemail),
+        phone: text(row.studentphone),
+        academicyear: text(row.academicyear),
+        program: text(row.program),
+        programcode: text(row.programcode),
+        semester: text(row.semester),
+        section: text(row.section)
+      };
+      const month = monthKeyFromDate(row.classdate);
+      const bucketKey = `${studentKey}|${month.key}`;
+      if (!bucketMap.has(bucketKey)) {
+        bucketMap.set(bucketKey, {
+          ...student,
+          month: month.label,
+          monthkey: month.key,
+          monthorder: month.order,
+          theoryclassesattended: 0,
+          practicalclassesattended: 0,
+          totalclassesattended: 0
+        });
+      }
+      const bucket = bucketMap.get(bucketKey);
+      const type = courseTypeMap.get(text(row.coursecode).toLowerCase()) || (/prac/i.test(text(row.coursetype || row.lecturetype)) ? "Practical" : "Theory");
+      if (type === "Practical") bucket.practicalclassesattended += 1;
+      else bucket.theoryclassesattended += 1;
+      bucket.totalclassesattended += 1;
+    });
+
+    const rows = [...bucketMap.values()].sort((a, b) => (
+      String(a.student).localeCompare(String(b.student), undefined, { numeric: true })
+      || String(a.regno).localeCompare(String(b.regno), undefined, { numeric: true })
+      || String(a.monthorder).localeCompare(String(b.monthorder))
+    ));
+    const monthSummaryMap = new Map();
+    rows.forEach((row) => {
+      if (!monthSummaryMap.has(row.monthkey)) {
+        monthSummaryMap.set(row.monthkey, { name: row.month, monthorder: row.monthorder, Theory: 0, Practical: 0, Total: 0 });
+      }
+      const bucket = monthSummaryMap.get(row.monthkey);
+      bucket.Theory += row.theoryclassesattended;
+      bucket.Practical += row.practicalclassesattended;
+      bucket.Total += row.totalclassesattended;
+    });
+    const byMonth = [...monthSummaryMap.values()].sort((a, b) => String(a.monthorder).localeCompare(String(b.monthorder)));
+    res.json({
+      success: true,
+      rows,
+      summary: {
+        students: new Set(rows.map((row) => row.regno || row.email || row.student)).size,
+        months: byMonth.length,
+        theory: rows.reduce((sum, row) => sum + row.theoryclassesattended, 0),
+        practical: rows.reduce((sum, row) => sum + row.practicalclassesattended, 0),
+        total: rows.reduce((sum, row) => sum + row.totalclassesattended, 0)
+      },
+      charts: { byMonth },
+      options: await buildOptions()
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

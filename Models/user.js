@@ -70,6 +70,11 @@ const userschema = new mongoose.Schema({
     academicyear: {
         type: String
     },
+    isfinalyear: {
+        type: String,
+        enum: ['Yes', 'No'],
+        default: 'No'
+    },
     rollno: {
         type: String
     },
