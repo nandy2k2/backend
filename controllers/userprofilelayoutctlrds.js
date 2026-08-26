@@ -4,6 +4,7 @@ const UserProfileLayout = require('../Models/userprofilelayoutds');
 const UserProfileApprovalWorkflow = require('../Models/userprofileapprovalworkflowds');
 const UserProfileEditRequest = require('../Models/userprofileeditrequestds');
 const userProfileAuditLogController = require('./userprofileauditlogctlrds');
+const { createApprovalTasks } = require('../utils/approvalTaskHelper');
 
 const hiddenFields = new Set(['_id', '__v', 'colid', 'user', 'customFields']);
 const clean = (value) => String(value || '').trim();
@@ -266,6 +267,27 @@ exports.updateProfile = async (req, res) => {
       status: 'Pending',
       fields
     });
+    for (const field of fields) {
+      const firstApprovers = workflow.filter((item) => Number(item.level) === Number(field.level));
+      for (const approver of firstApprovers) {
+        await createApprovalTasks({
+          colid,
+          user: email,
+          createdby: user.name || email,
+          academicyear: user.academicyear,
+          approvername: approver.approvername,
+          approveremail: approver.approveremail,
+          approverrole: approver.approverrole,
+          title: `Approve profile field ${field.label || field.field} for ${user.name || email}`,
+          category: 'User profile approval',
+          pagelink: '/userprofileapproval',
+          comments: `Profile field ${field.label || field.field} is pending approval at level ${field.level}.`,
+          referenceModel: 'userprofileeditrequestds',
+          referenceId: `${request._id}:${field.field}`,
+          level: field.level
+        });
+      }
+    }
     for (const field of fields) {
       await userProfileAuditLogController.createAuditLog(req, {
         colid,

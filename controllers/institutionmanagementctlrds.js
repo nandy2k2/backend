@@ -7,10 +7,16 @@ const InstitutionSchoolStatute = require("../Models/institutionschoolstatuteds")
 const InstitutionMou = require("../Models/institutionmouds");
 const InstitutionMouWorkflow = require("../Models/institutionmouworkflowds");
 const InstitutionMouActivity = require("../Models/institutionmouactivityds");
+const InstitutionOrdinance = require("../Models/institutionordinanceds");
+const InstitutionOrdinanceWorkflow = require("../Models/institutionordinanceworkflowds");
+const InstitutionAffiliation = require("../Models/institutionaffiliationds");
+const InstitutionProgramAffiliation = require("../Models/institutionprogramaffiliationds");
+const InstitutionAffiliationWorkflow = require("../Models/institutionaffiliationworkflowds");
 const MPrograms = require("../Models/mprograms");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
 const User = require("../Models/user");
 const AcademicNewTask = require("../Models/academicnewtaskds");
+const { createApprovalTasks, completeApprovalTasks } = require("../utils/approvalTaskHelper");
 const InsDetails = require("../Models/insdetails");
 const Project = require("../Models/projects");
 const Publication = require("../Models/lpublications");
@@ -19,6 +25,9 @@ const Seminar = require("../Models/seminar");
 const HrSalary = require("../Models/hrsalary");
 const PlacementRecord = require("../Models/placementnewrecordds");
 const { EventNew } = require("../Models/eventmanagementnewds");
+const Circular = require("../Models/circulards");
+const CommitteeMinutes = require("../Models/committeeminutesds");
+const LegalCase = require("../Models/legalcaseds");
 
 const text = (value) => String(value ?? "").trim();
 const number = (value) => {
@@ -109,6 +118,21 @@ const configs = {
     Model: InstitutionMouActivity,
     fields: ["mouid", "mou", "academicyear", "activity", "activitydate", "description", "filelink", "brochurelink", "reportlink", "guest", "location", "attendancelist"],
     dateFields: ["activitydate"]
+  },
+  ordinance: {
+    Model: InstitutionOrdinance,
+    fields: ["academicyear", "ordinance", "description", "filelink", "startdate", "duedate", "approvalstatus"],
+    dateFields: ["startdate", "duedate"]
+  },
+  affiliation: {
+    Model: InstitutionAffiliation,
+    fields: ["academicyear", "affiliation", "agency", "startdate", "duedate", "approvalstatus"],
+    dateFields: ["startdate", "duedate"]
+  },
+  programaffiliation: {
+    Model: InstitutionProgramAffiliation,
+    fields: ["academicyear", "program", "programcode", "ordinance", "description", "filelink", "startdate", "duedate", "approvalstatus"],
+    dateFields: ["startdate", "duedate"]
   }
 };
 
@@ -151,14 +175,20 @@ const buildQuery = (kind, source = {}) => {
 exports.options = async (req, res) => {
   try {
     const { colid } = scoped(req.query);
-    const [achievements, accreditation, statutes, schoolStatutes, mous, mouActivities, workflows, programs, users, courses, placementRecords] = await Promise.all([
+    const [achievements, accreditation, statutes, schoolStatutes, mous, mouActivities, ordinances, affiliations, programAffiliations, statuteWorkflows, mouWorkflows, ordinanceWorkflows, affiliationWorkflows, programs, users, courses, placementRecords] = await Promise.all([
       InstitutionAchievement.find({ colid }).lean(),
       InstitutionAccreditationStatus.find({ colid }).lean(),
       InstitutionStatute.find({ colid }).lean(),
       InstitutionSchoolStatute.find({ colid }).lean(),
       InstitutionMou.find({ colid }).lean(),
       InstitutionMouActivity.find({ colid }).lean(),
+      InstitutionOrdinance.find({ colid }).lean(),
+      InstitutionAffiliation.find({ colid }).lean(),
+      InstitutionProgramAffiliation.find({ colid }).lean(),
       InstitutionStatuteWorkflow.find({ colid }).lean(),
+      InstitutionMouWorkflow.find({ colid }).lean(),
+      InstitutionOrdinanceWorkflow.find({ colid }).lean(),
+      InstitutionAffiliationWorkflow.find({ colid }).lean(),
       MPrograms.find({ colid }).select("year program programcode institution department faculty").lean(),
       User.find({ colid }).select("name email user regno role department program programcode academicyear category").limit(5000).lean(),
       RegulationCourseMap.find({ colid }).select("academicyear").lean(),
@@ -166,7 +196,7 @@ exports.options = async (req, res) => {
     ]);
     res.json({
       success: true,
-      academicyears: uniqueSorted([...achievements.map((row) => row.academicyear), ...statutes.map((row) => row.academicyear), ...schoolStatutes.map((row) => row.academicyear), ...mous.map((row) => row.academicyear), ...mouActivities.map((row) => row.academicyear), ...workflows.map((row) => row.academicyear), ...programs.map((row) => row.year), ...users.map((row) => row.academicyear), ...courses.map((row) => row.academicyear), ...placementRecords.map((row) => row.academicyear)]),
+      academicyears: uniqueSorted([...achievements.map((row) => row.academicyear), ...statutes.map((row) => row.academicyear), ...schoolStatutes.map((row) => row.academicyear), ...mous.map((row) => row.academicyear), ...mouActivities.map((row) => row.academicyear), ...ordinances.map((row) => row.academicyear), ...affiliations.map((row) => row.academicyear), ...programAffiliations.map((row) => row.academicyear), ...statuteWorkflows.map((row) => row.academicyear), ...mouWorkflows.map((row) => row.academicyear), ...ordinanceWorkflows.map((row) => row.academicyear), ...affiliationWorkflows.map((row) => row.academicyear), ...programs.map((row) => row.year), ...users.map((row) => row.academicyear), ...courses.map((row) => row.academicyear), ...placementRecords.map((row) => row.academicyear)]),
       programs: uniqueSorted(programs.map((row) => row.program)),
       departments: uniqueSorted([...programs.map((row) => row.department), ...users.map((row) => row.department), ...accreditation.map((row) => row.department)]),
       institutions: uniqueSorted(programs.map((row) => row.institution)),
@@ -210,6 +240,10 @@ exports.save = async (req, res) => {
       ? await config.Model.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true, runValidators: true })
       : await config.Model.create(payload);
     if (!row) return res.status(404).json({ success: false, message: "Record not found" });
+    if (["statute", "schoolstatute", "mou", "ordinance", "affiliation", "programaffiliation"].includes(kind) && /^yes$/i.test(text(req.body.submitforapproval))) {
+      const submitted = await submitApprovalRecord(row, req.body, approvalConfig(kind));
+      return res.json({ success: true, row: toClient(submitted), message: `${approvalConfig(kind).label} submitted for approval` });
+    }
     res.json({ success: true, row: toClient(row) });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -369,28 +403,152 @@ exports.vcDashboard = async (req, res) => {
   }
 };
 
+exports.registrarDashboard = async (req, res) => {
+  try {
+    const { colid } = scoped(req.query);
+    const academicyear = text(req.query.academicyear);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const [
+      statutes,
+      rules,
+      schoolStatutes,
+      mous,
+      circulars,
+      minutes,
+      ordinances,
+      affiliations,
+      programAffiliations,
+      legalCases,
+      tasks,
+      institution
+    ] = await Promise.all([
+      InstitutionStatute.find({ colid }).lean(),
+      InstitutionRule.find({ colid }).lean(),
+      InstitutionSchoolStatute.find({ colid }).lean(),
+      InstitutionMou.find({ colid }).lean(),
+      Circular.find({ colid }).lean(),
+      CommitteeMinutes.find({ colid }).lean(),
+      InstitutionOrdinance.find({ colid }).lean(),
+      InstitutionAffiliation.find({ colid }).lean(),
+      InstitutionProgramAffiliation.find({ colid }).lean(),
+      LegalCase.find({ colid }).lean(),
+      AcademicNewTask.find({ colid }).sort({ duedate: 1, updatedAt: -1 }).limit(2000).lean(),
+      InsDetails.findOne({ colid }).sort({ updatedAt: -1 }).lean()
+    ]);
+
+    const filterYear = (rows = []) => rows.filter((row) => matchesAcademicYear(row, academicyear));
+    const filteredStatutes = filterYear(statutes);
+    const filteredRules = filterYear(rules);
+    const filteredSchoolStatutes = filterYear(schoolStatutes);
+    const filteredMous = filterYear(mous);
+    const filteredCirculars = filterYear(circulars);
+    const filteredMinutes = filterYear(minutes);
+    const filteredOrdinances = filterYear(ordinances);
+    const filteredAffiliations = [...filterYear(affiliations), ...filterYear(programAffiliations)];
+    const filteredLegalCases = filterYear(legalCases);
+    const currentEmail = text(req.query.useremail || req.query.email || req.query.user).toLowerCase();
+    const filteredTasks = tasks.filter((row) => {
+      const taskEmail = text(row.facultyemail).toLowerCase();
+      return matchesAcademicYear(row, academicyear) && (!currentEmail || taskEmail === currentEmail);
+    });
+    const completedTasks = filteredTasks.filter((row) => /^completed$/i.test(text(row.status)));
+    const pendingTasks = filteredTasks.filter((row) => /^new|pending$/i.test(text(row.status)) && !/^completed$/i.test(text(row.status)));
+    const activeTasks = filteredTasks.filter((row) => {
+      if (/^completed$/i.test(text(row.status))) return false;
+      if (/^in\s*process|active$/i.test(text(row.status))) return true;
+      const start = row.startdate ? new Date(row.startdate) : null;
+      const due = row.duedate ? new Date(row.duedate) : null;
+      return (!start || start <= today) && (!due || due >= today);
+    });
+    const cards = [
+      ["statutes", "Statutes", filteredStatutes.length, "#2563eb"],
+      ["rules", "Rules and Regulation", filteredRules.length, "#7c3aed"],
+      ["schoolstatutes", "School Statutes", filteredSchoolStatutes.length, "#0891b2"],
+      ["mou", "MoU", filteredMous.length, "#16a34a"],
+      ["circulars", "Circulars", filteredCirculars.length, "#f97316"],
+      ["minutes", "Minutes of Meetings", filteredMinutes.length, "#0f766e"],
+      ["ordinances", "Ordinances", filteredOrdinances.length, "#4f46e5"],
+      ["affiliations", "Affiliation Records", filteredAffiliations.length, "#b45309"],
+      ["legalcases", "Legal Cases", filteredLegalCases.length, "#dc2626"]
+    ].map(([key, label, value, tone]) => ({ key, label, value, tone }));
+    res.json({
+      success: true,
+      data: {
+        institution: institution || {},
+        cards,
+        tasks: {
+          active: activeTasks.map(toClient),
+          pending: pendingTasks.map(toClient),
+          completed: completedTasks.map(toClient)
+        },
+        charts: {
+          approvals: countBy([...filteredStatutes, ...filteredSchoolStatutes, ...filteredMous, ...filteredOrdinances, ...filteredAffiliations], (row) => row.approvalstatus || "Draft"),
+          circulars: countBy(filteredCirculars, (row) => row.targettype || "All"),
+          legal: countBy(filteredLegalCases, (row) => row.status || "Active")
+        },
+        tables: {
+          statutes: filteredStatutes.map(toClient),
+          schoolStatutes: filteredSchoolStatutes.map(toClient),
+          mous: filteredMous.map(toClient),
+          ordinances: filteredOrdinances.map(toClient),
+          affiliations: filteredAffiliations.map(toClient),
+          legalCases: filteredLegalCases.map(toClient),
+          circulars: filteredCirculars.map(toClient),
+          minutes: filteredMinutes.map(toClient),
+          rules: filteredRules.map(toClient)
+        }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || "Unable to load Registrar dashboard" });
+  }
+};
+
 const workflowPayload = (body = {}) => ({
   ...scoped(body),
   user: text(body.user),
   namecreated: text(body.namecreated || body.createdby || body.name),
   academicyear: text(body.academicyear),
   level: Number(body.level || 1),
-  approverrole: text(body.approverrole),
+  approverrole: "",
   approvername: text(body.approvername),
   approveremail: text(body.approveremail),
   active: text(body.active) || "Yes",
   comments: text(body.comments)
 });
 
+const approvalKind = (kind = "statute") => {
+  const value = text(kind).toLowerCase().replace(/[\s_-]/g, "");
+  if (["mou", "memorandumofunderstanding"].includes(value)) return "mou";
+  if (["ordinance", "ordinances"].includes(value)) return "ordinance";
+  if (["affiliation", "institutionaffiliation", "instituteaffiliation"].includes(value)) return "affiliation";
+  if (["programaffiliation", "programaffiliations"].includes(value)) return "programaffiliation";
+  if (["schoolstatute", "schoolstatutes"].includes(value)) return "schoolstatute";
+  return "statute";
+};
+
 const approvalConfig = (kind = "statute") => {
-  if (kind === "mou") return { Model: InstitutionMou, Workflow: InstitutionMouWorkflow, label: "MoU", link: "/institution-mou-approval" };
-  if (kind === "schoolstatute") return { Model: InstitutionSchoolStatute, Workflow: InstitutionStatuteWorkflow, label: "School statute", link: "/institution-school-statute-approval" };
-  return { Model: InstitutionStatute, Workflow: InstitutionStatuteWorkflow, label: "Statute", link: "/institution-statute-approval" };
+  const normalized = approvalKind(kind);
+  if (normalized === "mou") return { Model: InstitutionMou, Workflow: InstitutionMouWorkflow, label: "MoU", kind: "mou", link: "/institution-mou-approval" };
+  if (normalized === "ordinance") return { Model: InstitutionOrdinance, Workflow: InstitutionOrdinanceWorkflow, label: "Ordinance", kind: "ordinance", link: "/institution-ordinance-approval" };
+  if (normalized === "affiliation") return { Model: InstitutionAffiliation, Workflow: InstitutionAffiliationWorkflow, label: "Institute affiliation", kind: "affiliation", link: "/institution-affiliation-approval" };
+  if (normalized === "programaffiliation") return { Model: InstitutionProgramAffiliation, Workflow: InstitutionAffiliationWorkflow, label: "Program affiliation", kind: "programaffiliation", link: "/institution-program-affiliation-approval" };
+  if (normalized === "schoolstatute") return { Model: InstitutionSchoolStatute, Workflow: InstitutionStatuteWorkflow, label: "School statute", kind: "schoolstatute", link: "/institution-school-statute-approval" };
+  return { Model: InstitutionStatute, Workflow: InstitutionStatuteWorkflow, label: "Statute", kind: "statute", link: "/institution-statute-approval" };
+};
+
+const workflowModelFor = (workflowkind) => {
+  const normalized = approvalKind(workflowkind);
+  if (normalized === "mou") return InstitutionMouWorkflow;
+  if (normalized === "ordinance") return InstitutionOrdinanceWorkflow;
+  if (normalized === "affiliation" || normalized === "programaffiliation") return InstitutionAffiliationWorkflow;
+  return InstitutionStatuteWorkflow;
 };
 
 const workflowQuery = (source = {}) => {
   const query = scoped(source);
-  ["academicyear", "approverrole", "approvername", "approveremail", "active"].forEach((field) => {
+  ["academicyear", "approvername", "approveremail", "active"].forEach((field) => {
     if (text(source[field])) query[field] = regex(source[field]);
   });
   if (text(source.level)) query.level = Number(source.level);
@@ -398,10 +556,40 @@ const workflowQuery = (source = {}) => {
 };
 
 const workflowLevels = async (colid, academicyear = "", Workflow = InstitutionStatuteWorkflow) => {
-  const query = { colid, active: /^yes$/i };
+  const query = {
+    colid,
+    $or: [
+      { active: /^yes$/i },
+      { active: /^active$/i },
+      { active: true },
+      { active: { $exists: false } },
+      { active: "" }
+    ]
+  };
   const year = text(academicyear);
-  if (year) query.$or = [{ academicyear: year }, { academicyear: "" }, { academicyear: { $exists: false } }];
+  if (year) {
+    const escapedYear = year.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    query.$and = [{
+      $or: [
+        { academicyear: year },
+        { academicyear: new RegExp(`^\\s*${escapedYear}\\s*$`, "i") },
+        { academicyear: /^all$/i },
+        { academicyear: "" },
+        { academicyear: { $exists: false } }
+      ]
+    }];
+  }
   return Workflow.find(query).sort({ level: 1, approvername: 1 }).lean();
+};
+
+const nextApprovalLevel = async (colid, academicyear, Workflow, currentLevel) => {
+  const levels = await workflowLevels(colid, academicyear, Workflow);
+  let next = nextWorkflowLevel(levels, currentLevel);
+  if (!next && text(academicyear)) {
+    const fallbackLevels = await workflowLevels(colid, "", Workflow);
+    next = nextWorkflowLevel(fallbackLevels, currentLevel);
+  }
+  return next;
 };
 
 const firstWorkflowLevel = (levels = []) => {
@@ -414,40 +602,76 @@ const nextWorkflowLevel = (levels = [], currentLevel = 0) => {
   return sorted[0] || null;
 };
 
-const approverMatches = (workflow = {}, useremail = "", role = "") => {
-  const email = text(useremail).toLowerCase();
+const identityCandidates = async (colid, source = {}) => {
+  const raw = [source.useremail, source.email, source.user, source.approveremail].map(text).filter(Boolean);
+  const lower = [...new Set(raw.map((value) => value.toLowerCase()))];
+  if (!lower.length) return [];
+  const user = await User.findOne({
+    colid,
+    $or: [
+      { email: { $in: lower } },
+      { user: { $in: lower } },
+      { regno: { $in: lower } }
+    ]
+  }).select("email user regno").lean();
+  return [...new Set([...lower, text(user?.email).toLowerCase(), text(user?.user).toLowerCase(), text(user?.regno).toLowerCase()].filter(Boolean))];
+};
+
+const approverMatches = (workflow = {}, identities = []) => {
+  const identitySet = new Set((Array.isArray(identities) ? identities : [identities]).map((value) => text(value).toLowerCase()).filter(Boolean));
   const approverEmail = text(workflow.approveremail).toLowerCase();
-  const roleValue = text(role).toLowerCase();
-  const approverRole = text(workflow.approverrole).toLowerCase();
-  return (!approverEmail || approverEmail === email || approverEmail === "all") && (!approverRole || approverRole === roleValue || approverRole === "all");
+  return Boolean(approverEmail && identitySet.has(approverEmail));
 };
 
 const addApprovalTask = async (statute, approver, config = approvalConfig("statute")) => {
-  if (!approver?.approveremail) return;
-  const startdate = new Date();
-  const duedate = new Date(startdate);
-  duedate.setDate(duedate.getDate() + 7);
-  await AcademicNewTask.create({
+  if (!approver?.approveremail) return [];
+  const recordTitle = statute.statute || statute.mou || statute.ordinance || statute.affiliation || statute.rule || statute.program || "";
+  return createApprovalTasks({
     colid: statute.colid,
     user: statute.user,
     createdby: statute.namecreated,
     academicyear: statute.academicyear,
-    faculty: approver.approvername || approver.approveremail,
-    facultyemail: approver.approveremail,
-    task: `Approve ${config.label}: ${statute.statute || statute.mou}`,
+    approvername: approver.approvername,
+    approveremail: approver.approveremail,
+    approverrole: "",
+    title: `Approve ${config.label}: ${recordTitle}`,
     category: `${config.label} approval`,
-    criticality: "High",
     pagelink: config.link,
-    startdate,
-    duedate,
-    status: "New",
-    comments: `${config.label} ${statute.statute || statute.mou} is pending approval at level ${approver.level}.`
+    comments: `${config.label} ${recordTitle} is pending approval at level ${approver.level}.`,
+    referenceModel: config.kind || config.label,
+    referenceId: statute._id,
+    level: approver.level
   });
+};
+
+const submitApprovalRecord = async (record, body = {}, config = approvalConfig("statute")) => {
+  const levels = await workflowLevels(record.colid, record.academicyear, config.Workflow);
+  const first = firstWorkflowLevel(levels);
+  if (!first) throw new Error(`No active ${config.label} approval workflow found`);
+  record.approvalstatus = `Pending Level ${first.level}`;
+  record.currentlevel = first.level;
+  record.pendingapprovername = first.approvername;
+  record.pendingapproveremail = first.approveremail;
+  record.pendingapproverrole = "";
+  record.submittedat = new Date();
+  record.rejectedat = undefined;
+  record.approvalhistory = Array.isArray(record.approvalhistory) ? record.approvalhistory : [];
+  record.approvalhistory.push({
+    level: first.level,
+    action: "Submitted",
+    approvername: text(body.namecreated || body.name),
+    approveremail: text(body.user),
+    approverrole: "",
+    comments: text(body.comments || "Submitted for approval")
+  });
+  await record.save();
+  await addApprovalTask(record, first, config);
+  return record;
 };
 
 exports.workflowList = async (req, res) => {
   try {
-    const Workflow = text(req.query.workflowkind) === "mou" ? InstitutionMouWorkflow : InstitutionStatuteWorkflow;
+    const Workflow = workflowModelFor(req.query.workflowkind);
     const rows = await Workflow.find(workflowQuery(req.query)).sort({ academicyear: -1, level: 1, approvername: 1 }).limit(5000).lean();
     res.json({ success: true, rows });
   } catch (error) {
@@ -458,8 +682,8 @@ exports.workflowList = async (req, res) => {
 exports.workflowSave = async (req, res) => {
   try {
     const payload = workflowPayload(req.body);
-    const Workflow = text(req.body.workflowkind) === "mou" ? InstitutionMouWorkflow : InstitutionStatuteWorkflow;
-    if (!payload.approveremail) return res.status(400).json({ success: false, message: "Approver email is required" });
+    const Workflow = workflowModelFor(req.body.workflowkind);
+    if (!payload.approveremail) return res.status(400).json({ success: false, message: "Approver user is required" });
     const row = req.body.id
       ? await Workflow.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true, runValidators: true })
       : await Workflow.create(payload);
@@ -473,7 +697,7 @@ exports.workflowSave = async (req, res) => {
 exports.workflowBulk = async (req, res) => {
   try {
     const scope = scoped(req.body);
-    const Workflow = text(req.body.workflowkind) === "mou" ? InstitutionMouWorkflow : InstitutionStatuteWorkflow;
+    const Workflow = workflowModelFor(req.body.workflowkind);
     const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
     const docs = rows.map((row) => workflowPayload({ ...row, ...scope, user: req.body.user, namecreated: req.body.namecreated })).filter((row) => row.approveremail);
     const result = docs.length ? await Workflow.insertMany(docs, { ordered: false }) : [];
@@ -486,7 +710,7 @@ exports.workflowBulk = async (req, res) => {
 exports.workflowRemove = async (req, res) => {
   try {
     const { colid } = scoped(req.body);
-    const Workflow = text(req.body.workflowkind) === "mou" ? InstitutionMouWorkflow : InstitutionStatuteWorkflow;
+    const Workflow = workflowModelFor(req.body.workflowkind);
     const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [req.body.id].filter(Boolean);
     await Workflow.deleteMany({ colid, _id: { $in: ids } });
     res.json({ success: true, deleted: ids.length });
@@ -501,27 +725,8 @@ exports.submitStatute = async (req, res) => {
     const config = approvalConfig(text(req.body.kind) || "statute");
     const statute = await config.Model.findOne({ _id: req.body.id, colid });
     if (!statute) return res.status(404).json({ success: false, message: `${config.label} not found` });
-    const levels = await workflowLevels(colid, statute.academicyear, config.Workflow);
-    const first = firstWorkflowLevel(levels);
-    if (!first) return res.status(400).json({ success: false, message: `No active ${config.label} approval workflow found` });
-    statute.approvalstatus = `Pending Level ${first.level}`;
-    statute.currentlevel = first.level;
-    statute.pendingapprovername = first.approvername;
-    statute.pendingapproveremail = first.approveremail;
-    statute.pendingapproverrole = first.approverrole;
-    statute.submittedat = new Date();
-    statute.rejectedat = undefined;
-    statute.approvalhistory.push({
-      level: first.level,
-      action: "Submitted",
-      approvername: text(req.body.namecreated || req.body.name),
-      approveremail: text(req.body.user),
-      approverrole: text(req.body.role),
-      comments: text(req.body.comments || "Submitted for approval")
-    });
-    await statute.save();
-    await addApprovalTask(statute, first, config);
-    res.json({ success: true, row: toClient(statute), message: `${config.label} submitted for approval` });
+    const submitted = await submitApprovalRecord(statute, req.body, config);
+    res.json({ success: true, row: toClient(submitted), message: `${config.label} submitted for approval` });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
@@ -531,10 +736,9 @@ exports.pendingStatutes = async (req, res) => {
   try {
     const { colid } = scoped(req.query);
     const config = approvalConfig(text(req.query.kind) || "statute");
-    const email = text(req.query.useremail || req.query.user);
-    const role = text(req.query.role);
+    const identities = await identityCandidates(colid, req.query);
     const rows = await config.Model.find({ colid, approvalstatus: /^Pending Level/i }).sort({ submittedat: -1 }).lean();
-    const matched = rows.filter((row) => approverMatches({ approveremail: row.pendingapproveremail, approverrole: row.pendingapproverrole }, email, role));
+    const matched = rows.filter((row) => approverMatches({ approveremail: row.pendingapproveremail }, identities));
     res.json({ success: true, rows: matched.map(toClient) });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -548,7 +752,8 @@ exports.approveStatute = async (req, res) => {
     const action = /^reject/i.test(text(req.body.action)) ? "Rejected" : "Approved";
     const statute = await config.Model.findOne({ _id: req.body.id, colid });
     if (!statute) return res.status(404).json({ success: false, message: `${config.label} not found` });
-    if (!approverMatches({ approveremail: statute.pendingapproveremail, approverrole: statute.pendingapproverrole }, req.body.approveremail || req.body.user, req.body.approverrole || req.body.role)) {
+    const identities = await identityCandidates(colid, req.body);
+    if (!approverMatches({ approveremail: statute.pendingapproveremail }, identities)) {
       return res.status(403).json({ success: false, message: `This ${config.label} is not pending for the current user` });
     }
     statute.approvalhistory.push({
@@ -556,8 +761,17 @@ exports.approveStatute = async (req, res) => {
       action,
       approvername: text(req.body.approvername || req.body.name),
       approveremail: text(req.body.approveremail || req.body.user),
-      approverrole: text(req.body.approverrole || req.body.role),
+      approverrole: "",
       comments: text(req.body.comments)
+    });
+    await completeApprovalTasks({
+      colid,
+      approveremail: text(statute.pendingapproveremail || req.body.approveremail || req.body.user),
+      category: `${config.label} approval`,
+      referenceModel: config.kind || config.label,
+      referenceId: statute._id,
+      level: statute.currentlevel,
+      comments: `${config.label} ${action.toLowerCase()} by ${text(req.body.approvername || req.body.name || req.body.user)}`
     });
     if (action === "Rejected") {
       statute.approvalstatus = "Rejected";
@@ -568,14 +782,13 @@ exports.approveStatute = async (req, res) => {
       await statute.save();
       return res.json({ success: true, row: toClient(statute), message: `${config.label} rejected` });
     }
-    const levels = await workflowLevels(colid, statute.academicyear, config.Workflow);
-    const next = nextWorkflowLevel(levels, statute.currentlevel);
+    const next = await nextApprovalLevel(colid, statute.academicyear, config.Workflow, statute.currentlevel);
     if (next) {
       statute.currentlevel = next.level;
       statute.approvalstatus = `Pending Level ${next.level}`;
       statute.pendingapprovername = next.approvername;
       statute.pendingapproveremail = next.approveremail;
-      statute.pendingapproverrole = next.approverrole;
+      statute.pendingapproverrole = "";
       await statute.save();
       await addApprovalTask(statute, next, config);
       return res.json({ success: true, row: toClient(statute), message: `Moved to level ${next.level}` });

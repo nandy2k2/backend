@@ -7,6 +7,7 @@ const UserDocumentRequirement = require('../Models/userdocumentrequirementds');
 const UserUploadedDocument = require('../Models/useruploadeddocumentds');
 const UserProfileApprovalWorkflow = require('../Models/userprofileapprovalworkflowds');
 const UserDocumentApprovalRequest = require('../Models/userdocumentapprovalrequestds');
+const { createApprovalTasks } = require('../utils/approvalTaskHelper');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -244,7 +245,7 @@ exports.uploadDocument = async (req, res) => {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    await UserDocumentApprovalRequest.findOneAndUpdate(
+    const approvalRequest = await UserDocumentApprovalRequest.findOneAndUpdate(
       { colid, documentid: String(data._id), status: 'Pending' },
       {
         colid,
@@ -261,6 +262,25 @@ exports.uploadDocument = async (req, res) => {
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+    const firstApprovers = workflow.filter((item) => Number(item.level) === 1);
+    for (const approver of firstApprovers) {
+      await createApprovalTasks({
+        colid,
+        user: owneruser,
+        createdby: clean(req.body.ownername) || owneruser,
+        academicyear: '',
+        approvername: approver.approvername,
+        approveremail: approver.approveremail,
+        approverrole: approver.approverrole,
+        title: `Approve document ${documentname} for ${clean(req.body.ownername) || owneruser}`,
+        category: 'User document approval',
+        pagelink: '/userprofileapproval',
+        comments: `Document ${documentname} is pending approval at level 1.`,
+        referenceModel: 'userdocumentapprovalrequestds',
+        referenceId: approvalRequest._id,
+        level: 1
+      });
+    }
 
     res.json(data);
   } catch (err) {

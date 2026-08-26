@@ -19,6 +19,7 @@ const OllamaConfiguration = require("../Models/ollamaconfigurationds");
 const Awsconfig = require("../Models/awsconfig");
 const Institution = require("../Models/insdetails");
 const User = require("../Models/user");
+const { createApprovalTasks, completeApprovalTasks } = require("../utils/approvalTaskHelper");
 
 const upload = multer({ storage: multer.memoryStorage() });
 exports.uploadMiddleware = upload.single("file");
@@ -737,11 +738,25 @@ exports.savePanelMembers = async (req, res) => {
         errors.push({ rowNumber: users[index].rowNumber || index + 1, message: error });
         continue;
       }
-      await PaperSetterPanelMember.findOneAndUpdate(
+      const savedMember = await PaperSetterPanelMember.findOneAndUpdate(
         { colid: item.colid, panelid: item.panelid, memberemail: item.memberemail },
         item,
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
+      await createApprovalTasks({
+        colid,
+        user: text(req.body.user),
+        createdby: text(req.body.name),
+        academicyear: item.academicyear,
+        approverrole: "All",
+        title: `Approve paper setter panel member: ${item.membername || item.memberemail}`,
+        category: "Paper setter panel approval",
+        pagelink: "/conduct-exam-paper-setter-panel-approval",
+        comments: `Paper setter panel ${item.panelname} has a member pending approval.`,
+        referenceModel: "conductexampapersetterpanelmemberds",
+        referenceId: savedMember?._id,
+        level: "Panel"
+      });
       saved += 1;
     }
     res.json({ success: true, saved, errors });
@@ -779,6 +794,16 @@ exports.approvePanelMembers = async (req, res) => {
         }
       }
     );
+    for (const id of ids) {
+      await completeApprovalTasks({
+        colid,
+        category: "Paper setter panel approval",
+        referenceModel: "conductexampapersetterpanelmemberds",
+        referenceId: id,
+        level: "Panel",
+        comments: `Paper setter panel member marked ${approvalstatus} by ${text(req.body.name || req.body.user)}`
+      });
+    }
     res.json({ success: true, updated: result.modifiedCount || 0 });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

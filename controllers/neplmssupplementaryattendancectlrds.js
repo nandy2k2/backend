@@ -6,6 +6,8 @@ const Awsconfig = require("../Models/awsconfig");
 const Attendance = require("../Models/neplmsattendanceds");
 const Workflow = require("../Models/neplmssupplementaryattendanceworkflowds");
 const Request = require("../Models/neplmssupplementaryattendancerequestds");
+const { attendanceModificationHtml, sendAuditEmail } = require("../utils/auditEmailHelper");
+const { completeAttendanceTask } = require("../utils/neplmsAttendanceTaskHelper");
 
 const upload = multer({ storage: multer.memoryStorage() });
 exports.uploadMiddleware = upload.single("file");
@@ -204,15 +206,34 @@ async function convertAttendance(request) {
     $or: [{ studentid: { $in: studentIds } }, { regno: { $in: regnos } }]
   });
   let converted = 0;
+  const convertedRows = [];
   for (const row of rows) {
     const when = attendanceDateTime(row);
     if (!when || (from && when < from) || (to && when > to)) continue;
+    const previous = row.toObject();
     row.attendance = 1;
     row.type = "Supplementary";
     row.comments = request.description || row.comments || "Supplementary attendance approved";
     row.user = request.user || row.user;
     await row.save();
+    convertedRows.push({ previous, saved: row.toObject() });
+    await completeAttendanceTask({ colid: request.colid, classid: row.classid, completedBy: request.user });
     converted += 1;
+  }
+  if (convertedRows.length) {
+    const first = convertedRows[0].saved;
+    await sendAuditEmail({
+      colid: request.colid,
+      type: "Attendance",
+      subject: "Supplementary attendance modification audit trail",
+      html: attendanceModificationHtml({
+        classInfo: first,
+        previous: convertedRows.map((item) => item.previous),
+        saved: convertedRows.map((item) => item.saved),
+        changedBy: request.user,
+        comments: request.description
+      })
+    }).catch(() => null);
   }
   return converted;
 }

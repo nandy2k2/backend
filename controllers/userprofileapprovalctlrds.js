@@ -4,6 +4,7 @@ const UserProfileApprovalWorkflow = require('../Models/userprofileapprovalworkfl
 const UserProfileEditRequest = require('../Models/userprofileeditrequestds');
 const UserDocumentApprovalRequest = require('../Models/userdocumentapprovalrequestds');
 const userProfileAuditLogController = require('./userprofileauditlogctlrds');
+const { createApprovalTasks, completeApprovalTasks } = require('../utils/approvalTaskHelper');
 
 const clean = (value) => String(value || '').trim();
 const number = (value) => Number(value || 0);
@@ -51,6 +52,50 @@ const canApproveAtLevel = (workflow, level, approveremail, approverrole) => work
   const roleOk = !clean(row.approverrole) || isAll(row.approverrole) || clean(row.approverrole).toLowerCase() === clean(approverrole).toLowerCase();
   return emailOk && roleOk;
 });
+
+const workflowRowsAtLevel = (workflow = [], level) => workflow.filter((row) => number(row.level) === number(level));
+
+async function addProfileFieldTasks(request, field, workflow) {
+  for (const approver of workflowRowsAtLevel(workflow, field.level)) {
+    await createApprovalTasks({
+      colid: request.colid,
+      user: request.owneruser,
+      createdby: request.ownername || request.owneruser,
+      academicyear: '',
+      approvername: approver.approvername,
+      approveremail: approver.approveremail,
+      approverrole: approver.approverrole,
+      title: `Approve profile field ${field.label || field.field} for ${request.ownername || request.owneruser}`,
+      category: 'User profile approval',
+      pagelink: '/userprofileapproval',
+      comments: `Profile field ${field.label || field.field} is pending approval at level ${field.level}.`,
+      referenceModel: 'userprofileeditrequestds',
+      referenceId: `${request._id}:${field.field}`,
+      level: field.level
+    });
+  }
+}
+
+async function addDocumentTasks(request, workflow) {
+  for (const approver of workflowRowsAtLevel(workflow, request.level)) {
+    await createApprovalTasks({
+      colid: request.colid,
+      user: request.owneruser,
+      createdby: request.ownername || request.owneruser,
+      academicyear: '',
+      approvername: approver.approvername,
+      approveremail: approver.approveremail,
+      approverrole: approver.approverrole,
+      title: `Approve document ${request.documentname || request.originalname} for ${request.ownername || request.owneruser}`,
+      category: 'User document approval',
+      pagelink: '/userprofileapproval',
+      comments: `Document ${request.documentname || request.originalname} is pending approval at level ${request.level}.`,
+      referenceModel: 'userdocumentapprovalrequestds',
+      referenceId: request._id,
+      level: request.level
+    });
+  }
+}
 
 const resolveRequestStatus = (statuses) => {
   const list = statuses.map(clean);
@@ -168,6 +213,7 @@ exports.actOnProfileField = async (req, res) => {
     }
 
     const action = /^reject/i.test(clean(req.body.action)) ? 'Rejected' : 'Approved';
+    const previousLevel = field.level;
     field.decisions.push({
       level: field.level,
       action,
@@ -177,6 +223,15 @@ exports.actOnProfileField = async (req, res) => {
       date: new Date()
     });
     field.comments = clean(req.body.comments);
+    await completeApprovalTasks({
+      colid,
+      approveremail: clean(req.body.approveremail || req.body.user),
+      category: 'User profile approval',
+      referenceModel: 'userprofileeditrequestds',
+      referenceId: `${request._id}:${field.field}`,
+      level: previousLevel,
+      comments: `Profile field ${field.label || field.field} ${action.toLowerCase()} by ${clean(req.body.approvername || req.body.user)}`
+    });
 
     if (action === 'Rejected') {
       field.status = 'Rejected';
@@ -185,6 +240,7 @@ exports.actOnProfileField = async (req, res) => {
       if (upcomingLevel) {
         field.level = upcomingLevel;
         field.status = 'Pending';
+        await addProfileFieldTasks(request, field, workflow);
       } else {
         const user = await User.findOne({
           colid,
@@ -239,6 +295,7 @@ exports.actOnDocument = async (req, res) => {
     }
 
     const action = /^reject/i.test(clean(req.body.action)) ? 'Rejected' : 'Approved';
+    const previousLevel = request.level;
     request.decisions.push({
       level: request.level,
       action,
@@ -248,6 +305,15 @@ exports.actOnDocument = async (req, res) => {
       date: new Date()
     });
     request.comments = clean(req.body.comments);
+    await completeApprovalTasks({
+      colid,
+      approveremail: clean(req.body.approveremail || req.body.user),
+      category: 'User document approval',
+      referenceModel: 'userdocumentapprovalrequestds',
+      referenceId: request._id,
+      level: previousLevel,
+      comments: `Document ${request.documentname || request.originalname} ${action.toLowerCase()} by ${clean(req.body.approvername || req.body.user)}`
+    });
     if (action === 'Rejected') {
       request.status = 'Rejected';
       await UserUploadedDocument.findOneAndUpdate({ _id: request.documentid, colid }, { status: 'Rejected', remarks: request.comments });
@@ -256,6 +322,7 @@ exports.actOnDocument = async (req, res) => {
       if (upcomingLevel) {
         request.level = upcomingLevel;
         request.status = 'Pending';
+        await addDocumentTasks(request, workflow);
       } else {
         request.status = 'Approved';
         await UserUploadedDocument.findOneAndUpdate({ _id: request.documentid, colid }, { status: 'Approved', remarks: request.comments });

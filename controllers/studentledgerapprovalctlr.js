@@ -1,5 +1,6 @@
 const Ledgerstud = require("../Models/ledgerstud");
 const StudentLedgerApprovalRole = require("../Models/studentledgerapprovalrole");
+const { createApprovalTasks, completeApprovalTasks } = require("../utils/approvalTaskHelper");
 
 function toNumber(value) {
   if (value === "" || value === null || value === undefined) return undefined;
@@ -87,6 +88,31 @@ exports.approveStudentLedger = async (req, res) => {
     });
 
     const data = await Ledgerstud.findByIdAndUpdate(id, { status: nextStatus, approvalhistory: history }, { new: true });
+    await completeApprovalTasks({
+      colid: ledger.colid,
+      approveremail: text(req.body.useremail || req.body.user),
+      category: "Student ledger approval",
+      referenceModel: "ledgerstud",
+      referenceId: ledger._id,
+      level: roles[currentIndex],
+      comments: `Student ledger approved by ${text(req.body.name || req.body.user || roles[currentIndex])}`
+    });
+    if (nextRole) {
+      await createApprovalTasks({
+        colid: ledger.colid,
+        user: ledger.user,
+        createdby: ledger.name || ledger.student,
+        academicyear: ledger.academicyear,
+        approverrole: nextRole,
+        title: `Approve student ledger: ${ledger.regno || ledger.student} ${ledger.feeitem || ledger.feegroup}`,
+        category: "Student ledger approval",
+        pagelink: "/studentledgerapproval",
+        comments: `Ledger entry for ${ledger.student || ledger.regno || ""} is pending ${nextRole} approval.`,
+        referenceModel: "ledgerstud",
+        referenceId: ledger._id,
+        level: nextRole
+      });
+    }
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -111,6 +137,15 @@ exports.rejectStudentLedger = async (req, res) => {
     });
 
     const data = await Ledgerstud.findByIdAndUpdate(id, { status: "Rejected", approvalhistory: history }, { new: true });
+    await completeApprovalTasks({
+      colid: ledger.colid,
+      approveremail: text(req.body.useremail || req.body.user),
+      category: "Student ledger approval",
+      referenceModel: "ledgerstud",
+      referenceId: ledger._id,
+      level: normalizeRole(req.body.role),
+      comments: `Student ledger rejected: ${text(req.body.remarks)}`
+    });
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

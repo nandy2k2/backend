@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const nepLmsAttendanceOtpSchema = new mongoose.Schema({
   classid: { type: mongoose.Schema.Types.ObjectId, required: true },
   otps: [{ type: String }],
+  requiredotpcount: { type: Number, min: 1, max: 6, default: 6 },
   academicyear: { type: String },
   program: { type: String },
   programcode: { type: String },

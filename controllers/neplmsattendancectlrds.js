@@ -7,6 +7,9 @@ const NepLmsClassGroup = require("../Models/neplmsclassgroupds");
 const NepLmsAttendanceOtp = require("../Models/neplmsattendanceotpds");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
 const { emitActivityEvent } = require("./activitymonitoringctlrds");
+const { attendanceModificationHtml, sendAuditEmail } = require("../utils/auditEmailHelper");
+const { completeAttendanceTask } = require("../utils/neplmsAttendanceTaskHelper");
+const { activeCount: activeOtpCount } = require("./neplmsotpattendanceconfigurationctlrds");
 
 const text = (value) => String(value || "").trim();
 const number = (value) => {
@@ -516,6 +519,8 @@ exports.saveAttendance = async (req, res) => {
     if (!students.length) return res.status(400).json({ success: false, message: "Select at least one student" });
 
     const classid = classInfo._id || classInfo.classid;
+    const previousRows = await NepLmsAttendance.find({ colid, classid, type: attendanceType }).lean();
+    const hadExistingAttendance = previousRows.length > 0;
     const saved = [];
     for (const item of students) {
       const studentid = item.studentid || item._id;
@@ -558,6 +563,25 @@ exports.saveAttendance = async (req, res) => {
       saved.push(row);
     }
 
+    await completeAttendanceTask({ colid, classid, completedBy: req.body.user });
+
+    let auditEmail = null;
+    if (hadExistingAttendance) {
+      const html = attendanceModificationHtml({
+        classInfo,
+        previous: previousRows,
+        saved,
+        changedBy: text(req.body.user),
+        comments
+      });
+      auditEmail = await sendAuditEmail({
+        colid,
+        type: "Attendance",
+        subject: "Attendance modification audit trail",
+        html
+      }).catch((error) => ({ sent: 0, errors: [error.message] }));
+    }
+
     if (req.body.raiseActivityEvent) {
       emitActivityEvent({
         colid,
@@ -573,7 +597,7 @@ exports.saveAttendance = async (req, res) => {
       });
     }
 
-    res.json({ success: true, saved: saved.length, data: saved });
+    res.json({ success: true, saved: saved.length, data: saved, auditEmail });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -649,12 +673,18 @@ exports.createAttendanceOtps = async (req, res) => {
         message: `OTP cannot be generated because the class period ended at ${formatValidity(validity.validtill)}.`
       });
     }
-    const otps = Array.from({ length: 6 }, randomOtp);
+    const requiredotpcount = await activeOtpCount(colid);
+    const otps = Array.from({ length: requiredotpcount }, randomOtp);
     const classid = classInfo._id || classInfo.classid;
     await NepLmsAttendanceOtp.updateMany({ colid, classid, type: attendanceType, status: "Active" }, { status: "Closed" });
+    const validfrom = new Date();
+    const validtill = new Date(validfrom);
+    validtill.setMinutes(validtill.getMinutes() + 1);
+    if (validtill > validity.validtill) validtill.setTime(validity.validtill.getTime());
     const data = await NepLmsAttendanceOtp.create({
       classid,
       otps,
+      requiredotpcount,
       academicyear: text(classInfo.academicyear),
       program: text(classInfo.program),
       programcode: text(classInfo.programcode),
@@ -667,15 +697,15 @@ exports.createAttendanceOtps = async (req, res) => {
       classdate: text(classInfo.classdate),
       classtime: text(classInfo.classtime),
       durationminutes: number(classInfo.durationminutes) || 0,
-      validfrom: validity.validfrom,
-      validtill: validity.validtill,
+      validfrom,
+      validtill,
       type: attendanceType,
       status: "Active",
       colid,
       user: text(req.body.user),
       createdby: text(req.body.user)
     });
-    res.json({ success: true, data, otps, validfrom: validity.validfrom, validtill: validity.validtill });
+    res.json({ success: true, data, otps, requiredotpcount, validfrom, validtill });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -721,20 +751,22 @@ exports.submitStudentOtps = async (req, res) => {
     const email = text(req.body.email || req.body.user);
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     if (!sessionid) return res.status(400).json({ success: false, message: "OTP session is required" });
-    if (submittedOtps.length !== 6 || submittedOtps.some((otp) => !/^\d{6}$/.test(otp))) {
-      return res.status(400).json({ success: false, message: "Enter all six 6 digit OTPs" });
-    }
     const session = await NepLmsAttendanceOtp.findOne({ _id: sessionid, colid, status: "Active" }).lean();
     if (!session) return res.status(404).json({ success: false, message: "Active OTP session not found" });
+    const requiredotpcount = Math.min(6, Math.max(1, Number(session.requiredotpcount || session.otps?.length || 6)));
+    const requiredSubmitted = submittedOtps.slice(0, requiredotpcount);
+    if (requiredSubmitted.length !== requiredotpcount || requiredSubmitted.some((otp) => !/^\d{6}$/.test(otp))) {
+      return res.status(400).json({ success: false, message: `Enter ${requiredotpcount} valid 6 digit OTP${requiredotpcount === 1 ? "" : "s"}` });
+    }
     const now = new Date();
     if (session.validfrom && now < new Date(session.validfrom)) {
       return res.status(400).json({ success: false, message: `OTP is valid only from ${formatValidity(new Date(session.validfrom))}.` });
     }
     if (session.validtill && now > new Date(session.validtill)) {
       await NepLmsAttendanceOtp.updateOne({ _id: session._id, colid }, { status: "Expired" });
-      return res.status(400).json({ success: false, message: `OTP expired at ${formatValidity(new Date(session.validtill))}. Attendance cannot be marked after the class period.` });
+      return res.status(400).json({ success: false, message: `OTP expired at ${formatValidity(new Date(session.validtill))}. OTP attendance is valid only for one minute.` });
     }
-    const matches = session.otps.every((otp, index) => text(otp) === submittedOtps[index]);
+    const matches = (session.otps || []).slice(0, requiredotpcount).every((otp, index) => text(otp) === requiredSubmitted[index]);
     if (!matches) return res.status(400).json({ success: false, message: "OTP values do not match" });
     const student = await User.findOne({
       colid,
@@ -778,6 +810,7 @@ exports.submitStudentOtps = async (req, res) => {
       payload,
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+    await completeAttendanceTask({ colid, classid: session.classid, completedBy: email || regno });
     res.json({ success: true, message: "Attendance marked present", data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -806,12 +839,28 @@ exports.changeAttendanceStatus = async (req, res) => {
       user: req.body.user,
       changereason: reason
     });
+    const previousRows = await NepLmsAttendance.find({ colid, classid: payload.classid, type: attendanceType }).lean();
     const data = await NepLmsAttendance.findOneAndUpdate(
       { colid, classid: payload.classid, studentid: payload.studentid, type: attendanceType },
       payload,
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
-    res.json({ success: true, data });
+    await completeAttendanceTask({ colid, classid: payload.classid, completedBy: req.body.user });
+    const auditEmail = previousRows.length
+      ? await sendAuditEmail({
+        colid,
+        type: "Attendance",
+        subject: "Attendance modification audit trail",
+        html: attendanceModificationHtml({
+          classInfo,
+          previous: previousRows,
+          saved: [data],
+          changedBy: text(req.body.user),
+          comments: reason
+        })
+      }).catch((error) => ({ sent: 0, errors: [error.message] }))
+      : null;
+    res.json({ success: true, data, auditEmail });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

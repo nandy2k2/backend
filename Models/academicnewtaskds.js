@@ -14,7 +14,10 @@ const academicNewTaskSchema = new mongoose.Schema({
   startdate: { type: Date },
   duedate: { type: Date },
   status: { type: String, trim: true, default: "New" },
-  comments: { type: String, trim: true }
+  comments: { type: String, trim: true },
+  referenceModel: { type: String, trim: true, index: true },
+  referenceId: { type: String, trim: true, index: true },
+  referenceLevel: { type: String, trim: true }
 }, { timestamps: true });
 
 module.exports = mongoose.model("academicnewtaskds", academicNewTaskSchema);

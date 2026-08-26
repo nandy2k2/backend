@@ -5,6 +5,7 @@ const Workflow = require('../Models/salarypaymentworkflowds');
 const SalarySheet = require('../Models/salarypaymentsheetds');
 const Voucher = require('../Models/salarypaymentvoucherds');
 const EmployeeLedger = require('../Models/employeeledgernewds');
+const { createApprovalTasks, completeApprovalTasks } = require('../utils/approvalTaskHelper');
 
 const text = (v) => String(v || '').trim();
 const num = (v) => Number.isFinite(Number(v)) ? Number(v) : 0;
@@ -35,6 +36,39 @@ async function salaryRows(colid, month, year) {
 async function nextStatus(colid, workflowtype, currentlevel) {
   const next = await Workflow.findOne({ colid: Number(colid), workflowtype, status: 'Active', level: { $gt: Number(currentlevel || 0) } }).sort({ level: 1 }).lean();
   return next ? { status: 'Pending Approval', currentlevel: next.level } : { status: 'Approved', currentlevel: Number(currentlevel || 1) };
+}
+
+async function addSalaryApprovalTask(record, level, workflowtype, pagelink) {
+  const workflow = level && await Workflow.findOne({ colid: record.colid, workflowtype, status: 'Active', level: Number(level) }).lean();
+  if (!workflow) return [];
+  return createApprovalTasks({
+    colid: record.colid,
+    user: record.submittedby || record.createdby,
+    createdby: record.submittedname || record.createdname || record.submittedby || record.createdby,
+    academicyear: record.year,
+    approvername: workflow.approvername,
+    approveremail: workflow.approveremail,
+    approverrole: workflow.approverrole,
+    title: `Approve ${workflowtype} for ${record.month} ${record.year}`,
+    category: `${workflowtype} approval`,
+    pagelink,
+    comments: `${workflowtype} is pending approval at level ${workflow.level}.`,
+    referenceModel: workflowtype === 'SalarySheet' ? 'salarypaymentsheetds' : 'salarypaymentvoucherds',
+    referenceId: record._id,
+    level: workflow.level
+  });
+}
+
+async function finishSalaryApprovalTask(record, actor, workflowtype) {
+  return completeApprovalTasks({
+    colid: record.colid,
+    approveremail: text(actor.user || actor.approveremail),
+    category: `${workflowtype} approval`,
+    referenceModel: workflowtype === 'SalarySheet' ? 'salarypaymentsheetds' : 'salarypaymentvoucherds',
+    referenceId: record._id,
+    level: record.currentlevel,
+    comments: `${workflowtype} approval acted by ${text(actor.name || actor.user)}`
+  });
 }
 
 exports.getInstitution = async (req, res) => {
@@ -100,6 +134,7 @@ exports.submitSheet = async (req, res) => {
       submittedname: req.body.name,
       comments: req.body.comments || 'Submitted for salary approval'
     });
+    await addSalaryApprovalTask(data, first?.level, 'SalarySheet', '/salarysheetapproval');
     res.json({ success: true, data });
   } catch (err) {
     res.status(err.code === 11000 ? 400 : 500).json({ success: false, message: err.code === 11000 ? 'Salary sheet already submitted for this month and year' : err.message });
@@ -123,9 +158,11 @@ exports.actionSheet = async (req, res) => {
     if (!sheet) return res.status(404).json({ success: false, message: 'Salary sheet not found' });
     const action = text(req.body.action);
     sheet.approvalhistory.push({ action, level: sheet.currentlevel, user: req.body.user, name: req.body.name, comments: req.body.comments, date: new Date() });
+    await finishSalaryApprovalTask(sheet, req.body, 'SalarySheet');
     if (action === 'Reject') sheet.status = 'Rejected';
     else Object.assign(sheet, await nextStatus(sheet.colid, 'SalarySheet', sheet.currentlevel));
     await sheet.save();
+    if (sheet.status === 'Pending Approval') await addSalaryApprovalTask(sheet, sheet.currentlevel, 'SalarySheet', '/salarysheetapproval');
     res.json({ success: true, data: sheet });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -152,6 +189,7 @@ exports.createVoucher = async (req, res) => {
       createdby: req.body.user,
       createdname: req.body.name
     });
+    await addSalaryApprovalTask(data, first?.level, 'PaymentVoucher', '/salarysheetapproval');
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -205,6 +243,7 @@ exports.actionVoucher = async (req, res) => {
     if (!voucher) return res.status(404).json({ success: false, message: 'Voucher not found' });
     const action = text(req.body.action);
     voucher.approvalhistory.push({ action, level: voucher.currentlevel, user: req.body.user, name: req.body.name, comments: req.body.comments, date: new Date() });
+    await finishSalaryApprovalTask(voucher, req.body, 'PaymentVoucher');
     if (action === 'Reject') voucher.status = 'Rejected';
     else Object.assign(voucher, await nextStatus(voucher.colid, 'PaymentVoucher', voucher.currentlevel));
     if (voucher.status === 'Approved' && voucher.ledgerposted !== 'Yes') {
@@ -212,6 +251,7 @@ exports.actionVoucher = async (req, res) => {
       voucher.ledgerposted = 'Yes';
     }
     await voucher.save();
+    if (voucher.status === 'Pending Approval') await addSalaryApprovalTask(voucher, voucher.currentlevel, 'PaymentVoucher', '/salarysheetapproval');
     res.json({ success: true, data: voucher });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

@@ -27,6 +27,7 @@ const MPrograms = require("../Models/mprograms");
 const Institution = require("../Models/insdetails");
 const Awsconfig = require("../Models/awsconfig");
 const EmailConfiguration = require("../Models/emailconfigurationds");
+const { createApprovalTasks, completeApprovalTasks } = require("../utils/approvalTaskHelper");
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 exports.uploadMiddleware = upload.single("file");
@@ -581,6 +582,15 @@ async function submitExamPanelMembers(panel, actor = {}) {
       date: new Date()
     });
     await member.save();
+    if (first) {
+      await createPhdApprovalTask(member, first, {
+        category: "PhD examiner panel approval",
+        pagelink: "/phd-exam-panel-approval",
+        referenceModel: "phdexampanelmemberds",
+        title: `Approve examiner panel member: ${member.examinername || member.membername || member.examineremail}`,
+        comments: `Examiner panel ${panel.panelname} is pending level ${first.level} approval.`
+      });
+    }
   }
   panel.approvalstatus = "Submitted";
   panel.currentlevel = first ? first.level : 0;
@@ -641,6 +651,15 @@ async function submitOralPanelMembers(panel, actor = {}) {
       date: new Date()
     });
     await member.save();
+    if (first) {
+      await createPhdApprovalTask(member, first, {
+        category: "PhD oral defense panel approval",
+        pagelink: "/phd-oral-defense-panel-approval",
+        referenceModel: "phdoraldefensepanelmemberds",
+        title: `Approve oral defense panel member: ${member.examinername || member.examineremail}`,
+        comments: `Oral defense panel ${panel.panelname} is pending level ${first.level} approval.`
+      });
+    }
   }
   panel.approvalstatus = first ? "Submitted" : "Approved";
   panel.currentlevel = first ? first.level : 0;
@@ -700,12 +719,45 @@ function assignmentHistory(action, row = {}, actor = {}, comments = "") {
   };
 }
 
+async function createPhdApprovalTask(row = {}, approver = {}, config = {}) {
+  if (!row?.colid || !approver?.approveremail) return [];
+  return createApprovalTasks({
+    colid: row.colid,
+    user: row.user,
+    createdby: row.name || row.student || "PhD workflow",
+    academicyear: row.academicyear,
+    approvername: approver.approvername,
+    approveremail: approver.approveremail,
+    approverrole: approver.role || approver.approverrole,
+    title: config.title || `Approve PhD record for ${row.student || row.panelname || row.regno || ""}`,
+    category: config.category || "PhD approval",
+    pagelink: config.pagelink || "/phd-thesis-approval",
+    comments: config.comments || "PhD workflow item pending approval.",
+    referenceModel: config.referenceModel,
+    referenceId: row._id,
+    level: approver.level || row.currentlevel,
+    days: config.days || 7
+  });
+}
+
+async function completePhdApprovalTask(row = {}, actor = {}, config = {}) {
+  return completeApprovalTasks({
+    colid: row.colid,
+    approveremail: text(actor.user || actor.approveremail),
+    category: config.category || "PhD approval",
+    referenceModel: config.referenceModel,
+    referenceId: row._id,
+    level: row.currentlevel,
+    comments: config.comments || `Completed by ${text(actor.name || actor.user)}`
+  });
+}
+
 async function ensureNocApproval(submission, seedUser = {}) {
   const existing = await PhdNocApproval.findOne({ colid: submission.colid, submissionid: String(submission._id) });
   if (existing) return existing;
   const workflow = await nocWorkflowFor(submission);
   const firstState = firstPendingStatus(workflow);
-  return PhdNocApproval.create({
+  const row = await PhdNocApproval.create({
     colid: submission.colid,
     submissionid: String(submission._id),
     academicyear: submission.academicyear,
@@ -727,6 +779,20 @@ async function ensureNocApproval(submission, seedUser = {}) {
     name: text(seedUser.name),
     user: text(seedUser.user)
   });
+  if (row.status === "Submitted") {
+    await createPhdApprovalTask(row, {
+      level: row.currentlevel,
+      approvername: row.currentapprovername,
+      approveremail: row.currentapproveremail
+    }, {
+      category: "PhD NoC approval",
+      pagelink: "/phd-noc-final-approval",
+      referenceModel: "phdnocapprovalds",
+      title: `Approve PhD NoC for ${row.student || row.regno}`,
+      comments: `Final NoC approval is pending at level ${row.currentlevel}.`
+    });
+  }
+  return row;
 }
 
 async function syncNocApprovalsForSubmissions(submissions = [], seedUser = {}) {
@@ -742,7 +808,7 @@ async function ensureOralDefenseApproval(source, seedUser = {}) {
   if (existing) return existing;
   const workflow = await oralWorkflowFor(source);
   const firstState = firstPendingStatus(workflow);
-  return PhdOralDefenseApproval.create({
+  const row = await PhdOralDefenseApproval.create({
     colid: source.colid,
     submissionid: String(source.submissionid),
     nocapprovalid: String(source.nocapprovalid),
@@ -766,6 +832,20 @@ async function ensureOralDefenseApproval(source, seedUser = {}) {
     name: text(seedUser.name),
     user: text(seedUser.user)
   });
+  if (row.status === "Submitted") {
+    await createPhdApprovalTask(row, {
+      level: row.currentlevel,
+      approvername: row.currentapprovername,
+      approveremail: row.currentapproveremail
+    }, {
+      category: "PhD oral defense approval",
+      pagelink: "/phd-oral-defense-approval",
+      referenceModel: "phdoraldefenseapprovalds",
+      title: `Approve oral defense for ${row.student || row.regno}`,
+      comments: `Oral defense approval is pending at level ${row.currentlevel}.`
+    });
+  }
+  return row;
 }
 
 async function maybeCreateOralDefenseApproval(row, seedUser = {}) {
@@ -1015,6 +1095,12 @@ exports.examPanelApprovalAction = async (req, res) => {
     const linked = [];
     for (const member of members) {
       if (member.currentapproveremail && !exactRegex(actorEmail).test(member.currentapproveremail)) continue;
+      const previousLevel = member.currentlevel;
+      await completePhdApprovalTask(member, { user: actorEmail, name: req.body.name }, {
+        category: "PhD examiner panel approval",
+        referenceModel: "phdexampanelmemberds",
+        comments: `Examiner panel member ${action} by ${text(req.body.name || actorEmail)}`
+      });
       if (/^reject/i.test(action)) {
         member.approvalstatus = "Rejected";
         member.rejecteddate = new Date();
@@ -1030,6 +1116,13 @@ exports.examPanelApprovalAction = async (req, res) => {
           member.currentapprovername = next.approvername;
           member.currentapproveremail = next.approveremail;
           member.approvalcomments = comments;
+          await createPhdApprovalTask(member, next, {
+            category: "PhD examiner panel approval",
+            pagelink: "/phd-exam-panel-approval",
+            referenceModel: "phdexampanelmemberds",
+            title: `Approve examiner panel member: ${member.examinername || member.examineremail}`,
+            comments: `Examiner panel member moved from level ${previousLevel} to level ${next.level}.`
+          });
         } else {
           const link = await ensureExaminerUser(member, { name: req.body.name, user: actorEmail });
           member.approvalstatus = "Approved";
@@ -1273,6 +1366,19 @@ exports.studentApplyAssignment = async (req, res) => {
       ...state,
       history: [assignmentHistory(state.assignmentapprovalstatus === "Approved" ? "Approved automatically" : "Submitted for assignment approval", state, { name: student.name, user: student.email || student.user }, text(req.body.comments))]
     });
+    if (data.assignmentapprovalstatus === "Submitted") {
+      await createPhdApprovalTask(data, {
+        level: data.currentlevel,
+        approvername: data.currentapprovername,
+        approveremail: data.currentapproveremail
+      }, {
+        category: "PhD thesis assignment approval",
+        pagelink: "/phd-thesis-assignment-approval",
+        referenceModel: "phdthesisassignmentds",
+        title: `Approve thesis assignment for ${data.student || data.regno}`,
+        comments: `Thesis assignment request is pending at level ${data.currentlevel}.`
+      });
+    }
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1319,6 +1425,12 @@ exports.assignmentApprovalAction = async (req, res) => {
     const row = await PhdAssignment.findOne({ colid, _id: req.body.id, requestsource: /^Student$/i });
     if (!row) return res.status(404).json({ success: false, message: "Assignment request not found." });
     const comments = text(req.body.comments);
+    const previousLevel = row.currentlevel;
+    await completePhdApprovalTask(row, req.body, {
+      category: "PhD thesis assignment approval",
+      referenceModel: "phdthesisassignmentds",
+      comments: `Thesis assignment ${text(req.body.action)} by ${text(req.body.name || req.body.user)}`
+    });
     if (/^reject/i.test(text(req.body.action))) {
       row.assignmentapprovalstatus = "Rejected";
       row.status = "Rejected";
@@ -1335,6 +1447,13 @@ exports.assignmentApprovalAction = async (req, res) => {
         row.currentlevel = next.level;
         row.currentapprovername = next.approvername;
         row.currentapproveremail = next.approveremail;
+        await createPhdApprovalTask(row, next, {
+          category: "PhD thesis assignment approval",
+          pagelink: "/phd-thesis-assignment-approval",
+          referenceModel: "phdthesisassignmentds",
+          title: `Approve thesis assignment for ${row.student || row.regno}`,
+          comments: `Thesis assignment request moved from level ${previousLevel} to level ${next.level}.`
+        });
       } else {
         row.assignmentapprovalstatus = "Approved";
         row.status = "Active";
@@ -1708,9 +1827,14 @@ exports.oralDefensePanelApprovalAction = async (req, res) => {
     let updated = 0;
     const workflow = await oralPanelWorkflowFor(panel);
     if (/^reject/i.test(text(req.body.action))) {
-      for (const member of members) {
-        if (preferenceorders[String(member._id)] !== undefined) member.preferenceorder = num(preferenceorders[String(member._id)]);
-        member.approvalstatus = "Rejected";
+    for (const member of members) {
+      await completePhdApprovalTask(member, { user: text(req.body.user), name: req.body.name }, {
+        category: "PhD oral defense panel approval",
+        referenceModel: "phdoraldefensepanelmemberds",
+        comments: `Oral defense panel member ${text(req.body.action)} by ${text(req.body.name || req.body.user)}`
+      });
+      if (preferenceorders[String(member._id)] !== undefined) member.preferenceorder = num(preferenceorders[String(member._id)]);
+      member.approvalstatus = "Rejected";
         member.rejecteddate = new Date();
         member.approvalcomments = comments;
         member.history.push({ action: "Rejected", level: member.currentlevel, approvername: text(req.body.name), approveremail: text(req.body.user), comments, date: new Date() });
@@ -1720,6 +1844,12 @@ exports.oralDefensePanelApprovalAction = async (req, res) => {
     } else {
       for (const member of members) {
         if (preferenceorders[String(member._id)] !== undefined) member.preferenceorder = num(preferenceorders[String(member._id)]);
+        const previousLevel = member.currentlevel;
+        await completePhdApprovalTask(member, { user: text(req.body.user), name: req.body.name }, {
+          category: "PhD oral defense panel approval",
+          referenceModel: "phdoraldefensepanelmemberds",
+          comments: `Oral defense panel member approved by ${text(req.body.name || req.body.user)}`
+        });
         const next = workflow.find((item) => Number(item.level) > Number(member.currentlevel || 0));
         member.history.push({ action: "Approved", level: member.currentlevel, approvername: text(req.body.name), approveremail: text(req.body.user), comments, date: new Date() });
         if (next) {
@@ -1727,6 +1857,13 @@ exports.oralDefensePanelApprovalAction = async (req, res) => {
           member.currentlevel = next.level;
           member.currentapprovername = next.approvername;
           member.currentapproveremail = next.approveremail;
+          await createPhdApprovalTask(member, next, {
+            category: "PhD oral defense panel approval",
+            pagelink: "/phd-oral-defense-panel-approval",
+            referenceModel: "phdoraldefensepanelmemberds",
+            title: `Approve oral defense panel member: ${member.examinername || member.examineremail}`,
+            comments: `Oral defense panel member moved from level ${previousLevel} to level ${next.level}.`
+          });
         } else {
           member.approvalstatus = "Approved";
           member.approveddate = new Date();
@@ -1821,6 +1958,19 @@ exports.submitThesis = async (req, res) => {
       name: text(req.body.name),
       user: text(req.body.user)
     });
+    if (data.status === "Submitted") {
+      await createPhdApprovalTask(data, {
+        level: data.currentlevel,
+        approvername: data.currentapprovername,
+        approveremail: data.currentapproveremail
+      }, {
+        category: "PhD thesis submission approval",
+        pagelink: "/phd-thesis-approval",
+        referenceModel: "phdthesissubmissionds",
+        title: `Approve thesis submission for ${data.student || data.regno}`,
+        comments: `Thesis submission is pending at level ${data.currentlevel}.`
+      });
+    }
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1854,6 +2004,12 @@ exports.takeAction = async (req, res) => {
     const comments = text(req.body.comments);
     const submission = await PhdSubmission.findOne({ _id: req.body.id, colid });
     if (!submission) return res.status(404).json({ success: false, message: "Submission not found." });
+    const previousLevel = submission.currentlevel;
+    await completePhdApprovalTask(submission, req.body, {
+      category: "PhD thesis submission approval",
+      referenceModel: "phdthesissubmissionds",
+      comments: `Thesis submission ${action} by ${text(req.body.name || req.body.user)}`
+    });
     if (/^reject/i.test(action)) {
       submission.status = "Rejected";
       submission.rejecteddate = new Date();
@@ -1868,6 +2024,13 @@ exports.takeAction = async (req, res) => {
         submission.currentlevel = next.level;
         submission.currentapprovername = next.approvername;
         submission.currentapproveremail = next.approveremail;
+        await createPhdApprovalTask(submission, next, {
+          category: "PhD thesis submission approval",
+          pagelink: "/phd-thesis-approval",
+          referenceModel: "phdthesissubmissionds",
+          title: `Approve thesis submission for ${submission.student || submission.regno}`,
+          comments: `Thesis submission moved from level ${previousLevel} to level ${next.level}.`
+        });
       } else {
         submission.status = "Approved";
         submission.approveddate = new Date();
@@ -2099,12 +2262,27 @@ exports.saveExaminerAssignments = async (req, res) => {
     });
     let inserted = 0;
     for (const row of rows) {
-      const result = await PhdExaminerAssignment.updateOne(
+      const saved = await PhdExaminerAssignment.findOneAndUpdate(
         { colid, submissionid: row.submissionid, memberid: row.memberid },
         { $setOnInsert: row },
-        { upsert: true }
+        { upsert: true, new: true, setDefaultsOnInsert: true }
       );
-      if (result.upsertedCount) inserted += 1;
+      if (saved?.createdAt && saved?.updatedAt && String(saved.createdAt) === String(saved.updatedAt)) inserted += 1;
+      await createApprovalTasks({
+        colid,
+        user: text(req.body.user),
+        createdby: text(req.body.name),
+        academicyear: row.academicyear,
+        approvername: row.examinername,
+        approveremail: row.useremail || row.examineremail,
+        title: `Review PhD thesis for ${row.student || row.regno}`,
+        category: "PhD examiner thesis review",
+        pagelink: "/phd-examiner-review",
+        comments: `Thesis review is pending for ${row.student || row.regno}.`,
+        referenceModel: "phdexaminerassignmentds",
+        referenceId: saved?._id || "",
+        level: "Examiner"
+      });
     }
     res.json({ success: true, inserted, attempted: rows.length });
   } catch (error) {
@@ -2240,6 +2418,15 @@ exports.examinerReviewAction = async (req, res) => {
     row.remarks = text(req.body.remarks);
     row.revieweddate = new Date();
     await row.save();
+    await completeApprovalTasks({
+      colid,
+      approveremail: text(req.body.user),
+      category: "PhD examiner thesis review",
+      referenceModel: "phdexaminerassignmentds",
+      referenceId: row._id,
+      level: "Examiner",
+      comments: `Thesis review ${action.toLowerCase()} by ${text(req.body.name || req.body.user)}`
+    });
     if (action === "Rejected") {
       await PhdSubmission.updateOne(
         { _id: row.submissionid, colid },
@@ -2303,6 +2490,12 @@ exports.nocApprovalAction = async (req, res) => {
     const comments = text(req.body.comments);
     const row = await PhdNocApproval.findOne({ _id: req.body.id, colid });
     if (!row) return res.status(404).json({ success: false, message: "NoC approval record not found." });
+    const previousLevel = row.currentlevel;
+    await completePhdApprovalTask(row, req.body, {
+      category: "PhD NoC approval",
+      referenceModel: "phdnocapprovalds",
+      comments: `NoC approval ${action} by ${text(req.body.name || req.body.user)}`
+    });
     if (/^reject/i.test(action)) {
       row.status = "Rejected";
       row.rejecteddate = new Date();
@@ -2317,6 +2510,13 @@ exports.nocApprovalAction = async (req, res) => {
         row.currentlevel = next.level;
         row.currentapprovername = next.approvername;
         row.currentapproveremail = next.approveremail;
+        await createPhdApprovalTask(row, next, {
+          category: "PhD NoC approval",
+          pagelink: "/phd-noc-final-approval",
+          referenceModel: "phdnocapprovalds",
+          title: `Approve PhD NoC for ${row.student || row.regno}`,
+          comments: `NoC approval moved from level ${previousLevel} to level ${next.level}.`
+        });
       } else {
         row.status = "Approved";
         row.approveddate = new Date();
@@ -2443,8 +2643,27 @@ exports.saveOralDefenseAssignments = async (req, res) => {
         user: text(req.body.user),
         useremail: member.useremail || member.user || ""
       };
-      const result = await PhdOralDefenseAssignment.updateOne({ colid, submissionid: payload.submissionid, memberid: payload.memberid }, { $setOnInsert: payload }, { upsert: true });
-      if (result.upsertedCount) inserted += 1;
+      const saved = await PhdOralDefenseAssignment.findOneAndUpdate(
+        { colid, submissionid: payload.submissionid, memberid: payload.memberid },
+        { $setOnInsert: payload },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      if (saved?.createdAt && saved?.updatedAt && String(saved.createdAt) === String(saved.updatedAt)) inserted += 1;
+      await createApprovalTasks({
+        colid,
+        user: text(req.body.user),
+        createdby: text(req.body.name),
+        academicyear: payload.academicyear,
+        approvername: payload.examinername,
+        approveremail: payload.useremail || payload.examineremail,
+        title: `Complete oral defense for ${payload.student || payload.regno}`,
+        category: "PhD oral defense examiner review",
+        pagelink: "/phd-oral-defense-review",
+        comments: `Oral defense review is pending for ${payload.student || payload.regno}.`,
+        referenceModel: "phdoraldefenseassignmentds",
+        referenceId: saved?._id || "",
+        level: "Examiner"
+      });
     }
     res.json({ success: true, inserted, attempted: students.length });
   } catch (error) {
@@ -2510,6 +2729,15 @@ exports.oralDefenseExaminerAction = async (req, res) => {
     row.attendees = attendees;
     row.revieweddate = new Date();
     await row.save();
+    await completeApprovalTasks({
+      colid,
+      approveremail: text(req.body.user),
+      category: "PhD oral defense examiner review",
+      referenceModel: "phdoraldefenseassignmentds",
+      referenceId: row._id,
+      level: "Examiner",
+      comments: `Oral defense review ${action.toLowerCase()} by ${text(req.body.name || req.body.user)}`
+    });
     if (action === "Approved") await maybeCreateOralDefenseApproval(row, { name: req.body.name, user: req.body.user });
     res.json({ success: true, data: row });
   } catch (error) {
@@ -2617,6 +2845,12 @@ exports.oralDefenseApprovalAction = async (req, res) => {
     const comments = text(req.body.comments);
     const row = await PhdOralDefenseApproval.findOne({ colid, _id: req.body.id });
     if (!row) return res.status(404).json({ success: false, message: "Oral defense approval not found." });
+    const previousLevel = row.currentlevel;
+    await completePhdApprovalTask(row, req.body, {
+      category: "PhD oral defense approval",
+      referenceModel: "phdoraldefenseapprovalds",
+      comments: `Oral defense approval ${action} by ${text(req.body.name || req.body.user)}`
+    });
     if (/^reject/i.test(action)) {
       row.status = "Rejected";
       row.rejecteddate = new Date();
@@ -2634,6 +2868,13 @@ exports.oralDefenseApprovalAction = async (req, res) => {
         row.currentlevel = next.level;
         row.currentapprovername = next.approvername;
         row.currentapproveremail = next.approveremail;
+        await createPhdApprovalTask(row, next, {
+          category: "PhD oral defense approval",
+          pagelink: "/phd-oral-defense-approval",
+          referenceModel: "phdoraldefenseapprovalds",
+          title: `Approve oral defense for ${row.student || row.regno}`,
+          comments: `Oral defense approval moved from level ${previousLevel} to level ${next.level}.`
+        });
       } else {
         row.status = "Approved";
         row.approveddate = new Date();

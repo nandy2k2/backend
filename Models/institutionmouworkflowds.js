@@ -8,7 +8,7 @@ const mouWorkflowSchema = new mongoose.Schema({
   level: { type: Number, required: true },
   approverrole: { type: String, trim: true },
   approvername: { type: String, trim: true },
-  approveremail: { type: String, trim: true, required: true },
+  approveremail: { type: String, trim: true },
   active: { type: String, trim: true, default: "Yes" },
   comments: { type: String, trim: true }
 }, { timestamps: true });

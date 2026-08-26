@@ -10,6 +10,7 @@ const LeaveType = require("../Models/hrleavetypeds");
 const LeaveCycle = require("../Models/hrleavecycleds");
 const LeaveBalance = require("../Models/hrleavebalanceds");
 const LeaveApplication = require("../Models/hrleaveapplicationds");
+const { createApprovalTasks, completeApprovalTasks } = require("../utils/approvalTaskHelper");
 const LeaveClassPlan = require("../Models/hrleaveclassplands");
 const CompensatoryRule = require("../Models/hrleavecompensatoryruleds");
 const WeeklyOff = require("../Models/hrleaveweeklyoffds");
@@ -783,6 +784,24 @@ exports.applyLeave = async (req, res) => {
         user: text(req.body.user)
       })));
     }
+    if (approvals[0]?.approveremail) {
+      await createApprovalTasks({
+        colid,
+        user: text(req.body.user),
+        createdby: text(req.body.employeename || hierarchy.employeename),
+        academicyear: text(req.body.cyclename),
+        approvername: approvals[0].approvername,
+        approveremail: approvals[0].approveremail,
+        approverrole: approvals[0].approverrole,
+        title: `Approve leave: ${text(req.body.leavetype)} for ${text(req.body.employeename || hierarchy.employeename)}`,
+        category: "HR leave approval",
+        pagelink: "/hrleaveapprove",
+        comments: `${text(req.body.leavetype)} leave from ${text(req.body.fromdate)} to ${text(req.body.todate)} is pending approval.`,
+        referenceModel: "hrleaveapplicationds",
+        referenceId: data._id,
+        level: approvals[0].level
+      });
+    }
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -849,6 +868,15 @@ exports.approveLeave = async (req, res) => {
     approval.status = text(req.body.action) === "Reject" ? "Rejected" : "Approved";
     approval.comment = text(req.body.comment);
     approval.actiondate = new Date();
+    await completeApprovalTasks({
+      colid: app.colid,
+      approveremail,
+      category: "HR leave approval",
+      referenceModel: "hrleaveapplicationds",
+      referenceId: app._id,
+      level: approval.level,
+      comments: `Leave ${approval.status.toLowerCase()} by ${approveremail}`
+    });
     if (approval.status === "Rejected") {
       const balance = await findLeaveBalance(app.colid, app.employeeemail, app.leavetype, app.cyclename);
       if (app.balancededucted && balance) {
@@ -864,6 +892,22 @@ exports.approveLeave = async (req, res) => {
       if (next) {
         app.currentlevel = next.level;
         app.status = "In Approval";
+        await createApprovalTasks({
+          colid: app.colid,
+          user: app.user,
+          createdby: app.employeename,
+          academicyear: app.cyclename,
+          approvername: next.approvername,
+          approveremail: next.approveremail,
+          approverrole: next.approverrole,
+          title: `Approve leave: ${app.leavetype} for ${app.employeename}`,
+          category: "HR leave approval",
+          pagelink: "/hrleaveapprove",
+          comments: `${app.leavetype} leave from ${app.fromdate} to ${app.todate} is pending approval.`,
+          referenceModel: "hrleaveapplicationds",
+          referenceId: app._id,
+          level: next.level
+        });
       } else {
         if (!app.balancededucted) {
           const balance = await findLeaveBalance(app.colid, app.employeeemail, app.leavetype, app.cyclename);

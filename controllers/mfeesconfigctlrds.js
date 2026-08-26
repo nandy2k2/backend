@@ -5,6 +5,7 @@ const MPrograms = require("../Models/mprograms");
 const RegulationMaster = require("../Models/regulationmasterds");
 const RegulationSubject = require("../Models/regulationsubjectds");
 const FeeApprovalRole = require("../Models/feeapprovalrole");
+const { createApprovalTasks, completeApprovalTasks } = require("../utils/approvalTaskHelper");
 
 const academicYears = ["2026-27", "2027-28", "2028-29", "2029-30", "2030-31"];
 
@@ -188,6 +189,23 @@ exports.createMFees = async (req, res) => {
     if (error) return res.status(400).json({ success: false, message: error });
 
     const data = await Fees.create(payload);
+    const roles = await getApprovalRoles(payload.colid);
+    if (roles[0]) {
+      await createApprovalTasks({
+        colid: payload.colid,
+        user: payload.user,
+        createdby: payload.name,
+        academicyear: payload.academicyear,
+        approverrole: roles[0],
+        title: `Approve fee configuration: ${payload.feeeitem || payload.feegroup}`,
+        category: "Fee approval",
+        pagelink: "/feeapproval",
+        comments: `Fee ${payload.feeeitem || ""} for ${payload.program || payload.programcode || ""} is pending ${roles[0]} approval.`,
+        referenceModel: "fees",
+        referenceId: data._id,
+        level: roles[0]
+      });
+    }
     res.status(201).json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -305,6 +323,31 @@ exports.approveMFees = async (req, res) => {
     });
 
     const data = await Fees.findByIdAndUpdate(id, { status: nextStatus, approvalhistory: history }, { new: true });
+    await completeApprovalTasks({
+      colid: fee.colid,
+      approveremail: text(req.body.useremail || req.body.user),
+      category: "Fee approval",
+      referenceModel: "fees",
+      referenceId: fee._id,
+      level: roles[currentIndex],
+      comments: `Fee approved by ${text(req.body.name || req.body.user || roles[currentIndex])}`
+    });
+    if (nextRole) {
+      await createApprovalTasks({
+        colid: fee.colid,
+        user: fee.user,
+        createdby: fee.name,
+        academicyear: fee.academicyear,
+        approverrole: nextRole,
+        title: `Approve fee configuration: ${fee.feeeitem || fee.feegroup}`,
+        category: "Fee approval",
+        pagelink: "/feeapproval",
+        comments: `Fee ${fee.feeeitem || ""} is pending ${nextRole} approval.`,
+        referenceModel: "fees",
+        referenceId: fee._id,
+        level: nextRole
+      });
+    }
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -329,6 +372,15 @@ exports.rejectMFees = async (req, res) => {
     });
 
     const data = await Fees.findByIdAndUpdate(id, { status: "Rejected", approvalhistory: history }, { new: true });
+    await completeApprovalTasks({
+      colid: fee.colid,
+      approveremail: text(req.body.useremail || req.body.user),
+      category: "Fee approval",
+      referenceModel: "fees",
+      referenceId: fee._id,
+      level: normalizeRole(req.body.role),
+      comments: `Fee rejected: ${text(req.body.remarks)}`
+    });
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

@@ -10,6 +10,7 @@ const User = require("../Models/user");
 const MPrograms = require("../Models/mprograms");
 const ConductExamCourse = require("../Models/conductexamcourseds");
 const Institution = require("../Models/insdetails");
+const { createApprovalTasks, completeApprovalTasks } = require("../utils/approvalTaskHelper");
 
 const text = (value) => String(value ?? "").trim();
 const num = (value, fallback = 0) => {
@@ -204,7 +205,7 @@ exports.submitRequests = async (req, res) => {
       const firstWorkflow = await AppealWorkflow.findOne({ colid: payload.colid, academicyear: payload.academicyear, programcode: payload.programcode, status: { $ne: "Inactive" } }).sort({ level: 1 }).lean();
       payload.currentlevel = firstWorkflow?.level || 1;
       payload.approvalstatus = firstWorkflow ? "Pending" : "Approved";
-      await AppealRequest.findOneAndUpdate(
+      const savedRow = await AppealRequest.findOneAndUpdate(
         {
           colid: payload.colid,
           academicyear: payload.academicyear,
@@ -219,6 +220,24 @@ exports.submitRequests = async (req, res) => {
         payload,
         { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
       );
+      if (firstWorkflow) {
+        await createApprovalTasks({
+          colid: payload.colid,
+          user: payload.user,
+          createdby: payload.student,
+          academicyear: payload.academicyear,
+          approvername: firstWorkflow.approvername,
+          approveremail: firstWorkflow.approveremail,
+          approverrole: firstWorkflow.role,
+          title: `Approve exam appeal: ${payload.regno} ${payload.coursecode}`,
+          category: "Exam appeal approval",
+          pagelink: "/exam-appeal-approval",
+          comments: `${payload.student || payload.regno} appeal for ${payload.course || payload.coursecode} is pending approval.`,
+          referenceModel: "conductexamappealrequestds",
+          referenceId: savedRow._id,
+          level: firstWorkflow.level
+        });
+      }
       saved += 1;
     }
     res.json({ success: true, saved, errors });
@@ -263,6 +282,15 @@ exports.approveRequests = async (req, res) => {
       const request = await AppealRequest.findOne({ _id: id, colid: num(req.body.colid) });
       if (!request) continue;
       const currentLevel = request.currentlevel || 1;
+      await completeApprovalTasks({
+        colid: request.colid,
+        approveremail: text(req.body.approveremail || req.body.user),
+        category: "Exam appeal approval",
+        referenceModel: "conductexamappealrequestds",
+        referenceId: request._id,
+        level: currentLevel,
+        comments: `Exam appeal ${action.toLowerCase()} by ${text(req.body.approvername || req.body.user)}`
+      });
       request.approvalhistory.push({
         level: currentLevel,
         approvername: text(req.body.approvername),
@@ -283,6 +311,22 @@ exports.approveRequests = async (req, res) => {
         if (next) {
           request.currentlevel = next.level;
           request.approvalstatus = "Pending";
+          await createApprovalTasks({
+            colid: request.colid,
+            user: request.user,
+            createdby: request.student,
+            academicyear: request.academicyear,
+            approvername: next.approvername,
+            approveremail: next.approveremail,
+            approverrole: next.role,
+            title: `Approve exam appeal: ${request.regno} ${request.coursecode}`,
+            category: "Exam appeal approval",
+            pagelink: "/exam-appeal-approval",
+            comments: `${request.student || request.regno} appeal for ${request.course || request.coursecode} is pending approval.`,
+            referenceModel: "conductexamappealrequestds",
+            referenceId: request._id,
+            level: next.level
+          });
         } else {
           request.approvalstatus = "Approved";
         }

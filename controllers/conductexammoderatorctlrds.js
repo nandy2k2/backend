@@ -6,6 +6,7 @@ const QuestionPaper = require("../Models/conductexamquestionpaperds");
 const ModerationAudit = require("../Models/conductexammoderationauditds");
 const AiConfiguration = require("../Models/aiconfigurationds");
 const User = require("../Models/user");
+const { createApprovalTasks, completeApprovalTasks } = require("../utils/approvalTaskHelper");
 
 const text = (value) => String(value || "").trim();
 const number = (value) => {
@@ -300,11 +301,25 @@ exports.savePanelMembers = async (req, res) => {
         errors.push({ rowNumber: users[index].rowNumber || index + 1, message: error });
         continue;
       }
-      await ModeratorPanelMember.findOneAndUpdate(
+      const savedMember = await ModeratorPanelMember.findOneAndUpdate(
         { colid: item.colid, panelid: item.panelid, memberemail: item.memberemail },
         item,
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
+      await createApprovalTasks({
+        colid,
+        user: text(req.body.user),
+        createdby: text(req.body.name),
+        academicyear: item.academicyear,
+        approverrole: "All",
+        title: `Approve moderator panel member: ${item.membername || item.memberemail}`,
+        category: "Moderator panel approval",
+        pagelink: "/conduct-exam-moderator-panel-approval",
+        comments: `Moderator panel ${item.panelname} has a member pending approval.`,
+        referenceModel: "conductexammoderatorpanelmemberds",
+        referenceId: savedMember?._id,
+        level: "Panel"
+      });
       saved += 1;
     }
     res.json({ success: true, saved, errors });
@@ -342,6 +357,16 @@ exports.approvePanelMembers = async (req, res) => {
         }
       }
     );
+    for (const id of ids) {
+      await completeApprovalTasks({
+        colid,
+        category: "Moderator panel approval",
+        referenceModel: "conductexammoderatorpanelmemberds",
+        referenceId: id,
+        level: "Panel",
+        comments: `Moderator panel member marked ${approvalstatus} by ${text(req.body.name || req.body.user)}`
+      });
+    }
     res.json({ success: true, updated: result.modifiedCount || 0 });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

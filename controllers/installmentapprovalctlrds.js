@@ -2,6 +2,7 @@ const Ledgerstud = require("../Models/ledgerstud");
 const User = require("../Models/user");
 const InstallmentWorkflow = require("../Models/installmentapprovalworkflowds");
 const InstallmentRequest = require("../Models/installmentrequestds");
+const { createApprovalTasks, completeApprovalTasks } = require("../utils/approvalTaskHelper");
 
 const studentFields = ["academicyear", "program", "programcode", "semester", "section", "name", "email", "phone", "regno", "major", "minor"];
 
@@ -54,6 +55,38 @@ async function nextWorkflow(colid, approvaltype, programcode, afterLevel = 0) {
   if (approvaltype === "Program") query.programcode = { $in: [programcode, "All", ""] };
   const rows = await InstallmentWorkflow.find(query).sort({ level: 1 }).lean();
   return rows[0] || null;
+}
+
+async function addInstallmentApprovalTask(request, workflow) {
+  if (!workflow) return [];
+  return createApprovalTasks({
+    colid: request.colid,
+    user: request.createdby,
+    createdby: request.student || request.createdby,
+    academicyear: request.academicyear,
+    approvername: workflow.approvername,
+    approveremail: workflow.approveremail,
+    approverrole: workflow.approverrole,
+    title: `Approve fee installment for ${request.student || request.regno}`,
+    category: "Fee installment approval",
+    pagelink: "/installment-approval",
+    comments: `Installment request for ${request.regno} is pending ${workflow.approvaltype} level ${workflow.level}.`,
+    referenceModel: "installmentrequestds",
+    referenceId: request._id,
+    level: `${workflow.approvaltype}:${workflow.level}`
+  });
+}
+
+async function finishInstallmentApprovalTask(request, actor) {
+  return completeApprovalTasks({
+    colid: request.colid,
+    approveremail: text(actor.user || actor.approveremail),
+    category: "Fee installment approval",
+    referenceModel: "installmentrequestds",
+    referenceId: request._id,
+    level: `${request.stage}:${request.currentlevel}`,
+    comments: `Installment request acted by ${text(actor.name || actor.user)}`
+  });
 }
 
 async function adjustLedgerForRequest(request, actor) {
@@ -257,6 +290,7 @@ exports.createRequest = async (req, res) => {
       createdby: text(req.body.user),
       remarks: text(req.body.remarks)
     });
+    await addInstallmentApprovalTask(data, wf || instWf);
     res.json({ success: true, data, message: "Installment request submitted for approval" });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -309,6 +343,7 @@ exports.act = async (req, res) => {
     const action = text(req.body.action);
     const actor = text(req.body.user);
     request.approvalhistory.push({ action, user: actor, role: text(req.body.role), comments: text(req.body.comments), stage: request.stage, level: request.currentlevel, date: new Date() });
+    await finishInstallmentApprovalTask(request, req.body);
     if (action === "Reject") {
       request.status = "Rejected";
       await request.save();
@@ -319,6 +354,7 @@ exports.act = async (req, res) => {
       request.currentlevel = nextSame.level;
       request.status = `Pending ${request.stage} Level ${nextSame.level}`;
       await request.save();
+      await addInstallmentApprovalTask(request, nextSame);
       return res.json({ success: true, data: request });
     }
     if (request.stage === "Program") {
@@ -328,6 +364,7 @@ exports.act = async (req, res) => {
         request.currentlevel = nextInst.level;
         request.status = `Pending Institution Level ${nextInst.level}`;
         await request.save();
+        await addInstallmentApprovalTask(request, nextInst);
         return res.json({ success: true, data: request });
       }
     }
