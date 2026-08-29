@@ -78,7 +78,11 @@ const resolveJsFile = (basePath) => {
 const frontendRoot = () => path.join(__dirname, "../../ep3-main/src");
 const backendRoot = () => path.join(__dirname, "..");
 
+let appImportsCache = null;
+let backendRoutesCache = null;
+
 const parseAppImports = () => {
+  if (appImportsCache) return appImportsCache;
   const source = readTextFile(path.join(frontendRoot(), "App.js"));
   const imports = {};
   const addImport = (name, importPath) => {
@@ -96,7 +100,8 @@ const parseAppImports = () => {
     });
     return _;
   });
-  return { source, imports };
+  appImportsCache = { source, imports };
+  return appImportsCache;
 };
 
 const extractComponentSource = (source = "", component = "") => {
@@ -151,6 +156,7 @@ const routePatternToRegex = (routePath) => {
 };
 
 const parseBackendRoutes = () => {
+  if (backendRoutesCache) return backendRoutesCache;
   const source = readTextFile(path.join(backendRoot(), "app.js"));
   const controllerFiles = {};
   source.replace(/const\s+([A-Za-z0-9_$]+)\s*=\s*require\(["']\.\/controllers\/([^"']+)["']\)/g, (_, name, file) => {
@@ -162,7 +168,8 @@ const parseBackendRoutes = () => {
     routes.push({ routePath, controller, method, controllerFile: controllerFiles[controller] || "" });
     return _;
   });
-  return routes;
+  backendRoutesCache = routes;
+  return backendRoutesCache;
 };
 
 const matchBackendRoute = (endpoint, routes) => {
@@ -274,6 +281,11 @@ const loadStaticMenuPages = () => {
       let itemMatch;
       while ((itemMatch = itemRegex.exec(body)) !== null) {
         pages.push({ group, path: text(itemMatch[1]), page: text(itemMatch[2]) });
+      }
+      const mappedPairRegex = /\[\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']\s*\]/g;
+      let pairMatch;
+      while ((pairMatch = mappedPairRegex.exec(body)) !== null) {
+        pages.push({ group, path: text(pairMatch[1]), page: text(pairMatch[2]) });
       }
       if (!body.match(/<ListItem[\s\S]*?to="/) && group) {
         pages.push({ group, path: "", page: group });
@@ -572,7 +584,7 @@ exports.options = async (req, res) => {
       const key = `${text(group) || "Other"}|${cleanPage}|${cleanPath}`;
       pageMap.set(key, { group: text(group) || "Other", page: cleanPage || cleanPath, path: cleanPath });
     };
-    if (!roleMenuOnly) loadStaticMenuPages().forEach((row) => addPage(row.group, row.page, row.path));
+    if (!roleMenuOnly || isAllRole) loadStaticMenuPages().forEach((row) => addPage(row.group, row.page, row.path));
     menuRows.forEach((row) => addPage(row.groupname || row.menugroup, row.title, row.path));
     chatbotRows.forEach((row) => addPage(row.menugroup, row.pagename, row.pagelink));
     const pageOptions = Array.from(pageMap.values()).map((page) => ({
