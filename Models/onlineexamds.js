@@ -1,10 +1,23 @@
 const mongoose = require("mongoose");
 
 const OnlineExamAttachmentSchema = new mongoose.Schema({
+  title: String,
   label: String,
   url: String,
   filename: String,
   mimetype: String
+}, { _id: false });
+
+const OnlineExamContentBlockSchema = new mongoose.Schema({
+  blocktype: String,
+  text: String,
+  tabledata: [[String]],
+  url: String,
+  filename: String,
+  title: String,
+  dataurl: String,
+  color: String,
+  brushsize: Number
 }, { _id: false });
 
 const OnlineExamOptionSchema = new mongoose.Schema({
@@ -14,6 +27,10 @@ const OnlineExamOptionSchema = new mongoose.Schema({
 
 const OnlineExamQuestionSchema = new mongoose.Schema({
   questiontext: String,
+  questionhtml: String,
+  mathematicalexpression: String,
+  tabledata: [[String]],
+  drawingdataurl: String,
   questiontype: { type: String, default: "MCQ" },
   marks: { type: Number, default: 1 },
   modules: [{ type: String, trim: true }],
@@ -22,9 +39,12 @@ const OnlineExamQuestionSchema = new mongoose.Schema({
   bloomlevels: [{ type: String, trim: true }],
   options: [OnlineExamOptionSchema],
   imageurl: String,
+  imagefilename: String,
   fileurl: String,
+  filefilename: String,
   linkurl: String,
   attachments: [OnlineExamAttachmentSchema],
+  contentblocks: [OnlineExamContentBlockSchema],
   order: { type: Number, default: 0 }
 }, { _id: true });
 

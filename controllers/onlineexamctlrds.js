@@ -128,11 +128,34 @@ const currentAllowed = (exam) => {
   return now >= start && (!end || now <= end);
 };
 
+const contentBlocks = (blocks) => Array.isArray(blocks) ? blocks.map((block) => ({
+  blocktype: text(block.blocktype || block.type),
+  text: String(block.text || ""),
+  tabledata: Array.isArray(block.tabledata) ? block.tabledata.map((row) => Array.isArray(row) ? row.map((cell) => String(cell ?? "")) : []) : [],
+  url: text(block.url),
+  filename: text(block.filename),
+  title: text(block.title),
+  dataurl: String(block.dataurl || ""),
+  color: text(block.color),
+  brushsize: num(block.brushsize)
+})).filter((block) => block.blocktype) : [];
+
 const initialAnswers = (exam) => (exam.sections || []).flatMap((section) => (section.questions || []).map((q) => ({
   sectionid: String(section._id),
   sectionname: section.sectionname,
   questionid: String(q._id),
   questiontext: q.questiontext,
+  questionhtml: q.questionhtml,
+  mathematicalexpression: q.mathematicalexpression,
+  tabledata: Array.isArray(q.tabledata) ? q.tabledata : [],
+  drawingdataurl: q.drawingdataurl,
+  imageurl: q.imageurl,
+  imagefilename: q.imagefilename,
+  fileurl: q.fileurl,
+  filefilename: q.filefilename,
+  linkurl: q.linkurl,
+  attachments: Array.isArray(q.attachments) ? q.attachments : [],
+  contentblocks: contentBlocks(q.contentblocks),
   questiontype: q.questiontype || section.sectiontype,
   maxmarks: num(q.marks),
   marksobtained: 0,
@@ -327,6 +350,10 @@ exports.saveQuestion = async (req, res) => {
     if (!section) return res.status(404).json({ success: false, message: "Section not found" });
     const payload = {
       questiontext: text(req.body.questiontext),
+      questionhtml: String(req.body.questionhtml || ""),
+      mathematicalexpression: String(req.body.mathematicalexpression || ""),
+      tabledata: Array.isArray(req.body.tabledata) ? req.body.tabledata.map((row) => Array.isArray(row) ? row.map((cell) => String(cell ?? "")) : []) : [],
+      drawingdataurl: String(req.body.drawingdataurl || ""),
       questiontype: text(req.body.questiontype || section.sectiontype),
       marks: num(req.body.marks, 1),
       modules: arr(req.body.modules || req.body.module),
@@ -335,9 +362,12 @@ exports.saveQuestion = async (req, res) => {
       bloomlevels: arr(req.body.bloomlevels || req.body.blooms),
       options: Array.isArray(req.body.options) ? req.body.options.map((o) => ({ optiontext: text(o.optiontext), iscorrect: !!o.iscorrect })).filter((o) => o.optiontext) : [],
       imageurl: text(req.body.imageurl),
+      imagefilename: text(req.body.imagefilename),
       fileurl: text(req.body.fileurl),
+      filefilename: text(req.body.filefilename),
       linkurl: text(req.body.linkurl),
       attachments: Array.isArray(req.body.attachments) ? req.body.attachments : [],
+      contentblocks: contentBlocks(req.body.contentblocks),
       order: num(req.body.order)
     };
     if (req.body.questionid) {

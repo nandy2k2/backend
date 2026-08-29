@@ -6884,6 +6884,7 @@ app.get("/api/v2/miscellaneous-collection/student-options", miscellaneousAmountC
 app.post("/api/v2/miscellaneous-collection/students", miscellaneousAmountController.searchStudents);
 app.post("/api/v2/miscellaneous-collection/collect", miscellaneousAmountController.collect);
 app.post("/api/v2/miscellaneous-collection/collect-new-student", miscellaneousAmountController.collectNewStudent);
+app.post("/api/v2/miscellaneous-collection/report", miscellaneousAmountController.report);
 app.get("/api/v2/studentfeesreceipt", studentfeesreceiptctlr.getFeesReceiptRows);
 app.post("/api/v2/studentfeesreceipt/blockchain-store", studentfeesreceiptctlr.storeFeesReceiptOnBlockchain);
 app.get("/api/v2/public/studentfeesreceipt/blockchain-verify", studentfeesreceiptctlr.verifyFeesReceiptFromBlockchain);

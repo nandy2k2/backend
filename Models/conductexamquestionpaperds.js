@@ -6,8 +6,14 @@ const questionSchema = new mongoose.Schema({
   patterngroup: { type: String, trim: true },
   patternsubquestion: { type: String, trim: true },
   question: { type: String, trim: true },
+  questionhtml: { type: String },
   answer: { type: String, trim: true },
   includemathematicalexpressions: { type: String, trim: true, enum: ["Yes", "No"], default: "No" },
+  mathematicalexpression: { type: String },
+  tabledata: [[{ type: String }]],
+  imageurl: { type: String, trim: true },
+  imagefilename: { type: String, trim: true },
+  drawingdataurl: { type: String },
   questiontype: { type: String, trim: true, default: "Short Answer Type" },
   difficultylevel: { type: String, trim: true },
   language: { type: String, trim: true },
@@ -17,6 +23,23 @@ const questionSchema = new mongoose.Schema({
   co: { type: String, trim: true },
   attachmenturl: { type: String, trim: true },
   attachmentfilename: { type: String, trim: true },
+  contentblocks: [{
+    blocktype: { type: String, trim: true },
+    text: { type: String },
+    tabledata: [[{ type: String }]],
+    url: { type: String, trim: true },
+    filename: { type: String, trim: true },
+    title: { type: String, trim: true },
+    dataurl: { type: String },
+    color: { type: String, trim: true },
+    brushsize: { type: Number, default: 2 }
+  }],
+  attachments: [{
+    title: { type: String, trim: true },
+    url: { type: String, trim: true },
+    filename: { type: String, trim: true },
+    type: { type: String, trim: true }
+  }],
   aimappingcomments: { type: String, trim: true },
   questionprompt: { type: String, trim: true },
   translations: [{

@@ -1012,8 +1012,14 @@ exports.saveQuestionPaper = async (req, res) => {
           patterngroup: text(question.patterngroup),
           patternsubquestion: text(question.patternsubquestion),
           question: text(question.question),
+          questionhtml: text(question.questionhtml),
           answer: text(question.answer),
           includemathematicalexpressions: text(question.includemathematicalexpressions || question.includeMathematicalExpressions) === "Yes" ? "Yes" : "No",
+          mathematicalexpression: text(question.mathematicalexpression),
+          tabledata: Array.isArray(question.tabledata) ? question.tabledata.map((row) => Array.isArray(row) ? row.map((cell) => text(cell)) : []) : [],
+          imageurl: text(question.imageurl),
+          imagefilename: text(question.imagefilename),
+          drawingdataurl: text(question.drawingdataurl),
           questiontype: text(question.questiontype) || "Short Answer Type",
           difficultylevel: text(question.difficultylevel),
           language: text(question.language),
@@ -1023,6 +1029,23 @@ exports.saveQuestionPaper = async (req, res) => {
           co: text(question.co),
           attachmenturl: text(question.attachmenturl),
           attachmentfilename: text(question.attachmentfilename),
+          contentblocks: Array.isArray(question.contentblocks) ? question.contentblocks.map((block) => ({
+            blocktype: text(block.blocktype || block.type),
+            text: text(block.text || block.content),
+            tabledata: Array.isArray(block.tabledata) ? block.tabledata.map((row) => Array.isArray(row) ? row.map((cell) => text(cell)) : []) : [],
+            url: text(block.url),
+            filename: text(block.filename),
+            title: text(block.title),
+            dataurl: text(block.dataurl || block.drawingdataurl),
+            color: text(block.color),
+            brushsize: Number(block.brushsize || 2)
+          })).filter((block) => block.blocktype) : [],
+          attachments: Array.isArray(question.attachments) ? question.attachments.map((attachment) => ({
+            title: text(attachment.title),
+            url: text(attachment.url),
+            filename: text(attachment.filename),
+            type: text(attachment.type)
+          })).filter((attachment) => attachment.url) : [],
           aimappingcomments: text(question.aimappingcomments),
           questionprompt: text(question.questionprompt || question.prompt || question.additionalprompt),
           translations: Array.isArray(question.translations) ? question.translations.map((translation) => ({

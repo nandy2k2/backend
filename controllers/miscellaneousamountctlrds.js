@@ -14,6 +14,7 @@ const escapeRegex = (value) => clean(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&
 const regex = (value) => new RegExp(escapeRegex(value), "i");
 const studentFields = ["academicyear", "admissionyear", "regulation", "program", "programcode", "semester", "section", "Major", "Minor", "IDC", "name", "email", "phone", "regno"];
 const miscFields = ["academicyear", "feegroup", "feeitem", "feecategory", "feetype", "feebook", "cashbook", "status"];
+const reportFields = ["academicyear", "admissionyear", "regulation", "program", "programcode", "semester", "section", "student", "regno", "email", "phone", "feegroup", "feeitem", "feecategory", "feetype", "feebook", "cashbook", "paymode", "collectedbyname"];
 
 const txid = (colid) => {
   const now = new Date();
@@ -156,7 +157,9 @@ const collectPayment = async (body = {}) => {
   const ledgers = [];
   const txItems = [];
   for (const item of items) {
-    const amount = Math.max(0, number(item.paidamount ?? item.amount));
+    const noofitems = Math.max(1, number(item.noofitems, 1));
+    const unitamount = Math.max(0, number(item.unitamount ?? item.amount));
+    const amount = Math.max(0, number(item.paidamount ?? (unitamount * noofitems)));
     if (amount <= 0) continue;
     const ledger = await Ledgerstud.create({
       name: user.name,
@@ -221,6 +224,8 @@ const collectPayment = async (body = {}) => {
       feetype: ledger.feetype,
       feebook: ledger.feebook,
       cashbook: ledger.cashbook,
+      noofitems,
+      unitamount,
       amount,
       previouspaid: 0,
       previousbalance: amount,
@@ -343,5 +348,100 @@ exports.collectNewStudent = async (req, res) => {
     res.json({ success: true, student: user, studentCreatedOrUpdated: true, ...result });
   } catch (err) {
     res.status(err.statusCode || 500).json({ success: false, message: err.message });
+  }
+};
+
+exports.report = async (req, res) => {
+  try {
+    const colid = number(req.body.colid || req.query.colid);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const query = { colid, transactionid: /^MISC-/i };
+    const fromdate = clean(req.body.fromdate || req.query.fromdate);
+    const todate = clean(req.body.todate || req.query.todate);
+    if (fromdate || todate) {
+      query.paiddate = {};
+      if (fromdate) query.paiddate.$gte = new Date(`${fromdate}T00:00:00.000Z`);
+      if (todate) query.paiddate.$lte = new Date(`${todate}T23:59:59.999Z`);
+    }
+    const txRows = await CounterFee2Transaction.find(query).sort({ paiddate: -1, createdAt: -1 }).limit(5000).lean();
+    const rows = [];
+    txRows.forEach((tx) => {
+      (tx.items || []).forEach((item, index) => {
+        rows.push({
+          id: `${tx._id}-${index}`,
+          transactionid: tx.transactionid,
+          paiddate: tx.paiddate,
+          referenceNumber: tx.referenceNumber,
+          paymode: tx.paymode,
+          paydetails: tx.paydetails,
+          remarks: tx.remarks,
+          collectedby: tx.collectedby,
+          collectedbyname: tx.collectedbyname,
+          academicyear: item.academicyear || tx.academicyear,
+          admissionyear: item.admissionyear || tx.admissionyear,
+          regulation: item.regulation || tx.regulation,
+          program: item.program || tx.program,
+          programcode: item.programcode || tx.programcode,
+          semester: item.semester || tx.semester,
+          section: item.section || tx.section,
+          student: item.student || tx.student,
+          regno: item.regno || tx.regno,
+          email: item.email || tx.email,
+          phone: item.phone || tx.phone,
+          feegroup: item.feegroup,
+          feeitem: item.feeitem,
+          feecategory: item.feecategory,
+          feetype: item.feetype,
+          feebook: item.feebook,
+          cashbook: item.cashbook,
+          noofitems: number(item.noofitems, 1),
+          unitamount: number(item.unitamount || item.amount),
+          paidamount: number(item.paidamount || item.amount),
+          amount: number(item.amount || item.paidamount)
+        });
+      });
+    });
+    const filters = Array.isArray(req.body.filters) ? req.body.filters : [];
+    const filteredRows = rows.filter((row) => filters.every((filter) => {
+      const field = clean(filter.field);
+      const values = Array.isArray(filter.values) ? filter.values.map(clean).filter(Boolean) : [clean(filter.value)].filter(Boolean);
+      if (!field || !values.length) return true;
+      const current = clean(row[field]);
+      return values.some((value) => current.toLowerCase().includes(value.toLowerCase()));
+    }));
+    const totalpaid = filteredRows.reduce((sum, row) => sum + number(row.paidamount), 0);
+    const totalitems = filteredRows.reduce((sum, row) => sum + number(row.noofitems), 0);
+    const options = {};
+    reportFields.forEach((field) => {
+      options[field] = [...new Set(rows.map((row) => clean(row[field])).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    });
+    const groupSum = (field) => {
+      const map = new Map();
+      filteredRows.forEach((row) => {
+        const key = clean(row[field]) || "Unspecified";
+        const current = map.get(key) || { label: key, count: 0, paidamount: 0 };
+        current.count += 1;
+        current.paidamount += number(row.paidamount);
+        map.set(key, current);
+      });
+      return Array.from(map.values()).sort((a, b) => b.paidamount - a.paidamount);
+    };
+    const institution = await Institution.findOne({ colid }).lean();
+    res.json({
+      success: true,
+      fields: reportFields,
+      options,
+      rows: filteredRows,
+      totals: { count: filteredRows.length, totalpaid, totalitems },
+      summaries: {
+        byFeeItem: groupSum("feeitem"),
+        byProgram: groupSum("programcode"),
+        byPayMode: groupSum("paymode"),
+        byCollector: groupSum("collectedbyname")
+      },
+      institution: institution || null
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
   }
 };

@@ -1,10 +1,23 @@
 const mongoose = require("mongoose");
 
 const OnlineExamResponseAttachmentSchema = new mongoose.Schema({
+  title: String,
   label: String,
   url: String,
   filename: String,
   mimetype: String
+}, { _id: false });
+
+const OnlineExamAnswerContentBlockSchema = new mongoose.Schema({
+  blocktype: String,
+  text: String,
+  tabledata: [[String]],
+  url: String,
+  filename: String,
+  title: String,
+  dataurl: String,
+  color: String,
+  brushsize: Number
 }, { _id: false });
 
 const OnlineExamAnswerSchema = new mongoose.Schema({
@@ -12,6 +25,16 @@ const OnlineExamAnswerSchema = new mongoose.Schema({
   sectionname: String,
   questionid: String,
   questiontext: String,
+  questionhtml: String,
+  mathematicalexpression: String,
+  tabledata: [[String]],
+  drawingdataurl: String,
+  imageurl: String,
+  imagefilename: String,
+  fileurl: String,
+  filefilename: String,
+  linkurl: String,
+  contentblocks: [OnlineExamAnswerContentBlockSchema],
   questiontype: String,
   selectedoptionid: String,
   selectedoptiontext: String,

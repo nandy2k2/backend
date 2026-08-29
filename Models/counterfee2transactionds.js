@@ -22,6 +22,8 @@ const CounterFee2ItemSchema = new mongoose.Schema({
   feetype: String,
   feebook: String,
   cashbook: String,
+  noofitems: { type: Number, default: 1 },
+  unitamount: Number,
   amount: Number,
   previouspaid: Number,
   previousbalance: Number,
