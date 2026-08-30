@@ -943,6 +943,7 @@ app.post('/api/v2/mca-marksheet/rows-bulk', mcaMarksheetController.bulk);
 app.post('/api/v2/mca-marksheet/rows-delete', mcaMarksheetController.deleteMany);
 app.post('/api/v2/mca-marksheet/process-grades', mcaMarksheetController.processGrades);
 app.get('/api/v2/mca-marksheet/print', mcaMarksheetController.marksheet);
+app.post('/api/v2/mca-marksheet/blockchain-store', mcaMarksheetController.storeMarksheetBlockchain);
 app.get('/api/v2/casnew/options', casNewController.options);
 app.get('/api/v2/casnew/workloads', casNewController.getWorkloads);
 app.get('/api/v2/casnew/entries', casNewController.getEntries);

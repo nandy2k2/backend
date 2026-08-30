@@ -36,6 +36,9 @@ const mcaMarksheetSchema = new mongoose.Schema({
   overallgrade: { type: String, trim: true, default: "" },
   gradepoint: { type: Number, default: 0 },
   overallgradepoints: { type: Number, default: 0 },
+  statementno: { type: String, trim: true, default: "" },
+  blockchainhash: { type: String, trim: true, default: "" },
+  blockchainrecordid: { type: String, trim: true, default: "" },
   status: { type: String, trim: true, default: "Active" },
   name: { type: String, trim: true, default: "" },
   user: { type: String, trim: true, default: "" }
