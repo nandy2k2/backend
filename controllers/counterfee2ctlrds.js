@@ -287,6 +287,7 @@ exports.getReceipt = async (req, res) => {
   try {
     const colid = toNumber(req.query.colid);
     const transactionid = text(req.query.transactionid);
+    const feegroup = text(req.query.feegroup);
     if (colid === undefined || !transactionid) return res.status(400).json({ success: false, message: "colid and transaction id are required" });
     const [transaction, institution, note] = await Promise.all([
       CounterFee2Transaction.findOne({ colid, transactionid }).lean(),
@@ -294,6 +295,13 @@ exports.getReceipt = async (req, res) => {
       FeesReceiptNote.findOne({ colid, isactive: "Yes", note: { $ne: "" } }).sort({ updatedAt: -1 }).lean()
     ]);
     if (!transaction) return res.status(404).json({ success: false, message: "Transaction not found" });
+    if (feegroup) {
+      const items = (transaction.items || []).filter((item) => text(item.feegroup).toLowerCase() === feegroup.toLowerCase());
+      if (!items.length) return res.status(404).json({ success: false, message: "No receipt items found for selected fee group" });
+      transaction.items = items;
+      transaction.feegroup = feegroup;
+      transaction.totalpaid = items.reduce((sum, item) => sum + toNumber(item.paidamount, 0), 0);
+    }
     res.json({ success: true, data: transaction, institution: institution || null, note: note || null });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

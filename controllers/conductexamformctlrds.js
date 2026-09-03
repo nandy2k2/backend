@@ -2,6 +2,7 @@ const path = require("path");
 const multer = require("multer");
 const AWS = require("aws-sdk");
 const ConductExamFee = require("../Models/conductexamfeeds");
+const ConductExamFeeMax = require("../Models/conductexamexamfeemaxds");
 const ConductExamForm = require("../Models/conductexamformds");
 const ConductExamFormSubmission = require("../Models/conductexamformsubmissionds");
 const ConductExam = require("../Models/conductexamds");
@@ -77,6 +78,19 @@ const feePayload = (body) => ({
   regularfee: num(body.regularfee),
   supplementaryfee: num(body.supplementaryfee),
   appealfee: num(body.appealfee),
+  status: clean(body.status) || "Active",
+  user: clean(body.user)
+});
+
+const feeMaxPayload = (body) => ({
+  colid: num(body.colid),
+  academicyear: clean(body.academicyear),
+  regulation: clean(body.regulation),
+  program: clean(body.program),
+  programcode: clean(body.programcode),
+  exam: clean(body.exam),
+  examcode: clean(body.examcode),
+  maxfees: num(body.maxfees),
   status: clean(body.status) || "Active",
   user: clean(body.user)
 });
@@ -157,6 +171,111 @@ exports.bulkFees = async (req, res) => {
     res.json({ message: `${saved} exam fee rows uploaded`, saved });
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to upload exam fees" });
+  }
+};
+
+exports.getFeeMaxOptions = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    if (!colid) return res.status(400).json({ message: "colid is required" });
+    const [courseRows, maxRows] = await Promise.all([
+      ConductExamCourse.find({ colid })
+        .select("academicyear regulation exam examcode program programcode")
+        .sort({ academicyear: 1, examcode: 1, program: 1 })
+        .lean(),
+      ConductExamFeeMax.find({ colid })
+        .select("academicyear regulation exam examcode program programcode status")
+        .sort({ academicyear: 1, examcode: 1, program: 1 })
+        .lean()
+    ]);
+    const rows = [...courseRows, ...maxRows];
+    const exams = [];
+    const examSeen = new Set();
+    rows.forEach((row) => {
+      const key = `${clean(row.academicyear)}||${clean(row.examcode)}||${clean(row.exam)}`;
+      if (!clean(row.examcode) || examSeen.has(key)) return;
+      examSeen.add(key);
+      exams.push({ academicyear: clean(row.academicyear), exam: clean(row.exam), examcode: clean(row.examcode) });
+    });
+    const programs = [];
+    const programSeen = new Set();
+    rows.forEach((row) => {
+      const key = `${clean(row.programcode)}||${clean(row.program)}`;
+      if (!clean(row.programcode) || programSeen.has(key)) return;
+      programSeen.add(key);
+      programs.push({ program: clean(row.program), programcode: clean(row.programcode) });
+    });
+    res.json({
+      data: {
+        academicyears: distinctFromRows(rows, "academicyear"),
+        regulations: distinctFromRows(rows, "regulation"),
+        exams,
+        programs,
+        statuses: ["Active", "Inactive"]
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message || "Unable to load exam fee max options" });
+  }
+};
+
+exports.getFeeMax = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    const filter = { colid, ...queryFrom(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "status"]) };
+    const data = await ConductExamFeeMax.find(filter).sort({ academicyear: 1, examcode: 1, program: 1 }).lean();
+    res.json({ data });
+  } catch (err) {
+    res.status(500).json({ message: err.message || "Unable to load exam fee max rows" });
+  }
+};
+
+exports.saveFeeMax = async (req, res) => {
+  try {
+    const payload = feeMaxPayload(req.body);
+    const required = ["colid", "academicyear", "regulation", "program", "programcode", "exam", "examcode"];
+    const missing = required.filter((field) => !payload[field]);
+    if (missing.length) return res.status(400).json({ message: `Missing required fields: ${missing.join(", ")}` });
+    const data = clean(req.body.id)
+      ? await ConductExamFeeMax.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true, runValidators: true })
+      : await ConductExamFeeMax.findOneAndUpdate(
+        { colid: payload.colid, academicyear: payload.academicyear, regulation: payload.regulation, programcode: payload.programcode, examcode: payload.examcode },
+        payload,
+        { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+      );
+    res.json({ data });
+  } catch (err) {
+    res.status(500).json({ message: err.message || "Unable to save exam fee max" });
+  }
+};
+
+exports.deleteFeeMax = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [req.body.id].filter(Boolean);
+    await ConductExamFeeMax.deleteMany({ _id: { $in: ids }, colid: num(req.body.colid) });
+    res.json({ message: "Exam fee max row(s) deleted" });
+  } catch (err) {
+    res.status(500).json({ message: err.message || "Unable to delete exam fee max rows" });
+  }
+};
+
+exports.bulkFeeMax = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    let saved = 0;
+    for (const row of rows) {
+      const payload = feeMaxPayload({ ...row, colid: req.body.colid, user: req.body.user || row.user });
+      if (!payload.academicyear || !payload.regulation || !payload.programcode || !payload.examcode) continue;
+      await ConductExamFeeMax.findOneAndUpdate(
+        { colid: payload.colid, academicyear: payload.academicyear, regulation: payload.regulation, programcode: payload.programcode, examcode: payload.examcode },
+        payload,
+        { upsert: true, runValidators: true, setDefaultsOnInsert: true }
+      );
+      saved += 1;
+    }
+    res.json({ message: `${saved} exam fee max rows uploaded`, saved });
+  } catch (err) {
+    res.status(500).json({ message: err.message || "Unable to upload exam fee max rows" });
   }
 };
 
@@ -244,6 +363,26 @@ const feeMapFor = async ({ colid, academicyear, examcode, programcode, semester 
     map[clean(row.coursecode).toLowerCase()] = row;
   });
   return map;
+};
+
+const examFeeMaxFor = async ({ colid, academicyear, regulation, programcode, examcode }) => {
+  if (!colid || !academicyear || !programcode || !examcode) return null;
+  const row = await ConductExamFeeMax.findOne({
+    colid,
+    academicyear,
+    programcode,
+    examcode,
+    ...(clean(regulation) ? { regulation: clean(regulation) } : {}),
+    status: { $ne: "Inactive" }
+  }).sort({ updatedAt: -1 }).lean();
+  if (!row || num(row.maxfees) <= 0) return null;
+  return row;
+};
+
+const capExamFee = (amount, maxRow) => {
+  const raw = num(amount);
+  const maxfees = num(maxRow?.maxfees);
+  return maxfees > 0 && raw > maxfees ? maxfees : raw;
 };
 
 const examLedgerFilter = ({ colid, academicyear, regno, regnos, programcode, semester }) => {
@@ -343,8 +482,9 @@ exports.studentContext = async (req, res) => {
       .map((row) => enrich(row, "supplementaryfee", "Supplementary"))
       .filter((row, index, arr) => row.coursecode && arr.findIndex((item) => item.coursecode === row.coursecode) === index)
       .sort((a, b) => sortText(a.coursecode, b.coursecode));
+    const maxFee = await examFeeMaxFor({ colid, academicyear, regulation, programcode: student.programcode, examcode });
     const examFeeLedger = await examFeeLedgerForStudent({ colid, academicyear, regno, programcode: student.programcode, semester });
-    res.json({ data: { student, exam, forms, regularCourses, supplementaryCourses, examFeeLedger } });
+    res.json({ data: { student, exam, forms, regularCourses, supplementaryCourses, examFeeLedger, maxFee } });
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to load student exam form context" });
   }
@@ -513,18 +653,21 @@ exports.submitStudentExamForm = async (req, res) => {
     if (clean(form.validationcriteria)) {
       deficiencies.push(`Additional validation criteria configured for review: ${form.validationcriteria}`);
     }
-    const totalfee = selectedCourses.reduce((sum, row) => sum + num(row.fee), 0);
     const examMaster = await ConductExam.findOne({ colid, academicyear: clean(req.body.academicyear) || form.academicyear, examcode: clean(req.body.examcode) }).lean();
     const exam = clean(req.body.exam) || clean(examMaster?.examname) || clean(examMaster?.exam) || clean(req.body.examcode);
     const examcode = clean(req.body.examcode);
     const academicyear = clean(req.body.academicyear) || form.academicyear;
     const semester = clean(req.body.semester) || clean(student.semester);
+    const regulation = clean(req.body.regulation) || clean(student.regulation);
+    const rawtotalfee = selectedCourses.reduce((sum, row) => sum + num(row.fee), 0);
+    const maxFee = await examFeeMaxFor({ colid, academicyear, regulation, programcode: student.programcode, examcode });
+    const totalfee = capExamFee(rawtotalfee, maxFee);
     const submission = await ConductExamFormSubmission.create({
       colid,
       formid,
       formname: form.formname,
       academicyear,
-      regulation: clean(req.body.regulation) || clean(student.regulation),
+      regulation,
       exam,
       examcode,
       examtype,
@@ -564,7 +707,7 @@ exports.submitStudentExamForm = async (req, res) => {
           feecategory: "Exam Fee",
           feetype: examtype,
           academicyear,
-          regulation: clean(req.body.regulation) || clean(student.regulation),
+          regulation,
           program: clean(student.program),
           programcode: clean(student.programcode),
           semester,
@@ -622,7 +765,7 @@ exports.submitStudentExamForm = async (req, res) => {
       }
       examRollCreated += 1;
     }
-    res.json({ data: submission, ledgerCreated, examRollCreated, deficiencies, examFeeLedger });
+    res.json({ data: submission, ledgerCreated, examRollCreated, deficiencies, examFeeLedger, rawtotalfee, maxFee, totalfee });
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to submit exam form" });
   }
