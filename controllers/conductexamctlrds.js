@@ -648,6 +648,158 @@ exports.bulkExamCourses = async (req, res) => {
   }
 };
 
+const studentCountReportFilter = (source = {}) => {
+  const colid = number(source.colid);
+  const filter = {};
+  if (colid !== undefined) filter.colid = colid;
+  ["academicyear", "regulation", "exam", "examcode"].forEach((field) => {
+    if (text(source[field])) filter[field] = text(source[field]);
+  });
+  return { colid, filter };
+};
+
+exports.getStudentCountReportOptions = async (req, res) => {
+  try {
+    const { colid, filter } = studentCountReportFilter(req.query);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const [academicyears, regulations, exams, examcodes] = await Promise.all([
+      ConductExamCourse.distinct("academicyear", filter),
+      ConductExamCourse.distinct("regulation", filter),
+      ConductExamCourse.distinct("exam", filter),
+      ConductExamCourse.distinct("examcode", filter)
+    ]);
+    res.json({
+      success: true,
+      options: {
+        academicyears: uniq(academicyears),
+        regulations: uniq(regulations),
+        exams: uniq(exams),
+        examcodes: uniq(examcodes)
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getStudentCountReport = async (req, res) => {
+  try {
+    const { colid, filter } = studentCountReportFilter(req.query);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!filter.academicyear || !filter.regulation || !filter.exam || !filter.examcode) {
+      return res.status(400).json({ success: false, message: "Academic year, regulation, exam and exam code are required" });
+    }
+
+    const courses = await ConductExamCourse.find(filter)
+      .sort({ program: 1, programcode: 1, semester: 1, course: 1 })
+      .lean();
+
+    const groupMap = new Map();
+    courses.forEach((course) => {
+      const key = `${text(course.programcode)}||${text(course.semester)}`;
+      if (!groupMap.has(key)) {
+        groupMap.set(key, {
+          program: text(course.program),
+          programcode: text(course.programcode),
+          semester: text(course.semester),
+          courses: []
+        });
+      }
+      groupMap.get(key).courses.push(course);
+    });
+    const groups = [...groupMap.values()].filter((row) => row.programcode && row.semester);
+
+    const countRows = groups.length
+      ? await User.aggregate([
+        {
+          $match: {
+            colid,
+            role: /^Student$/i,
+            academicyear: filter.academicyear,
+            regulation: filter.regulation,
+            programcode: { $in: uniq(groups.map((row) => row.programcode)) },
+            semester: { $in: uniq(groups.map((row) => row.semester)) },
+            $or: [
+              { excluded: { $exists: false } },
+              { excluded: null },
+              { excluded: "" },
+              { excluded: /^No$/i }
+            ]
+          }
+        },
+        {
+          $group: {
+            _id: { programcode: "$programcode", semester: "$semester" },
+            studentcount: { $sum: 1 },
+            programs: { $addToSet: "$program" }
+          }
+        }
+      ])
+      : [];
+
+    const countMap = new Map(countRows.map((row) => [`${text(row._id.programcode)}||${text(row._id.semester)}`, row]));
+    const details = groups.map((group, index) => {
+      const count = countMap.get(`${group.programcode}||${group.semester}`);
+      const theoryCourses = group.courses.filter((course) => /^theory$/i.test(text(course.coursetype))).length;
+      const practicalCourses = group.courses.filter((course) => /^practical$/i.test(text(course.coursetype))).length;
+      const otherCourses = Math.max(group.courses.length - theoryCourses - practicalCourses, 0);
+      return {
+        id: index + 1,
+        program: group.program || text(count?.programs?.[0]),
+        programcode: group.programcode,
+        semester: group.semester,
+        coursecount: group.courses.length,
+        theorycourses: theoryCourses,
+        practicalcourses: practicalCourses,
+        othercourses: otherCourses,
+        studentcount: count?.studentcount || 0,
+        coursecodes: uniq(group.courses.map((course) => course.coursecode)).join(", "),
+        courses: uniq(group.courses.map((course) => course.course)).join(", ")
+      };
+    });
+
+    const programwise = Object.values(details.reduce((acc, row) => {
+      const key = row.programcode || row.program || "Blank";
+      if (!acc[key]) acc[key] = { label: row.program || key, programcode: row.programcode, studentcount: 0, coursecount: 0 };
+      acc[key].studentcount += row.studentcount;
+      acc[key].coursecount += row.coursecount;
+      return acc;
+    }, {}));
+    const semesterwise = Object.values(details.reduce((acc, row) => {
+      const key = row.semester || "Blank";
+      if (!acc[key]) acc[key] = { label: key, studentcount: 0, coursecount: 0 };
+      acc[key].studentcount += row.studentcount;
+      acc[key].coursecount += row.coursecount;
+      return acc;
+    }, {})).sort((a, b) => text(a.label).localeCompare(text(b.label), undefined, { numeric: true }));
+    const institution = await InsDetails.findOne({ colid }).sort({ _id: -1 }).lean();
+
+    res.json({
+      success: true,
+      filters: filter,
+      summary: {
+        programs: uniq(details.map((row) => row.programcode)).length,
+        programSemesters: details.length,
+        courses: courses.length,
+        students: details.reduce((sum, row) => sum + row.studentcount, 0)
+      },
+      charts: {
+        programwise,
+        semesterwise,
+        coursetype: [
+          { label: "Theory", value: details.reduce((sum, row) => sum + row.theorycourses, 0) },
+          { label: "Practical", value: details.reduce((sum, row) => sum + row.practicalcourses, 0) },
+          { label: "Other", value: details.reduce((sum, row) => sum + row.othercourses, 0) }
+        ]
+      },
+      details,
+      institution
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 const atktFilterFromSource = (source = {}) => {
   const colid = number(source.colid);
   const programcodes = Array.isArray(source.programcodes)

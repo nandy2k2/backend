@@ -408,7 +408,7 @@ exports.getProgramLevels = async (req, res) => {
     if (req.query.type) filter.type = req.query.type;
 
     const levels = await MPrograms.distinct('level', filter);
-    res.json(levels.filter(Boolean).sort());
+    res.json([...new Set([...levels.filter(Boolean), 'School'])].sort());
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
