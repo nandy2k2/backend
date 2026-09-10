@@ -195,7 +195,8 @@ exports.settleSuccessfulStudentOnlinePayment = async (payment, gatewayParams = {
   });
   if (!onlinePayment || isSettledOnlineStatus(onlinePayment.paymentstatus)) return onlinePayment;
 
-  const paiddate = new Date();
+  const gatewayPaidDate = payment?.paiddate ? new Date(payment.paiddate) : null;
+  const paiddate = gatewayPaidDate && !Number.isNaN(gatewayPaidDate.getTime()) ? gatewayPaidDate : new Date();
   const updatedItems = [];
   for (const item of onlinePayment.ledgeritems || []) {
     const ledger = await Ledgerstud.findOne({ _id: item.ledgerid, colid: onlinePayment.colid, regno: onlinePayment.regno });

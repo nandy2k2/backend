@@ -1,12 +1,17 @@
 const ConductExam = require("../Models/conductexamds");
+const ConductExamCoordinator = require("../Models/conductexamcoordinatords");
 const ConductExamCourse = require("../Models/conductexamcourseds");
 const ConductExamRoll = require("../Models/conductexamrollds");
 const ConductExamRoom = require("../Models/conductexamroomds");
 const ConductExamInvigilatorAllocation = require("../Models/conductexaminvigilatorallocationds");
 const ExamVivaMarks = require("../Models/examinationmodel2vivamarksds");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
+const Syllabus = require("../Models/syllabusds");
+const CourseOutcome = require("../Models/courseoutcomeds");
+const AssessmentComponent = require("../Models/assessmentcomponentds");
 const RoomResource = require("../Models/roomresourceds");
 const User = require("../Models/user");
+const MPrograms = require("../Models/mprograms");
 const AcademicCalendar = require("../Models/macadcal");
 const HrLeaveHolidayList = require("../Models/hrleaveholidaylistds");
 const AiConfiguration = require("../Models/aiconfigurationds");
@@ -210,6 +215,7 @@ const scheduleExamCourseRows = async ({ colid, filter, fromdate, todate, slot1, 
 const examPayload = (body = {}) => ({
   colid: number(body.colid),
   academicyear: text(body.academicyear),
+  regulation: text(body.regulation),
   examname: text(body.examname || body.exam),
   examcode: text(body.examcode),
   program: text(body.program),
@@ -344,6 +350,30 @@ const buildFilter = (source = {}, fields = []) => {
   return filter;
 };
 
+const coordinatorPayload = (source = {}) => ({
+  colid: number(source.colid),
+  academicyear: text(source.academicyear),
+  regulation: text(source.regulation),
+  program: text(source.program),
+  programcode: text(source.programcode),
+  facultyname: text(source.facultyname),
+  facultyemail: text(source.facultyemail || source.email),
+  status: text(source.status) || "Active",
+  name: text(source.name),
+  user: text(source.user)
+});
+
+const validateCoordinator = (payload) => {
+  if (payload.colid === undefined) return "colid is required";
+  if (!payload.academicyear) return "Academic year is required";
+  if (!payload.regulation) return "Regulation is required";
+  if (!payload.program) return "Program is required";
+  if (!payload.programcode) return "Program code is required";
+  if (!payload.facultyname) return "Coordinator name is required";
+  if (!payload.facultyemail) return "Coordinator email is required";
+  return "";
+};
+
 const rollListFilterFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "student", "regno", "email", "phone", "section", "examsection", "applied", "admitcardeligible", "attended", "attendance", "fees", "disciplinary", "atkt", "examdate", "examslot", "campus", "building", "examroom", "seatno", "examseatno"];
 const defaultRollListComponents = ["Section-A", "Section-B", "Pr"];
 
@@ -455,6 +485,93 @@ exports.deleteExam = async (req, res) => {
   try {
     await ConductExam.findOneAndDelete({ _id: req.body.id, colid: number(req.body.colid) });
     res.json({ success: true, message: "Deleted" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getExamCoordinatorOptions = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const [users, programs, coordinators] = await Promise.all([
+      User.find({ colid, role: { $not: /^Student$/i } }).select("name email role department designation institution").sort({ name: 1 }).lean(),
+      MPrograms.find({ colid, excluded: { $ne: "Yes" } }).sort({ year: -1, program: 1 }).lean(),
+      ConductExamCoordinator.find({ colid }).sort({ academicyear: -1, regulation: 1, program: 1, facultyname: 1 }).lean()
+    ]);
+    res.json({ success: true, users, programs, coordinators });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getExamCoordinators = async (req, res) => {
+  try {
+    const filter = buildFilter(req.query, ["academicyear", "regulation", "program", "programcode", "facultyname", "facultyemail", "status"]);
+    if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const data = await ConductExamCoordinator.find(filter).sort({ academicyear: -1, regulation: 1, program: 1, facultyname: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.saveExamCoordinator = async (req, res) => {
+  try {
+    const programs = Array.isArray(req.body.programs) && req.body.programs.length
+      ? req.body.programs
+      : [{ program: req.body.program, programcode: req.body.programcode }];
+    const saved = [];
+    for (const program of programs) {
+      const payload = coordinatorPayload({ ...req.body, ...program });
+      const error = validateCoordinator(payload);
+      if (error) return res.status(400).json({ success: false, message: error });
+      const data = req.body.id && programs.length === 1
+        ? await ConductExamCoordinator.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true, runValidators: true })
+        : await ConductExamCoordinator.findOneAndUpdate(
+          { colid: payload.colid, academicyear: payload.academicyear, regulation: payload.regulation, programcode: payload.programcode, facultyemail: payload.facultyemail },
+          payload,
+          { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+        );
+      saved.push(data);
+    }
+    res.json({ success: true, data: saved, saved: saved.length });
+  } catch (err) {
+    if (err.code === 11000) return res.status(400).json({ success: false, message: "Coordinator already exists for this program" });
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.deleteExamCoordinator = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) && req.body.ids.length ? req.body.ids : [req.body.id].filter(Boolean);
+    await ConductExamCoordinator.deleteMany({ _id: { $in: ids }, colid: number(req.body.colid) });
+    res.json({ success: true, message: "Deleted" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.bulkExamCoordinators = async (req, res) => {
+  try {
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    const errors = [];
+    let saved = 0;
+    for (let index = 0; index < items.length; index += 1) {
+      const payload = coordinatorPayload({ ...items[index], colid: req.body.colid || items[index].colid, name: req.body.name || items[index].name, user: req.body.user || items[index].user });
+      const error = validateCoordinator(payload);
+      if (error) {
+        errors.push({ rowNumber: items[index].rowNumber || index + 2, message: error });
+        continue;
+      }
+      await ConductExamCoordinator.findOneAndUpdate(
+        { colid: payload.colid, academicyear: payload.academicyear, regulation: payload.regulation, programcode: payload.programcode, facultyemail: payload.facultyemail },
+        payload,
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      saved += 1;
+    }
+    res.json({ success: true, saved, errors });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -609,6 +726,228 @@ exports.saveExamCourses = async (req, res) => {
       saved.push(data);
     }
     res.json({ success: true, data: saved });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.populateExamCoursesFromCourseMap = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const dryrun = Boolean(req.body.dryrun || req.body.dryRun || req.body.checkonly || req.body.checkOnly);
+    const academicyear = text(req.body.academicyear);
+    const regulation = text(req.body.regulation);
+    const exam = text(req.body.exam || req.body.examname);
+    const examcode = text(req.body.examcode);
+    const program = text(req.body.program);
+    const programcode = text(req.body.programcode);
+    const user = text(req.body.user);
+    const semesters = Array.isArray(req.body.semesters)
+      ? req.body.semesters.map(text).filter(Boolean)
+      : text(req.body.semester).split(",").map(text).filter(Boolean);
+    if (!academicyear || !regulation || !program || !programcode || (!dryrun && (!exam || !examcode))) {
+      return res.status(400).json({ success: false, message: dryrun ? "Academic year, regulation, program and program code are required" : "Academic year, regulation, exam, exam code, program and program code are required" });
+    }
+
+    const courseQuery = {
+      colid,
+      academicyear,
+      regulation,
+      programcode,
+      status: { $not: /^inactive$/i }
+    };
+    if (program) courseQuery.program = program;
+    if (semesters.length && !semesters.includes("All")) courseQuery.semester = { $in: semesters };
+
+    const courseRows = await RegulationCourseMap.find(courseQuery).sort({ semester: 1, type: 1, subject: 1, course: 1 }).lean();
+    if (!courseRows.length) {
+      return res.status(404).json({ success: false, message: "No courses found in regulation course map for the selected filters" });
+    }
+
+    const savedCourses = [];
+    if (!dryrun) {
+      for (const course of courseRows) {
+        const payload = examCoursePayload({
+          colid,
+          academicyear,
+          regulation,
+          exam,
+          examcode,
+          program: course.program || program,
+          programcode,
+          type: course.type,
+          subject: course.subject,
+          semester: course.semester,
+          course: course.course,
+          coursecode: course.coursecode,
+          coursetype: course.coursetype,
+          deliverytype: course.deliverytype,
+          coursemastercode: course.coursemastercode,
+          user
+        });
+        const error = validateExamCourse(payload);
+        if (error) continue;
+        const saved = await ConductExamCourse.findOneAndUpdate(
+          { colid, academicyear, regulation, examcode, programcode, type: payload.type, subject: payload.subject, semester: payload.semester, coursecode: payload.coursecode },
+          payload,
+          { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+        ).lean();
+        savedCourses.push(saved);
+      }
+    }
+
+    const readiness = await Promise.all(courseRows.map(async (course) => {
+      const base = {
+        colid,
+        academicyear,
+        regulation,
+        programcode,
+        type: course.type,
+        subject: course.subject,
+        semester: course.semester,
+        coursecode: course.coursecode
+      };
+      const [syllabusRows, coCount, assessmentCount] = await Promise.all([
+        Syllabus.find(base).select("sourcefilelink sourcefilename module syllabus").lean(),
+        CourseOutcome.countDocuments({ ...base, status: { $not: /^inactive$/i } }),
+        AssessmentComponent.countDocuments({ ...base, status: { $not: /^inactive$/i } })
+      ]);
+      const syllabusFile = syllabusRows.find((row) => text(row.sourcefilelink));
+      const hasSyllabus = syllabusRows.length > 0;
+      const hasSyllabusFile = Boolean(syllabusFile);
+      const hasCo = coCount > 0;
+      const hasAssessmentComponent = assessmentCount > 0;
+      const deficiencies = [
+        !hasSyllabus ? "Syllabus pending" : "",
+        hasSyllabus && !hasSyllabusFile ? "Syllabus file pending" : "",
+        !hasCo ? "CO pending" : "",
+        !hasAssessmentComponent ? "Assessment component pending" : ""
+      ].filter(Boolean);
+      return {
+        program: course.program || program,
+        programcode,
+        type: course.type,
+        subject: course.subject,
+        semester: course.semester,
+        course: course.course,
+        coursecode: course.coursecode,
+        coursetype: course.coursetype,
+        syllabusstatus: hasSyllabusFile ? "Uploaded" : hasSyllabus ? "Entered only" : "Pending",
+        syllabuslink: syllabusFile?.sourcefilelink || "",
+        syllabuscount: syllabusRows.length,
+        costatus: hasCo ? "Uploaded" : "Pending",
+        cocount: coCount,
+        assessmentstatus: hasAssessmentComponent ? "Added" : "Pending",
+        assessmentcount: assessmentCount,
+        deficiencies,
+        ready: deficiencies.length === 0
+      };
+    }));
+
+    const summary = {
+      totalCourses: readiness.length,
+      coursesPopulated: dryrun ? 0 : savedCourses.length,
+      syllabusUploaded: readiness.filter((row) => row.syllabusstatus === "Uploaded").length,
+      syllabusPending: readiness.filter((row) => row.syllabusstatus === "Pending").length,
+      syllabusFilePending: readiness.filter((row) => row.syllabusstatus === "Entered only").length,
+      coUploaded: readiness.filter((row) => row.costatus === "Uploaded").length,
+      coPending: readiness.filter((row) => row.costatus === "Pending").length,
+      assessmentAdded: readiness.filter((row) => row.assessmentstatus === "Added").length,
+      assessmentPending: readiness.filter((row) => row.assessmentstatus === "Pending").length,
+      readyCourses: readiness.filter((row) => row.ready).length,
+      deficientCourses: readiness.filter((row) => !row.ready).length
+    };
+
+    res.json({ success: true, saved: dryrun ? 0 : savedCourses.length, data: savedCourses, readiness, summary, dryrun });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.addExamRollStudentsForCourses = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const academicyear = text(req.body.academicyear);
+    const regulation = text(req.body.regulation);
+    const exam = text(req.body.exam || req.body.examname);
+    const examcode = text(req.body.examcode);
+    const user = text(req.body.user);
+    const courses = Array.isArray(req.body.courses) ? req.body.courses : [];
+    if (!academicyear || !regulation || !exam || !examcode) {
+      return res.status(400).json({ success: false, message: "Academic year, regulation, exam and exam code are required" });
+    }
+    if (!courses.length) return res.status(400).json({ success: false, message: "Select at least one course" });
+
+    let saved = 0;
+    let studentCount = 0;
+    const errors = [];
+    const processedStudents = new Set();
+    for (const course of courses) {
+      const baseCourse = {
+        colid,
+        academicyear,
+        regulation,
+        exam,
+        examcode,
+        program: text(course.program),
+        programcode: text(course.programcode),
+        type: text(course.type),
+        subject: text(course.subject),
+        semester: text(course.semester),
+        course: text(course.course),
+        coursecode: text(course.coursecode),
+        coursetype: text(course.coursetype),
+        examdate: text(course.examdate),
+        examslot: text(course.examslot),
+        user
+      };
+      const courseError = validateExamCourse(examCoursePayload(baseCourse));
+      if (courseError) {
+        errors.push({ coursecode: baseCourse.coursecode, semester: baseCourse.semester, message: courseError });
+        continue;
+      }
+      const studentFilter = {
+        colid,
+        role: /^student$/i,
+        excluded: { $ne: "Yes" },
+        academicyear,
+        regulation,
+        programcode: baseCourse.programcode,
+        semester: baseCourse.semester
+      };
+      const students = await User.find(studentFilter).select("name regno email phone section program programcode").lean();
+      students.forEach((student) => processedStudents.add(student.regno));
+      studentCount += students.length;
+      for (const student of students) {
+        const payload = rollPayload({
+          ...baseCourse,
+          program: baseCourse.program || student.program,
+          student: student.name,
+          regno: student.regno,
+          email: student.email,
+          phone: student.phone,
+          section: student.section,
+          applied: "Yes",
+          admitcardeligible: "Yes",
+          attended: "No"
+        });
+        const error = validateRoll(payload);
+        if (error) {
+          errors.push({ regno: student.regno, coursecode: baseCourse.coursecode, message: error });
+          continue;
+        }
+        const data = await ConductExamRoll.findOneAndUpdate(
+          { colid, academicyear, regulation, examcode, programcode: payload.programcode, semester: payload.semester, coursecode: payload.coursecode, regno: payload.regno },
+          payload,
+          { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+        );
+        if (data && !data.examseatno) await ConductExamRoll.updateOne({ _id: data._id }, { $set: { examseatno: String(data._id) } });
+        saved += 1;
+      }
+    }
+    res.json({ success: true, saved, studentCount, uniqueStudents: processedStudents.size, errors });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

@@ -83,6 +83,17 @@ const staffListFields = [
   'status'
 ];
 
+const staffDateFields = new Set(['joiningdate', 'dateofjoining', 'createdAt', 'updatedAt', 'authenticatordate', 'authenticatorsetupdate']);
+const staffSearchTextFields = staffListFields.filter((field) => !staffDateFields.has(field) && field !== 'status');
+const dateRangeForSearch = (value) => {
+  const raw = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null;
+  const start = new Date(`${raw}T00:00:00.000Z`);
+  const end = new Date(`${raw}T23:59:59.999Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  return { $gte: start, $lte: end };
+};
+
 const studentOnlyFields = new Set([
   'semester', 'admissionyear', 'section', 'regulation', 'program', 'programcode',
   'major', 'minor', 'vac', 'nidc', 'idc', 'aec', 'sec', 'mdc', 'mdcsub',
@@ -268,9 +279,13 @@ exports.getStaffList = async (req, res) => {
     };
 
     if (search) {
-      filter.$or = staffListFields
-        .filter((field) => field !== 'status')
-        .map((field) => ({ [field]: { $regex: search, $options: 'i' } }));
+      filter.$or = staffSearchTextFields.map((field) => ({ [field]: { $regex: search, $options: 'i' } }));
+      const dateRange = dateRangeForSearch(search);
+      if (dateRange) {
+        staffDateFields.forEach((field) => {
+          if (User.schema.paths[field]) filter.$or.push({ [field]: dateRange });
+        });
+      }
     }
 
     const data = await User.find(filter)

@@ -111,6 +111,16 @@ exports.studentOptions = async (req, res) => {
       const values = await User.distinct(field, base);
       options[field] = values.map(clean).filter(Boolean).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     }));
+    const programPairs = await User.aggregate([
+      { $match: base },
+      { $group: { _id: { program: "$program", programcode: "$programcode" } } },
+      { $sort: { "_id.program": 1, "_id.programcode": 1 } }
+    ]);
+    options.programPairs = programPairs.map((row) => ({
+      program: clean(row._id.program),
+      programcode: clean(row._id.programcode),
+      label: `${clean(row._id.program) || "Program"}${clean(row._id.programcode) ? ` (${clean(row._id.programcode)})` : ""}`
+    })).filter((row) => row.program || row.programcode);
     res.json({ success: true, fields: studentFields, options });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

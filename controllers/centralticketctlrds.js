@@ -238,8 +238,9 @@ exports.getTicketDetails = async (req, res) => {
   try {
     const ticket = await CentralTicket.findOne({ _id: req.query.id, colid: asNumber(req.query.colid) }).lean();
     if (!ticket) return res.status(404).json({ success: false, message: "Ticket not found" });
+    const [enriched] = await enrichInstitution([ticket]);
     const responses = await CentralTicketResponse.find({ ticketid: ticket._id, colid: ticket.colid }).sort({ createdAt: 1 }).lean();
-    res.json({ success: true, data: ticket, responses });
+    res.json({ success: true, data: enriched, responses });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

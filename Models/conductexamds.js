@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const conductExamSchema = new mongoose.Schema({
   colid: { type: Number, required: true, index: true },
   academicyear: { type: String, required: true, trim: true },
+  regulation: { type: String, trim: true },
   examname: { type: String, required: true, trim: true },
   examcode: { type: String, required: true, trim: true },
   program: { type: String, trim: true },

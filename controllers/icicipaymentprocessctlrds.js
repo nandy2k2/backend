@@ -324,15 +324,17 @@ exports.markIciciPaymentsManualSuccess = async (req, res) => {
 
     const updated = [];
     for (const payment of payments) {
+      const initiationPaidDate = payment.initiationdate ? new Date(payment.initiationdate) : new Date();
+      const manualPaidDate = Number.isNaN(initiationPaidDate.getTime()) ? new Date() : initiationPaidDate;
       payment.status = "SUCCESS";
-      payment.paiddate = new Date();
+      payment.paiddate = manualPaidDate;
       payment.paidamount = amount(payment.amount);
       payment.gatewayresponse = {
         ...(payment.gatewayresponse || {}),
         manualSuccess: {
           user: text(req.body.user),
           name: text(req.body.name),
-          date: new Date(),
+          date: manualPaidDate,
           remarks: text(req.body.remarks) || "Manual success update from ICICI payment manual success page"
         }
       };

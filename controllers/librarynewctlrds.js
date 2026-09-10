@@ -570,6 +570,19 @@ exports.deleteBook = async (req, res) => {
   }
 };
 
+exports.bulkDeleteBooks = async (req, res) => {
+  try {
+    const colid = number(req.body.colid, undefined);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(text).filter(Boolean) : [];
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one book" });
+    const result = await LibraryBook.deleteMany({ _id: { $in: ids }, colid });
+    res.json({ success: true, deleted: result.deletedCount || 0 });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.bulkBooks = async (req, res) => {
   try {
     const colid = number(req.body.colid, undefined);
