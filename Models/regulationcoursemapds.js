@@ -14,7 +14,7 @@ const regulationCourseMapSchema = new mongoose.Schema(
     department: { type: String, trim: true, default: "" },
     course: { type: String, trim: true, required: true },
     coursecode: { type: String, trim: true, required: true },
-    coursetype: { type: String, enum: ["Theory", "Practical", "Tutorial", "Internship", "Project", "Experiential learning"], default: "Theory" },
+    coursetype: { type: String, enum: ["Theory", "Practical"], default: "Theory" },
     deliverytype: { type: String, enum: ["Compulsory", "Elective"], default: "Compulsory" },
     coursemastercode: { type: String, trim: true, default: "" },
     credit: { type: Number, default: 0 },

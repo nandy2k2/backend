@@ -53,6 +53,40 @@ const cleanEnrollment = (input = {}) => ({
   user: text(input.user)
 });
 
+const statusKey = (value) => {
+  const status = text(value).toLowerCase();
+  if (status === "approved") return "approved";
+  if (status === "rejected") return "rejected";
+  if (status === "submitted") return "submitted";
+  return "applied";
+};
+
+const buildReportQuery = (source = {}) => {
+  const query = enrollmentQuery(source);
+  delete query.status;
+  return query;
+};
+
+const summarizeByCourse = (rows = []) => {
+  const map = new Map();
+  rows.forEach((row) => {
+    const key = `${text(row.coursecode)}|||${text(row.course)}`;
+    const existing = map.get(key) || {
+      course: text(row.course),
+      coursecode: text(row.coursecode),
+      applications: 0,
+      approved: 0,
+      applied: 0,
+      submitted: 0,
+      rejected: 0
+    };
+    existing.applications += 1;
+    existing[statusKey(row.status)] = (existing[statusKey(row.status)] || 0) + 1;
+    map.set(key, existing);
+  });
+  return Array.from(map.values()).sort((a, b) => text(a.coursecode).localeCompare(text(b.coursecode), undefined, { numeric: true }));
+};
+
 const validate = (payload) => {
   if (!payload.colid) return "colid is required";
   for (const field of ["academicyear", "regulation", "program", "programcode", "semester", "course", "coursecode", "student", "regno"]) {
@@ -110,6 +144,68 @@ exports.list = async (req, res) => {
     if (!query.colid) return res.status(400).json({ success: false, message: "colid is required" });
     const rows = await NepClassEnrollment.find(query).sort({ academicyear: -1, program: 1, semester: 1, course: 1, student: 1 }).lean();
     res.json({ success: true, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.reportOptions = async (req, res) => {
+  try {
+    const colid = number(req.query.colid, 0);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const rows = await NepClassEnrollment.find({ colid })
+      .select("academicyear regulation program programcode semester course coursecode status")
+      .sort({ academicyear: -1, regulation: 1, program: 1, semester: 1, course: 1 })
+      .lean();
+    const filtered = rows.filter((row) => (
+      (!req.query.academicyear || row.academicyear === req.query.academicyear) &&
+      (!req.query.regulation || row.regulation === req.query.regulation) &&
+      (!req.query.programcode || row.programcode === req.query.programcode) &&
+      (!req.query.semester || row.semester === req.query.semester)
+    ));
+    res.json({
+      success: true,
+      academicyears: uniq(rows.map((row) => row.academicyear)),
+      regulations: uniq(rows.filter((row) => !req.query.academicyear || row.academicyear === req.query.academicyear).map((row) => row.regulation)),
+      programs: uniq(rows.filter((row) => (!req.query.academicyear || row.academicyear === req.query.academicyear) && (!req.query.regulation || row.regulation === req.query.regulation)).map((row) => `${row.program}|||${row.programcode}`)),
+      semesters: uniq(rows.filter((row) => (!req.query.academicyear || row.academicyear === req.query.academicyear) && (!req.query.regulation || row.regulation === req.query.regulation) && (!req.query.programcode || row.programcode === req.query.programcode)).map((row) => row.semester)),
+      courses: summarizeByCourse(filtered),
+      statuses: uniq(["Applied", "Approved", "Rejected", "Submitted", ...rows.map((row) => row.status)])
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.applicationReport = async (req, res) => {
+  try {
+    const query = buildReportQuery(req.query);
+    if (!query.colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const rows = await NepClassEnrollment.find(query).sort({ course: 1, student: 1 }).lean();
+    const summary = summarizeByCourse(rows);
+    const totals = summary.reduce((acc, row) => {
+      acc.applications += row.applications || 0;
+      acc.approved += row.approved || 0;
+      acc.applied += row.applied || 0;
+      acc.submitted += row.submitted || 0;
+      acc.rejected += row.rejected || 0;
+      return acc;
+    }, { applications: 0, approved: 0, applied: 0, submitted: 0, rejected: 0 });
+    res.json({ success: true, data: rows, summary, totals });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.approvedReport = async (req, res) => {
+  try {
+    const query = buildReportQuery(req.query);
+    if (!query.colid) return res.status(400).json({ success: false, message: "colid is required" });
+    query.status = /^Approved$/i;
+    const rows = await NepClassEnrollment.find(query).sort({ course: 1, student: 1 }).lean();
+    const summary = summarizeByCourse(rows).map((row) => ({ ...row, approvedapplications: row.approved || row.applications || 0 }));
+    const totals = { approved: rows.length, courses: summary.length };
+    res.json({ success: true, data: rows, summary, totals });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

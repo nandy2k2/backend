@@ -38,6 +38,7 @@ const HrStructure = require("../Models/hrstructure");
 const HrSalary = require("../Models/hrsalary");
 const ProgramPeriodSlot = require("../Models/programperiodslotds");
 const ClassGroup = require("../Models/neplmsclassgroupds");
+const NepClassEnrollment = require("../Models/nepclassenrollmentds");
 const MentoringHomeVisit = require("../Models/mentoringhomevisitds");
 const MentoringSession = require("../Models/mentoringsessionds");
 const HrShiftTiming = require("../Models/hrshifttimingds");
@@ -158,7 +159,8 @@ const dummySections = [
   { key: "examFormBuilder", label: "Exam form builder" },
   { key: "supplementaryAttendanceWorkflow", label: "Supplementary attendance workflow" },
   { key: "feesApprovalWorkflow", label: "Fees approval workflow" },
-  { key: "conductExam", label: "Conduct examination extended pages" }
+  { key: "conductExam", label: "Conduct examination extended pages" },
+  { key: "electiveApplications", label: "Elective applications" }
 ];
 
 const summaryLine = (label, count, skipped = false) => ({ label, count, status: skipped ? "Skipped" : "Created / updated" });
@@ -427,6 +429,58 @@ exports.generateDummyData = async (req, res) => {
       summary.push(summaryLine("Workload assignment", workloadRows.length));
     } else {
       summary.push(summaryLine("Workload assignment master loaded", workloadRows.length));
+    }
+
+    if (shouldGenerate("electiveApplications")) {
+      const electiveAcademicyear = text(req.body.electiveAcademicyear || req.body.academicyear || academicyear);
+      const electiveRegulation = text(req.body.electiveRegulation || req.body.regulation || regulation);
+      const electiveProgram = text(req.body.electiveProgram);
+      const electiveProgramcode = text(req.body.electiveProgramcode || req.body.programcode);
+      const electiveSemester = text(req.body.electiveSemester || req.body.semester);
+      const courseFilter = { colid, deliverytype: "Elective", status: "Active" };
+      if (electiveAcademicyear) courseFilter.academicyear = electiveAcademicyear;
+      if (electiveRegulation) courseFilter.regulation = electiveRegulation;
+      if (electiveProgramcode) courseFilter.programcode = electiveProgramcode;
+      if (electiveSemester) courseFilter.semester = electiveSemester;
+      const electiveCourses = await RegulationCourseMap.find(courseFilter).sort({ program: 1, semester: 1, course: 1 }).lean();
+      const studentFilter = { colid, role: /^Student$/i };
+      if (electiveAcademicyear) studentFilter.academicyear = electiveAcademicyear;
+      if (electiveRegulation) studentFilter.regulation = electiveRegulation;
+      if (electiveProgramcode) studentFilter.programcode = electiveProgramcode;
+      if (electiveSemester) studentFilter.semester = electiveSemester;
+      const electiveStudents = await User.find(studentFilter).limit(Math.max(studentCount, 300)).lean();
+      const statuses = ["Applied", "Approved", "Applied", "Rejected", "Approved"];
+      const electiveRows = electiveCourses.length && electiveStudents.length
+        ? electiveStudents.map((student, index) => {
+          const course = electiveCourses[index % electiveCourses.length];
+          const status = statuses[index % statuses.length];
+          return {
+            colid,
+            user,
+            academicyear: course.academicyear || electiveAcademicyear,
+            regulation: course.regulation || electiveRegulation,
+            program: course.program || electiveProgram || student.program,
+            programcode: course.programcode || electiveProgramcode || student.programcode,
+            semester: course.semester || electiveSemester || student.semester,
+            course: course.course,
+            coursecode: course.coursecode,
+            subject: course.subject,
+            type: course.type,
+            student: student.name,
+            regno: student.regno,
+            studentemail: student.email,
+            phone: student.phone,
+            section: student.section,
+            status,
+            appliedby: student.email,
+            approvedby: status === "Approved" ? user : "",
+            approveddate: status === "Approved" ? new Date() : undefined,
+            remarks: "Generated elective application"
+          };
+        })
+        : [];
+      if (electiveRows.length) await upsertMany(NepClassEnrollment, electiveRows, ["colid", "academicyear", "regulation", "programcode", "semester", "coursecode", "regno"]);
+      summary.push(summaryLine("Elective applications", electiveRows.length, !electiveRows.length));
     }
 
     if (shouldGenerate("periods")) {

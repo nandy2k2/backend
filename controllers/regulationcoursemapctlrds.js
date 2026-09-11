@@ -4,7 +4,7 @@ const MPrograms = require("../Models/mprograms");
 const RegulationSubject = require("../Models/regulationsubjectds");
 
 const allowedTypes = new Set(["Major", "Minor", "AEC", "SEC", "VAC", "IDC"]);
-const allowedCourseTypes = new Set(["Theory", "Practical", "Tutorial", "Internship", "Project", "Experiential learning"]);
+const allowedCourseTypes = new Set(["Theory", "Practical"]);
 const allowedDeliveryTypes = new Set(["Compulsory", "Elective"]);
 
 const toNumber = (value) => {

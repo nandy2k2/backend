@@ -84,6 +84,43 @@ const buildQuery = (source = {}) => {
 
 const uniq = (items) => [...new Set(items.map(text).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
+const nonStudentUserQuery = (source = {}) => {
+  const query = {
+    colid: toNumber(source.colid),
+    role: { $not: /^student$/i },
+    excluded: { $ne: "Yes" }
+  };
+  ["role", "department", "designation", "institution", "faculty"].forEach((field) => {
+    const value = text(source[`user_${field}`] || source[field]);
+    if (value) query[field] = value;
+  });
+  return query;
+};
+
+const courseMapQuery = (source = {}) => {
+  const query = { colid: toNumber(source.colid) };
+  [
+    "academicyear",
+    "regulation",
+    "program",
+    "programcode",
+    "type",
+    "subject",
+    "semester",
+    "course",
+    "coursecode",
+    "coursetype",
+    "faculty",
+    "institution",
+    "department",
+    "status"
+  ].forEach((field) => {
+    const value = text(source[`course_${field}`] || source[field]);
+    if (value) query[field] = value;
+  });
+  return query;
+};
+
 exports.getWorkloadAssignmentOptions = async (req, res) => {
   try {
     const colid = toNumber(req.query.colid);
@@ -231,5 +268,50 @@ exports.bulkCreateWorkloadAssignments = async (req, res) => {
     res.json({ success: true, inserted: valid.length, errors });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getVisualWorkloadOptions = async (req, res) => {
+  try {
+    const colid = toNumber(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const [courses, users] = await Promise.all([
+      RegulationCourseMap.find({ colid }).select("academicyear regulation program programcode type subject semester course coursecode coursetype faculty institution department status").lean(),
+      User.find({ colid, role: { $not: /^student$/i }, excluded: { $ne: "Yes" } }).select("name email role department designation institution faculty").lean()
+    ]);
+    const courseFields = ["academicyear", "regulation", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "coursetype", "faculty", "institution", "department", "status"];
+    const userFields = ["role", "department", "designation", "institution", "faculty", "name", "email"];
+    res.json({
+      success: true,
+      courseOptions: Object.fromEntries(courseFields.map((field) => [field, uniq(courses.map((row) => row[field]))])),
+      userOptions: Object.fromEntries(userFields.map((field) => [field, uniq(users.map((row) => row[field]))]))
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || "Unable to load visual workload options" });
+  }
+};
+
+exports.searchVisualWorkload = async (req, res) => {
+  try {
+    const colid = toNumber(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const [courses, users, assignments] = await Promise.all([
+      RegulationCourseMap.find(courseMapQuery(req.query))
+        .sort({ academicyear: 1, regulation: 1, program: 1, semester: 1, course: 1 })
+        .limit(1000)
+        .lean(),
+      User.find(nonStudentUserQuery(req.query))
+        .select("name email role department designation institution faculty")
+        .sort({ name: 1, email: 1 })
+        .limit(500)
+        .lean(),
+      WorkloadAssignment.find(buildQuery({ ...req.query, colid }))
+        .sort({ facultyname: 1, academicyear: 1, semester: 1, course: 1 })
+        .limit(1500)
+        .lean()
+    ]);
+    res.json({ success: true, courses, users, assignments });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || "Unable to load visual workload data" });
   }
 };

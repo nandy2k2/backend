@@ -6,6 +6,8 @@ const schema = new mongoose.Schema(
     academicyear: { type: String, trim: true },
     regulation: { type: String, trim: true },
     section: { type: String, trim: true },
+    faculty: { type: String, trim: true },
+    facultyemail: { type: String, trim: true },
     groupname: { type: String, required: true, trim: true },
     description: { type: String, trim: true },
     status: { type: String, default: "Active", trim: true },

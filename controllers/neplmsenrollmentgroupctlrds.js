@@ -38,6 +38,8 @@ exports.saveGroup = async (req, res) => {
       academicyear: text(req.body.academicyear),
       regulation: text(req.body.regulation),
       section: text(req.body.section),
+      faculty: text(req.body.faculty),
+      facultyemail: text(req.body.facultyemail),
       groupname: text(req.body.groupname),
       description: text(req.body.description),
       status: text(req.body.status) || "Active",
