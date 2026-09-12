@@ -198,6 +198,7 @@ const aiChatbotDefinitionController = require('./controllers/aichatbotdefinition
 const mprogramsManagementController = require('./controllers/mprogramsmanagementctlrds');
 const studentActivityController = require('./controllers/studentactivityctlrds');
 const eventReportRagController = require('./controllers/eventreportragctlrds');
+const timetableAiRagController = require('./controllers/timetableairagctlrds');
 const admissionDateSummaryController = require('./controllers/admissiondatesummaryctlrds');
 const examinationModel2Controller = require('./controllers/examinationmodel2ctlrds');
 const conductExamComponentAllocationController = require('./controllers/conductexamcomponentallocationctlrds');
@@ -1024,6 +1025,13 @@ app.post('/api/v2/event-report-rag/generate', eventReportRagController.uploadMid
 app.get('/api/v2/event-report-rag/generated', eventReportRagController.generated);
 app.post('/api/v2/event-report-rag/generated/delete', eventReportRagController.deleteGenerated);
 app.get('/api/v2/event-report-rag/download-html', eventReportRagController.downloadHtml);
+app.get('/api/v2/timetable-ai-rag/options', timetableAiRagController.options);
+app.post('/api/v2/timetable-ai-rag/train', timetableAiRagController.uploadMiddleware, timetableAiRagController.train);
+app.get('/api/v2/timetable-ai-rag/batches', timetableAiRagController.batches);
+app.post('/api/v2/timetable-ai-rag/batches/delete', timetableAiRagController.deleteBatches);
+app.post('/api/v2/timetable-ai-rag/generate-from-models', timetableAiRagController.generateFromModels);
+app.get('/api/v2/timetable-ai-rag/generated', timetableAiRagController.generated);
+app.post('/api/v2/timetable-ai-rag/confirm', timetableAiRagController.confirm);
 app.get('/api/v2/central-tickets/ai-help/tools', centralAiHelpController.tools);
 app.post('/api/v2/central-tickets/ai-help', centralAiHelpController.chat);
 app.get('/api/v2/ai-chatbot-definition', aiChatbotDefinitionController.listDefinitions);
@@ -5547,6 +5555,7 @@ const neplmsstudentworkspacectlrds = require("./controllers/neplmsstudentworkspa
 const neplmsstudentdashboardctlrds = require("./controllers/neplmsstudentdashboardctlrds");
 const neplmsfacultydashboardctlrds = require("./controllers/neplmsfacultydashboardctlrds");
 const neplmssupplementaryattendancectlrds = require("./controllers/neplmssupplementaryattendancectlrds");
+const studenteventattendancerequestctlrds = require("./controllers/studenteventattendancerequestctlrds");
 const neplmsattendancectlrds = require("./controllers/neplmsattendancectlrds");
 const neplmsloginattendancectlrds = require("./controllers/neplmsloginattendancectlrds");
 const neplmsconsecutiveabsencectlrds = require("./controllers/neplmsconsecutiveabsencectlrds");
@@ -6422,6 +6431,11 @@ app.get("/api/v2/neplms/supplementary-attendance/requests", neplmssupplementarya
 app.get("/api/v2/neplms/supplementary-attendance/approval-queue", neplmssupplementaryattendancectlrds.approvalQueue);
 app.post("/api/v2/neplms/supplementary-attendance/approve", neplmssupplementaryattendancectlrds.approve);
 app.get("/api/v2/neplms/supplementary-attendance/report", neplmssupplementaryattendancectlrds.report);
+app.get("/api/v2/neplms/event-attendance-request/options", studenteventattendancerequestctlrds.options);
+app.post("/api/v2/neplms/event-attendance-request/submit", studenteventattendancerequestctlrds.submitRequest);
+app.get("/api/v2/neplms/event-attendance-request/my", studenteventattendancerequestctlrds.myRequests);
+app.get("/api/v2/neplms/event-attendance-request/list", studenteventattendancerequestctlrds.listRequests);
+app.post("/api/v2/neplms/event-attendance-request/review", studenteventattendancerequestctlrds.reviewRequest);
 app.post("/api/v2/neplms/login-attendance/record", neplmsloginattendancectlrds.record);
 app.get("/api/v2/neplms/login-attendance/options", neplmsloginattendancectlrds.options);
 app.get("/api/v2/neplms/login-attendance", neplmsloginattendancectlrds.list);

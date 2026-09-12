@@ -48,6 +48,10 @@ const encodeS3Key = (key) => String(key || "").split("/").map(encodeURIComponent
 const s3Url = (bucket, region, key) => region === "us-east-1"
   ? `https://${bucket}.s3.amazonaws.com/${encodeS3Key(key)}`
   : `https://${bucket}.s3.${region}.amazonaws.com/${encodeS3Key(key)}`;
+const nonStudentUserQuery = (colid) => ({
+  colid,
+  $nor: [{ role: /^student$/i }]
+});
 
 const configs = {
   types: {
@@ -276,7 +280,7 @@ exports.options = async (req, res) => {
     const shifts = await HrShiftTiming.find({ colid }).sort({ location: 1, shift: 1 }).lean();
     const meetingFeatures = await EstateMeetingRoomFeature.find({ colid, status: { $ne: "Inactive" } }).sort({ feature: 1 }).lean();
     const meetingRooms = await EstateMeetingRoom.find({ colid, status: { $ne: "Inactive" } }).sort({ building: 1, roomname: 1 }).lean();
-    const users = await User.find({ colid, role: { $not: /^student$/i } }).select("name email phone department role designation status").sort({ name: 1, email: 1 }).limit(500).lean();
+    const users = await User.find(nonStudentUserQuery(colid)).select("name email user phone department role designation status").sort({ name: 1, email: 1 }).lean();
     const ollamaConfigs = await OllamaConfiguration.find({ colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean();
     res.json({
       success: true,
@@ -378,7 +382,7 @@ exports.distinct = async (req, res) => {
 exports.searchUsers = async (req, res) => {
   try {
     const colid = Number(req.query.colid);
-    const query = { colid, role: { $not: /^student$/i } };
+    const query = nonStudentUserQuery(colid);
     ["department", "role", "designation", "status"].forEach((field) => {
       if (req.query[field]) query[field] = req.query[field];
     });
@@ -387,10 +391,10 @@ exports.searchUsers = async (req, res) => {
       const rx = new RegExp(escapeRegex(term), "i");
       query.$or = [{ name: rx }, { email: rx }, { phone: rx }, { department: rx }, { role: rx }];
     }
-    const users = await User.find(query).select("name email phone department role designation status").sort({ name: 1 }).limit(500).lean();
+    const users = await User.find(query).select("name email user phone department role designation status").sort({ name: 1 }).limit(500).lean();
     const distinct = {};
     for (const field of ["department", "role", "designation"]) {
-      distinct[field] = (await User.distinct(field, { colid, role: { $not: /^student$/i } })).filter(Boolean).sort();
+      distinct[field] = (await User.distinct(field, nonStudentUserQuery(colid))).filter(Boolean).sort();
     }
     res.json({ success: true, users, distinct });
   } catch (error) {
@@ -994,7 +998,7 @@ exports.bulkAllocateUsers = async (req, res) => {
     if (!provider) return res.status(404).json({ success: false, message: "Provider not found" });
     const emails = asArray(req.body.employeeemails);
     if (!emails.length) return res.status(400).json({ success: false, message: "Select at least one user" });
-    const users = await User.find({ colid, email: { $in: emails }, role: { $not: /^student$/i } }).lean();
+    const users = await User.find({ ...nonStudentUserQuery(colid), email: { $in: emails } }).lean();
     const payload = users.map((person) => ({
       colid,
       user: text(req.body.user),
