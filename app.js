@@ -5524,6 +5524,7 @@ const conductexamgeneratorctlrds = require("./controllers/conductexamgeneratorct
 const conductexamonscreenctlrds = require("./controllers/conductexamonscreenctlrds");
 const conductexamhallticketctlrds = require("./controllers/conductexamhallticketctlrds");
 const conductexamformctlrds = require("./controllers/conductexamformctlrds");
+const conductexamdoctorctlrds = require("./controllers/conductexamdoctorctlrds");
 const feedbackadvancedctlrds = require("./controllers/feedbackadvancedctlrds");
 const visitingfacultyctlrds = require("./controllers/visitingfacultyctlrds");
 const courseassessmentctlrds = require("./controllers/courseassessmentctlrds");
@@ -5912,6 +5913,8 @@ app.get("/api/v2/conductexam/course-options", conductexamctlrds.getCourseMapOpti
 app.get("/api/v2/conductexam/examcourses", conductexamctlrds.getExamCourses);
 app.get("/api/v2/conductexam/student-count-report-options", conductexamctlrds.getStudentCountReportOptions);
 app.get("/api/v2/conductexam/student-count-report", conductexamctlrds.getStudentCountReport);
+app.get("/api/v2/conductexam/doctor-options", conductexamdoctorctlrds.options);
+app.get("/api/v2/conductexam/doctor-report", conductexamdoctorctlrds.report);
 app.post("/api/v2/conductexam/examcourses", conductexamctlrds.saveExamCourses);
 app.post("/api/v2/conductexam/examcourses-populate-from-coursemap", conductexamctlrds.populateExamCoursesFromCourseMap);
 app.post("/api/v2/conductexam/examrolls-add-students-for-courses", conductexamctlrds.addExamRollStudentsForCourses);
