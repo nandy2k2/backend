@@ -6351,6 +6351,8 @@ app.get("/api/v2/neplms/attendance/students", neplmsattendancectlrds.getStudents
 app.get("/api/v2/neplms/attendance/diagnostic", neplmsattendancectlrds.getAttendanceDiagnostic);
 app.get("/api/v2/neplms/lms-doctor/options", neplmsdoctorctlrds.options);
 app.get("/api/v2/neplms/lms-doctor/report", neplmsdoctorctlrds.report);
+app.get("/api/v2/neplms/configuration-doctor/options", neplmsdoctorctlrds.configurationOptions);
+app.get("/api/v2/neplms/configuration-doctor/report", neplmsdoctorctlrds.configurationReport);
 app.get("/api/v2/neplms/attendance/class-group-students", neplmsattendancectlrds.getClassGroupStudentsForAttendance);
 app.post("/api/v2/neplms/attendance", neplmsattendancectlrds.saveAttendance);
 app.get("/api/v2/neplms/attendance", neplmsattendancectlrds.getAttendance);
