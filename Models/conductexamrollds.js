@@ -35,6 +35,7 @@ const conductExamRollSchema = new mongoose.Schema({
   examroom: { type: String, trim: true },
   seatno: { type: String, trim: true },
   examseatno: { type: String, trim: true },
+  answerbooklink: { type: String, trim: true, default: "" },
   user: { type: String, trim: true }
 }, { timestamps: true });
 

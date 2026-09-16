@@ -6,6 +6,9 @@ const Institution = require("../Models/insdetails");
 const LeadActivity = require("../Models/leadactivityds");
 const TelecallerMapping = require("../Models/crmtelecallermappingds");
 const CampusVisitQueue = require("../Models/crmcampusvisitqueueds");
+const Program = require("../Models/mprograms");
+const RawData = require("../Models/rawdatamanagementds");
+const MenuAccess = require("../Models/menuaccessds");
 
 const asNumber = (value) => {
   const parsed = Number(value);
@@ -81,6 +84,148 @@ const normalizeLead = (row, context = {}) => ({
   pipeline_stage: clean(row.pipeline_stage || "New Lead"),
   leadstatus: clean(row.leadstatus || "Active")
 });
+
+const finalStageRegex = /(final|admitted|admission done|enrolled|converted|fee paid|seat booked)/i;
+
+const crmAccessCatalog = {
+  crmCore: [
+    ["CRM", "CRM", "CRM Admin Dashboard", "/crm-admin-dashboard"],
+    ["CRM", "CRM", "Add CRM users", "/crm-admin-users"],
+    ["CRM", "CRM", "CRM masters and leads", "/crm-management"],
+    ["CRM", "CRM", "Raw data management", "/raw-data-management"],
+    ["CRM", "CRM", "Lead update", "/crm-lead-actions"],
+    ["CRM", "CRM", "CRM reports", "/crm-reports"],
+    ["CRM", "CRM", "Daily interaction report", "/crm-daily-interaction-report"],
+    ["CRM", "CRM", "My leads", "/crm-my-leads"],
+    ["CRM", "CRM", "My followup", "/crm-my-followups"],
+    ["CRM", "CRM", "Counselor mapping", "/crm-counselor-mapping"],
+    ["CRM", "CRM", "Telecaller mapping", "/crm-telecaller-mapping"],
+    ["CRM", "CRM", "Telecaller bulk assignment", "/crm-telecaller-bulk-assignment"],
+    ["CRM", "CRM", "Random telecaller assignment", "/crm-random-telecaller-assignment"],
+    ["CRM", "CRM", "Telecaller report", "/crm-telecaller-report"],
+    ["CRM", "CRM", "Telecaller counselor assignment", "/crm-telecaller-assign-counselor"],
+    ["CRM", "CRM", "Mark campus visit", "/crm-counselor-campus-visit"],
+    ["CRM", "CRM", "Campus visit form", "/crm-campus-visit-form"],
+    ["CRM", "CRM", "Campus visit queue", "/crm-campus-visit-queue"],
+    ["CRM", "CRM", "Campus visit comments", "/crm-campus-visit-comments"],
+    ["CRM", "CRM", "Inbound API", "/crm-inbound-api"],
+    ["CRM", "CRM", "Bulk assignment", "/crm-bulk-assignment"],
+    ["CRM", "CRM", "Form link", "/crm-form-link"],
+    ["CRM", "CRM", "AI agent", "/crm-ai-agent"],
+    ["CRM", "CRM", "Email campaign", "/crm-email-campaign"],
+    ["CRM", "CRM", "Campaign report", "/crm-campaign-report"],
+    ["CRM", "CRM", "Recampaign", "/crm-recampaign"]
+  ],
+  settingsAll: [
+    ["Settings", "Settings", "Configuration", "/configuration"],
+    ["Settings", "Settings", "Email configuration", "/emailconfiguration"],
+    ["Settings", "Settings", "AI configuration", "/aiconfiguration"],
+    ["Settings", "Settings", "Ollama configuration", "/ollamaconfiguration"],
+    ["Settings", "Settings", "Epaathsala AI", "/epaathsala-ai"],
+    ["Settings", "Settings", "Menu access management", "/menuaccesscontrol"],
+    ["Settings", "Settings", "Change password", "/dashmpassword"]
+  ],
+  changePassword: [["Settings", "Settings", "Change password", "/dashmpassword"]],
+  helpAll: [
+    ["Help", "Help", "HR modules help", "/hrhelp"],
+    ["Help", "Help", "Menu management help", "/helpmenu"],
+    ["Help", "Help", "Fees help", "/helpfees"],
+    ["Help", "Help", "Examination help", "/helpexamination"],
+    ["Help", "Help", "Profile help", "/helpprofile"],
+    ["Help", "Help", "User management help", "/helpusermanagement"],
+    ["Help", "Help", "Academic configuration help", "/helpacademicconfiguration"],
+    ["Help", "Help", "Admission help", "/helpadmission"],
+    ["Help", "Help", "Integrated LMS help", "/helpneplms"],
+    ["Help", "Help", "Recruitment help", "/helprecruitment"],
+    ["Help", "Help", "Transcription meetings help", "/helptranscript"],
+    ["Help", "Help", "Placement coordinator help", "/helpplacement"],
+    ["Help", "Help", "AI Helpdesk help", "/helpaihelpdesk"],
+    ["Help", "Help", "Library New help", "/helplibrarynew"],
+    ["Help", "Help", "Purchase 2 help", "/helppurchase2"],
+    ["Help", "Help", "Code editor help", "/helpcodeeditor"],
+    ["Help", "Help", "AI Agent Coding help", "/helpaicodingagents"]
+  ],
+  aiCodingLimited: [
+    ["AI coding", "AI coding", "My AI coding 2", "/my-ai-coding-2"],
+    ["AI coding", "AI coding", "My code editor", "/my-code-editor"],
+    ["AI coding", "AI coding", "Code editor interactive", "/my-code-editor-interactive"],
+    ["AI coding", "AI coding", "AI code editor", "/ai-code-editor"],
+    ["AI coding", "AI coding", "AI Agents", "/ai-coding-agents"]
+  ],
+  voiceAiAll: [["Voice AI agents", "Voice AI agents", "Voice AI Agents", "/voice-ai-agents"]]
+};
+
+const roleAccessMap = {
+  crmadmin: [
+    ...crmAccessCatalog.crmCore,
+    ...crmAccessCatalog.settingsAll,
+    ...crmAccessCatalog.helpAll,
+    ...crmAccessCatalog.aiCodingLimited,
+    ...crmAccessCatalog.voiceAiAll
+  ],
+  counselor: [
+    ["CRM", "CRM", "My leads", "/crm-my-leads"],
+    ["CRM", "CRM", "My followup", "/crm-my-followups"],
+    ["CRM", "CRM", "Mark campus visit", "/crm-counselor-campus-visit"],
+    ["CRM", "CRM", "Form link", "/crm-form-link"],
+    ["CRM", "CRM", "Campus visit form", "/crm-campus-visit-form"],
+    ["CRM", "CRM", "AI agent", "/crm-ai-agent"],
+    ["CRM", "CRM", "Email campaign", "/crm-email-campaign"],
+    ["CRM", "CRM", "Campaign report", "/crm-campaign-report"],
+    ["CRM", "CRM", "Recampaign", "/crm-recampaign"],
+    ["CRM", "CRM", "Lead update", "/crm-lead-actions"],
+    ...crmAccessCatalog.settingsAll,
+    ...crmAccessCatalog.helpAll,
+    ...crmAccessCatalog.aiCodingLimited,
+    ...crmAccessCatalog.voiceAiAll
+  ],
+  telecaller: [
+    ["CRM", "CRM", "My leads", "/crm-my-leads"],
+    ["CRM", "CRM", "My followup", "/crm-my-followups"],
+    ...crmAccessCatalog.changePassword,
+    ...crmAccessCatalog.helpAll
+  ],
+  campusvisit: [
+    ["CRM", "CRM", "Campus visit form", "/crm-campus-visit-form"],
+    ["CRM", "CRM", "Mark campus visit", "/crm-counselor-campus-visit"],
+    ["CRM", "CRM", "Campus visit queue", "/crm-campus-visit-queue"],
+    ["CRM", "CRM", "Campus visit comments", "/crm-campus-visit-comments"],
+    ...crmAccessCatalog.changePassword,
+    ...crmAccessCatalog.helpAll
+  ]
+};
+
+const seedMenuAccessForRole = async (colid, role, user) => {
+  const pages = roleAccessMap[String(role || "").toLowerCase()] || [];
+  const operations = pages.map(([menugroup, groupname, title, path]) => ({
+    updateOne: {
+      filter: { colid, role, path },
+      update: {
+        $set: {
+          colid,
+          menugroup,
+          groupname,
+          title,
+          path,
+          role,
+          access: "Allow",
+          user,
+          status1: "Submitted",
+          comments: "Auto seeded from CRM admin user configuration"
+        }
+      },
+      upsert: true
+    }
+  }));
+  if (!operations.length) return 0;
+  const result = await MenuAccess.bulkWrite(operations, { ordered: false });
+  return (result.upsertedCount || 0) + (result.modifiedCount || 0) + (result.matchedCount || 0);
+};
+
+const isFinalStageName = (stage, finalStageSet) => {
+  const value = clean(stage);
+  return finalStageSet.has(value.toLowerCase()) || finalStageRegex.test(value);
+};
 
 exports.getCrmOptions = async (req, res) => {
   try {
@@ -963,6 +1108,402 @@ exports.getReports = async (req, res) => {
     }
     const institution = await Institution.findOne({ colid }).lean();
     res.json({ success: true, data, institution });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getCrmAdminDashboardOptions = async (req, res) => {
+  try {
+    const colid = asNumber(req.query.colid);
+    const [programOptions, leadOptions, rawOptions, stages, users, institution] = await Promise.all([
+      Program.aggregate([
+        { $match: { colid } },
+        {
+          $group: {
+            _id: null,
+            years: { $addToSet: "$year" },
+            programs: { $addToSet: "$program" },
+            programcodes: { $addToSet: "$programcode" }
+          }
+        }
+      ]),
+      Lead.aggregate([
+        { $match: { colid } },
+        {
+          $group: {
+            _id: null,
+            years: { $addToSet: "$year" },
+            stages: { $addToSet: "$pipeline_stage" },
+            sources: { $addToSet: "$source" },
+            programs: { $addToSet: "$program" },
+            programcodes: { $addToSet: "$programcode" },
+            courses: { $addToSet: "$course_interested" }
+          }
+        }
+      ]),
+      RawData.aggregate([
+        { $match: { colid } },
+        {
+          $group: {
+            _id: null,
+            years: { $addToSet: "$year" },
+            sources: { $addToSet: "$sourcename" },
+            statuses: { $addToSet: "$status" }
+          }
+        }
+      ]),
+      PipelineStage.find({ colid }).sort({ stagename: 1, name: 1 }).lean(),
+      User.find({ colid, role: { $not: /^Student$/i } }).select("name email role department designation").sort({ name: 1 }).lean(),
+      Institution.findOne({ colid }).lean()
+    ]);
+    const years = new Set([...(programOptions[0]?.years || []), ...(leadOptions[0]?.years || []), ...(rawOptions[0]?.years || [])].filter(Boolean));
+    res.json({
+      success: true,
+      years: Array.from(years).sort(),
+      programs: programOptions[0]?.programs?.filter(Boolean).sort() || [],
+      programcodes: programOptions[0]?.programcodes?.filter(Boolean).sort() || [],
+      leadOptions: leadOptions[0] || {},
+      rawOptions: rawOptions[0] || {},
+      stages,
+      users,
+      institution
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getCrmAdminDashboardSummary = async (req, res) => {
+  try {
+    const colid = asNumber(req.body.colid || req.query.colid);
+    const year = clean(req.body.academicyear || req.query.academicyear);
+    if (!colid || !year) return res.status(400).json({ success: false, message: "Academic year is required" });
+
+    const [programs, stages, leads, rawSummary, institution] = await Promise.all([
+      Program.find({ colid, year, excluded: { $ne: "Yes" } }).select("program programcode intakecapacity institution department faculty").sort({ program: 1 }).lean(),
+      PipelineStage.find({ colid }).lean(),
+      Lead.find({ colid, year }).select("program programcode course_interested pipeline_stage source leadstatus").lean(),
+      RawData.aggregate([
+        { $match: { colid, year } },
+        {
+          $group: {
+            _id: { source: "$sourcename", status: "$status", program: "$program", programcode: "$programcode" },
+            count: { $sum: 1 }
+          }
+        },
+        {
+          $project: {
+            _id: 0,
+            source: { $ifNull: ["$_id.source", "Unknown"] },
+            status: { $ifNull: ["$_id.status", "Unknown"] },
+            program: { $ifNull: ["$_id.program", ""] },
+            programcode: { $ifNull: ["$_id.programcode", ""] },
+            count: 1
+          }
+        },
+        { $sort: { source: 1, status: 1 } }
+      ]),
+      Institution.findOne({ colid }).lean()
+    ]);
+
+    const finalStageSet = new Set(stages.filter((stage) => stage.is_final_stage).map((stage) => clean(stage.stagename || stage.name).toLowerCase()));
+    const stageNames = [...new Set([...stages.map((stage) => clean(stage.stagename || stage.name)), ...leads.map((lead) => clean(lead.pipeline_stage))].filter(Boolean))].sort();
+    const programMap = new Map();
+    programs.forEach((program) => {
+      const key = clean(program.programcode) || clean(program.program);
+      if (!programMap.has(key)) {
+        programMap.set(key, {
+          program: clean(program.program),
+          programcode: clean(program.programcode),
+          institution: clean(program.institution),
+          department: clean(program.department),
+          faculty: clean(program.faculty),
+          intakecapacity: Number(program.intakecapacity || 0),
+          totalLeads: 0,
+          finalStage: 0,
+          otherStages: 0,
+          stages: Object.fromEntries(stageNames.map((stage) => [stage, 0]))
+        });
+      } else {
+        const current = programMap.get(key);
+        current.intakecapacity += Number(program.intakecapacity || 0);
+      }
+    });
+    leads.forEach((lead) => {
+      const key = clean(lead.programcode) || clean(lead.program) || clean(lead.course_interested);
+      if (!programMap.has(key)) {
+        programMap.set(key, {
+          program: clean(lead.program || lead.course_interested || "Not mapped"),
+          programcode: clean(lead.programcode),
+          institution: "",
+          department: "",
+          faculty: "",
+          intakecapacity: 0,
+          totalLeads: 0,
+          finalStage: 0,
+          otherStages: 0,
+          stages: Object.fromEntries(stageNames.map((stage) => [stage, 0]))
+        });
+      }
+      const row = programMap.get(key);
+      const stage = clean(lead.pipeline_stage) || "Not specified";
+      if (!(stage in row.stages)) row.stages[stage] = 0;
+      row.stages[stage] += 1;
+      row.totalLeads += 1;
+      if (isFinalStageName(stage, finalStageSet)) row.finalStage += 1;
+      else row.otherStages += 1;
+    });
+    const programRows = Array.from(programMap.values()).map((row, index) => ({
+      ...row,
+      id: `${row.programcode || row.program || index}`,
+      enrollmentPercentage: row.intakecapacity > 0 ? Number(((row.finalStage / row.intakecapacity) * 100).toFixed(2)) : 0
+    })).sort((a, b) => clean(a.program).localeCompare(clean(b.program)));
+
+    const stageSummary = {};
+    const sourceSummary = {};
+    leads.forEach((lead) => {
+      const stage = clean(lead.pipeline_stage) || "Not specified";
+      const source = clean(lead.source) || "Not specified";
+      stageSummary[stage] = (stageSummary[stage] || 0) + 1;
+      sourceSummary[source] = (sourceSummary[source] || 0) + 1;
+    });
+
+    const cards = [
+      { label: "Programs", value: programRows.length },
+      { label: "Total Intake", value: programRows.reduce((sum, row) => sum + Number(row.intakecapacity || 0), 0) },
+      { label: "Total Leads", value: leads.length },
+      { label: "Final Stage", value: programRows.reduce((sum, row) => sum + Number(row.finalStage || 0), 0) },
+      { label: "Other Stages", value: programRows.reduce((sum, row) => sum + Number(row.otherStages || 0), 0) }
+    ];
+
+    res.json({
+      success: true,
+      institution,
+      cards,
+      programRows,
+      stageNames,
+      charts: {
+        programwise: programRows,
+        stagewise: Object.entries(stageSummary).map(([stage, count]) => ({ stage, count })),
+        sourcewise: Object.entries(sourceSummary).map(([source, count]) => ({ source, count })),
+        rawSourcewise: rawSummary
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.searchCrmAdminLeads = async (req, res) => {
+  try {
+    const page = Math.max(0, Number(req.body.page || 0));
+    const limit = Math.min(500, Math.max(1, Number(req.body.limit || 100)));
+    const query = leadSearchQuery(req.body);
+    if (clean(req.body.programSearch)) {
+      const value = clean(req.body.programSearch);
+      query.$and = [...(query.$and || []), { $or: [{ program: value }, { programcode: value }, { course_interested: value }] }];
+    }
+    const [data, total] = await Promise.all([
+      Lead.find(query).sort({ updatedAt: -1 }).skip(page * limit).limit(limit).lean(),
+      Lead.countDocuments(query)
+    ]);
+    res.json({ success: true, data, total, page, limit, totalPages: Math.ceil(total / limit) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.bulkAssignCrmAdminLeads = async (req, res) => {
+  try {
+    const colid = asNumber(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+    const assignmentType = clean(req.body.assignmentType || "Counselor");
+    const person = req.body.person || {};
+    const email = clean(person.email || req.body.email);
+    if (!ids.length || !email) return res.status(400).json({ success: false, message: "Select leads and assignee" });
+    const name = clean(person.name || req.body.name || email);
+    const setFields = {};
+    if (/telecaller/i.test(assignmentType)) {
+      setFields.telecaller = name;
+      setFields.telecalleremail = email;
+      setFields.telecaller_assigned_date = new Date();
+    } else if (/campus/i.test(assignmentType)) {
+      setFields.campusvisitcounselor = name;
+      setFields.campusvisitcounseloremail = email;
+      setFields.campus_visit_assigned_date = new Date();
+    } else {
+      setFields.assignedto = email;
+      setFields.assigned_date = new Date();
+    }
+    const result = await Lead.updateMany({ _id: { $in: ids }, colid }, { $set: setFields, $inc: { reassignment_count: 1 } });
+    const rows = await Lead.find({ _id: { $in: ids }, colid }).select("_id").lean();
+    if (rows.length) {
+      await LeadActivity.insertMany(rows.map((lead) => ({
+        lead_id: lead._id,
+        colid,
+        activity_type: `${assignmentType} Bulk Assignment`,
+        activity_date: new Date(),
+        performed_by: clean(req.body.user),
+        notes: `Assigned to ${name} (${email})`,
+        outcome: "Assigned",
+        next_action: "Follow up"
+      })), { ordered: false });
+    }
+    res.json({ success: true, modified: result.modifiedCount || 0 });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.getCrmAdminLeadHistory = async (req, res) => {
+  try {
+    const colid = asNumber(req.query.colid || req.body.colid);
+    const leadid = clean(req.query.leadid || req.body.leadid);
+    const lead = await Lead.findOne({ _id: leadid, colid }).lean();
+    if (!lead) return res.status(404).json({ success: false, message: "Lead not found" });
+    const activities = await LeadActivity.find({ lead_id: lead._id, colid }).sort({ activity_date: -1, createdAt: -1 }).lean();
+    const legacy = [lead.comments, lead.fcomments].filter((item) => clean(item)).map((item, index) => ({
+      _id: `legacy-${index}`,
+      activity_type: "Legacy Comment",
+      activity_date: lead.updatedAt || lead.createdAt,
+      performed_by: lead.assignedto || lead.user,
+      notes: item,
+      outcome: lead.pipeline_stage || ""
+    }));
+    res.json({ success: true, lead, activities: [...activities, ...legacy].sort((a, b) => new Date(b.activity_date || b.createdAt || 0) - new Date(a.activity_date || a.createdAt || 0)) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const crmUserRoles = ["crmadmin", "counselor", "telecaller", "campusvisit"];
+
+const normalizeCrmUserPayload = (body = {}) => {
+  const role = clean(body.role).toLowerCase();
+  const email = clean(body.email).toLowerCase();
+  const name = clean(body.name);
+  const department = clean(body.department || "CRM");
+  const designation = clean(body.designation || role || "CRM User");
+  const admissionyear = clean(body.admissionyear || body.academicyear || new Date().getFullYear());
+  return {
+    email,
+    googleemail: clean(body.googleemail || email),
+    name,
+    phone: clean(body.phone),
+    password: clean(body.password || "Password@123"),
+    role,
+    regno: clean(body.regno || `CRM-${email.split("@")[0] || Date.now()}`),
+    program: clean(body.program || "NA"),
+    programcode: clean(body.programcode || "NA"),
+    admissionyear,
+    academicyear: clean(body.academicyear || admissionyear),
+    semester: clean(body.semester || "NA"),
+    section: clean(body.section || "NA"),
+    department,
+    designation,
+    gender: clean(body.gender),
+    state: clean(body.state),
+    city: clean(body.city),
+    district: clean(body.district),
+    pincode: clean(body.pincode),
+    address: clean(body.address),
+    institution: clean(body.institution),
+    excluded: clean(body.excluded || "No") === "Yes" ? "Yes" : "No",
+    authenticator: clean(body.authenticator || "Yes") === "No" ? "No" : "Yes",
+    joiningdate: body.joiningdate ? new Date(body.joiningdate) : undefined,
+    colid: asNumber(body.colid),
+    status: Number(body.status || 1),
+    user: clean(body.user),
+    addedby: clean(body.user),
+    status1: clean(body.status1 || "Submitted"),
+    comments: clean(body.comments || "Created from CRM admin dashboard")
+  };
+};
+
+exports.getCrmAdminUsers = async (req, res) => {
+  try {
+    const colid = asNumber(req.query.colid || req.body.colid);
+    const search = clean(req.query.search || req.body.search);
+    const query = { colid, role: { $in: crmUserRoles } };
+    if (search) {
+      const regex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      query.$or = [{ name: regex }, { email: regex }, { phone: regex }, { role: regex }, { department: regex }, { designation: regex }];
+    }
+    const data = await User.find(query)
+      .select("name email phone role department designation joiningdate googleemail institution excluded authenticator status createdAt updatedAt colid")
+      .sort({ role: 1, name: 1 })
+      .lean();
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.saveCrmAdminUser = async (req, res) => {
+  try {
+    const data = normalizeCrmUserPayload(req.body);
+    if (!data.colid || !data.name || !data.email || !data.phone || !data.password || !data.role) {
+      return res.status(400).json({ success: false, message: "Name, email, phone, password and role are required" });
+    }
+    if (!crmUserRoles.includes(data.role)) {
+      return res.status(400).json({ success: false, message: "Role must be crmadmin, counselor, telecaller or campusvisit" });
+    }
+
+    const existingByEmail = await User.findOne({ email: data.email }).lean();
+    if (existingByEmail && String(existingByEmail.colid) !== String(data.colid)) {
+      return res.status(409).json({ success: false, message: "This email is already used in another institution" });
+    }
+
+    let userRow;
+    if (req.body.id) {
+      userRow = await User.findOneAndUpdate({ _id: req.body.id, colid: data.colid }, data, { new: true, runValidators: true });
+      if (!userRow) return res.status(404).json({ success: false, message: "User not found" });
+    } else if (existingByEmail) {
+      userRow = await User.findOneAndUpdate({ _id: existingByEmail._id, colid: data.colid }, data, { new: true, runValidators: true });
+    } else {
+      userRow = await User.create(data);
+    }
+
+    const accessCount = await seedMenuAccessForRole(data.colid, data.role, clean(req.body.user || data.user));
+    res.json({ success: true, data: userRow, accessCount });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.bulkCrmAdminUsers = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body.items) ? req.body.items : [];
+    const results = { saved: 0, errors: [] };
+    for (const [index, row] of rows.entries()) {
+      try {
+        const data = normalizeCrmUserPayload({ ...row, colid: req.body.colid, user: req.body.user });
+        if (!crmUserRoles.includes(data.role)) throw new Error("Invalid CRM role");
+        if (!data.name || !data.email || !data.phone) throw new Error("Name, email and phone are required");
+        const existingByEmail = await User.findOne({ email: data.email }).lean();
+        if (existingByEmail && String(existingByEmail.colid) !== String(data.colid)) throw new Error("Email already exists in another institution");
+        if (existingByEmail) await User.findOneAndUpdate({ _id: existingByEmail._id, colid: data.colid }, data, { runValidators: true });
+        else await User.create(data);
+        await seedMenuAccessForRole(data.colid, data.role, clean(req.body.user));
+        results.saved += 1;
+      } catch (err) {
+        results.errors.push({ rowNumber: row.rowNumber || index + 2, message: err.message });
+      }
+    }
+    res.json({ success: true, ...results });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.deleteCrmAdminUsers = async (req, res) => {
+  try {
+    const colid = asNumber(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select users to delete" });
+    const result = await User.deleteMany({ _id: { $in: ids }, colid, role: { $in: crmUserRoles } });
+    res.json({ success: true, deletedCount: result.deletedCount || 0 });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

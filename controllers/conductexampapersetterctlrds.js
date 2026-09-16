@@ -5,6 +5,7 @@ const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
 const ConductExam = require("../Models/conductexamds");
 const ConductExamCourse = require("../Models/conductexamcourseds");
+const AssessmentComponent = require("../Models/assessmentcomponentds");
 const PaperSetter = require("../Models/conductexampapersetterds");
 const PaperSetterPanel = require("../Models/conductexampapersetterpanelds");
 const PaperSetterPanelMember = require("../Models/conductexampapersetterpanelmemberds");
@@ -98,7 +99,7 @@ const extractTextFromUrl = async (url, filename = "") => {
   }
 };
 
-const courseFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode"];
+const courseFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "component"];
 const setterFields = [...courseFields, "papersettername", "papersetteremail", "status"];
 const panelFields = ["academicyear", "regulation", "program", "programcode", "panelname", "status"];
 const panelMemberFields = [...panelFields, "membername", "memberemail", "role", "department", "approvalstatus", "status"];
@@ -122,6 +123,19 @@ const buildLooseCourseFilter = (source = {}) => {
   ["academicyear", "regulation", "program", "programcode", "type", "subject", "semester", "course", "coursecode"].forEach((field) => {
     if (text(source[field])) filter[field] = text(source[field]);
   });
+  return filter;
+};
+
+const setterIdentityFilter = (item = {}) => {
+  const filter = {
+    colid: item.colid,
+    academicyear: item.academicyear,
+    examcode: item.examcode,
+    programcode: item.programcode,
+    coursecode: item.coursecode,
+    papersetteremail: item.papersetteremail
+  };
+  if (text(item.component)) filter.component = text(item.component);
   return filter;
 };
 
@@ -152,6 +166,7 @@ const baseCoursePayload = (body = {}) => ({
   semester: text(body.semester),
   course: text(body.course),
   coursecode: text(body.coursecode),
+  component: text(body.component || body.assessmentcomponent),
   user: text(body.user)
 });
 
@@ -495,11 +510,13 @@ exports.options = async (req, res) => {
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const courseFilter = buildFilter(req.query, courseFields);
     const examFilter = buildFilter(req.query, ["academicyear", "examcode", "programcode", "semester", "type"]);
-    const [courses, exams, setters, users] = await Promise.all([
+    const componentFilter = buildFilter(req.query, ["academicyear", "regulation", "program", "programcode", "semester", "course", "coursecode"]);
+    const [courses, exams, setters, users, components] = await Promise.all([
       ConductExamCourse.find(courseFilter).sort({ academicyear: -1, examcode: 1, program: 1, course: 1 }).lean(),
       ConductExam.find(examFilter).sort({ academicyear: -1, examcode: 1, examname: 1 }).lean(),
       PaperSetter.find({ colid }).sort({ papersettername: 1 }).lean(),
-      User.find({ colid, role: { $not: /^Student$/i } }).select("name email role department").sort({ name: 1, email: 1 }).lean()
+      User.find({ colid, role: { $not: /^Student$/i } }).select("name email role department").sort({ name: 1, email: 1 }).lean(),
+      AssessmentComponent.find(componentFilter).sort({ academicyear: -1, program: 1, course: 1, assessmentcomponent: 1 }).lean()
     ]);
     res.json({
       success: true,
@@ -507,6 +524,7 @@ exports.options = async (req, res) => {
       exams,
       setters,
       users,
+      components,
       academicyears: uniq([...courses.map((row) => row.academicyear), ...exams.map((row) => row.academicyear)]),
       examcodes: uniq([...courses.map((row) => row.examcode), ...exams.map((row) => row.examcode)])
     });
@@ -829,7 +847,7 @@ exports.saveSetter = async (req, res) => {
     const data = req.body.id
       ? await PaperSetter.findOneAndUpdate({ _id: req.body.id, colid: item.colid }, item, { new: true, runValidators: true })
       : await PaperSetter.findOneAndUpdate(
-        { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, programcode: item.programcode, coursecode: item.coursecode, papersetteremail: item.papersetteremail },
+        setterIdentityFilter(item),
         item,
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
@@ -861,7 +879,7 @@ exports.bulkSetters = async (req, res) => {
         continue;
       }
       await PaperSetter.findOneAndUpdate(
-        { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, programcode: item.programcode, coursecode: item.coursecode, papersetteremail: item.papersetteremail },
+        setterIdentityFilter(item),
         item,
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
@@ -875,7 +893,7 @@ exports.bulkSetters = async (req, res) => {
 
 exports.assignedPapers = async (req, res) => {
   try {
-    const filter = buildFilter(req.query, ["academicyear", "exam", "examcode", "programcode", "coursecode", "status"]);
+    const filter = buildFilter(req.query, ["academicyear", "exam", "examcode", "programcode", "coursecode", "component", "status"]);
     if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     if (text(req.query.papersetteremail || req.query.email)) filter.papersetteremail = text(req.query.papersetteremail || req.query.email).toLowerCase();
     const data = await PaperSetter.find(filter).sort({ academicyear: -1, examcode: 1, course: 1 }).lean();
@@ -976,6 +994,7 @@ exports.saveQuestionPaper = async (req, res) => {
     const payload = {
       ...setterData,
       papersetterid: setter._id,
+      component: text(req.body.component) || text(setter.component),
       status: requestedStatus,
       paperattachmenturl: text(req.body.paperattachmenturl),
       paperattachmentfilename: text(req.body.paperattachmentfilename),

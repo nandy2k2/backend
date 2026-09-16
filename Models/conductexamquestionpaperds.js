@@ -70,6 +70,7 @@ const conductExamQuestionPaperSchema = new mongoose.Schema({
   semester: { type: String, trim: true },
   course: { type: String, required: true, trim: true },
   coursecode: { type: String, required: true, trim: true },
+  component: { type: String, trim: true },
   papersettername: { type: String, required: true, trim: true },
   papersetteremail: { type: String, required: true, trim: true, lowercase: true },
   status: { type: String, trim: true, default: "Draft" },
@@ -134,6 +135,7 @@ conductExamQuestionPaperSchema.index({
   examcode: 1,
   programcode: 1,
   coursecode: 1,
+  component: 1,
   papersetteremail: 1
 }, { unique: true });
 

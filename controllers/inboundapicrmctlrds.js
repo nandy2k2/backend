@@ -5,6 +5,7 @@ const CrmInboundApi = require("../Models/crminboundapids");
 const CrmFormLink = require("../Models/crmformlinkds");
 const CrmAiAgent = require("../Models/crmaiagentds");
 const CrmAiAgentLog = require("../Models/crmaiagentlogds");
+const PipelineStage = require("../Models/PipelineStageag");
 const AdmissionDynamicForm = require("../Models/admissiondynamicform");
 const AdmissionFormField = require("../Models/admissionformfield");
 const AdmissionApplication = require("../Models/admissionapplicationdynamic");
@@ -65,6 +66,12 @@ const replaceLeadTokens = (template, lead = {}) => {
     leadid: lead._id
   };
   return clean(template).replace(/\{([^}]+)\}/g, (_, token) => clean(values[clean(token).toLowerCase()] ?? ""));
+};
+
+const stageMatches = (configuredStage, leadStage) => {
+  const configured = clean(configuredStage);
+  if (!configured || /^All$/i.test(configured)) return true;
+  return configured.toLowerCase() === clean(leadStage).toLowerCase();
 };
 
 const normalizeAdmissionPayload = (body, api) => {
@@ -360,8 +367,11 @@ exports.submitCrmPublicForm = async (req, res) => {
 exports.getCrmAiAgents = async (req, res) => {
   try {
     const colid = num(req.query.colid);
-    const rows = await CrmAiAgent.find({ colid }).sort({ updatedAt: -1 }).lean();
-    res.json({ success: true, data: rows });
+    const [rows, stages] = await Promise.all([
+      CrmAiAgent.find({ colid }).sort({ updatedAt: -1 }).lean(),
+      PipelineStage.find({ colid, isactive: { $ne: false } }).sort({ stagename: 1, name: 1 }).lean()
+    ]);
+    res.json({ success: true, data: rows, stages });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -388,7 +398,10 @@ exports.saveCrmAiAgent = async (req, res) => {
         program: clean(req.body.program),
         programcode,
         level: clean(req.body.level),
+        pipeline_stage: clean(req.body.pipeline_stage || "All"),
         agentname: clean(req.body.agentname || "CRM Email Agent"),
+        repeat: /^Yes$/i.test(clean(req.body.repeat)) ? "Yes" : "No",
+        repeatminutes: Math.max(1, num(req.body.repeatminutes, 1440)),
         status: clean(req.body.status || "Active"),
         levels,
         user: clean(req.body.user),
@@ -396,6 +409,7 @@ exports.saveCrmAiAgent = async (req, res) => {
       },
       { upsert: !req.body.id, new: true }
     );
+    scheduleExistingCrmAgentLeads(row);
     res.json({ success: true, data: row });
   } catch (error) {
     if (error.code === 11000) return res.status(400).json({ success: false, message: "CRM AI agent already exists for this program and level" });
@@ -429,6 +443,7 @@ exports.getCrmAiAgentLogs = async (req, res) => {
 
 const scheduleCrmEmail = async ({ agent, level, lead, cumulativeDelayMinutes }) => {
   if (!lead?._id || !lead.email) return;
+  if (!stageMatches(agent.pipeline_stage, lead.pipeline_stage)) return;
   const scheduledfor = new Date(Date.now() + Math.max(0, cumulativeDelayMinutes) * 60 * 1000);
   let log;
   try {
@@ -445,6 +460,7 @@ const scheduleCrmEmail = async ({ agent, level, lead, cumulativeDelayMinutes }) 
           programcode: agent.programcode,
           levelname: agent.level,
           level: level.level,
+          pipeline_stage: clean(agent.pipeline_stage || "All"),
           delayminutes: level.delayminutes,
           scheduledfor,
           subject: replaceLeadTokens(level.subject, lead),
@@ -459,10 +475,20 @@ const scheduleCrmEmail = async ({ agent, level, lead, cumulativeDelayMinutes }) 
     return;
   }
   if (!/^Scheduled$/i.test(log.status)) return;
-  setTimeout(async () => {
+  const runSend = async () => {
     const currentLog = await CrmAiAgentLog.findById(log._id);
     if (!currentLog || !/^Scheduled$/i.test(currentLog.status)) return;
     try {
+      const [currentAgent, currentLead] = await Promise.all([
+        CrmAiAgent.findById(agent._id).lean(),
+        Lead.findOne({ _id: lead._id, colid: agent.colid }).lean()
+      ]);
+      if (!currentAgent || !/^Active$/i.test(clean(currentAgent.status)) || !currentLead || !stageMatches(currentAgent.pipeline_stage, currentLead.pipeline_stage)) {
+        currentLog.status = "Stopped";
+        currentLog.error = "Pipeline stage changed or agent inactive";
+        await currentLog.save();
+        return;
+      }
       const mailConfig = await defaultEmailConfig(agent.colid);
       if (!mailConfig?.username || !mailConfig?.password) throw new Error("Default email configuration missing");
       const transporter = createTransporter(mailConfig);
@@ -477,12 +503,37 @@ const scheduleCrmEmail = async ({ agent, level, lead, cumulativeDelayMinutes }) 
       currentLog.sentat = new Date();
       currentLog.error = "";
       await currentLog.save();
+      if (/^Yes$/i.test(clean(currentAgent.repeat))) {
+        currentLog.status = "Scheduled";
+        currentLog.scheduledfor = new Date(Date.now() + Math.max(1, Number(currentAgent.repeatminutes || 1440)) * 60 * 1000);
+        await currentLog.save();
+        setTimeout(runSend, Math.max(1, Number(currentAgent.repeatminutes || 1440)) * 60 * 1000);
+      }
     } catch (error) {
       currentLog.status = "Failed";
       currentLog.error = error.message;
       await currentLog.save();
     }
-  }, Math.max(0, cumulativeDelayMinutes) * 60 * 1000);
+  };
+  setTimeout(runSend, Math.max(0, cumulativeDelayMinutes) * 60 * 1000);
+};
+
+const scheduleExistingCrmAgentLeads = async (agent) => {
+  if (!agent || !/^Active$/i.test(clean(agent.status))) return;
+  const query = {
+    colid: agent.colid,
+    $or: [{ programcode: agent.programcode }, { product: agent.programcode }]
+  };
+  if (clean(agent.level)) query.program_type = agent.level;
+  if (!/^All$/i.test(clean(agent.pipeline_stage))) query.pipeline_stage = agent.pipeline_stage;
+  const leads = await Lead.find(query).limit(1000).lean();
+  leads.forEach((lead) => {
+    let cumulative = 0;
+    (agent.levels || []).slice().sort((a, b) => Number(a.level || 0) - Number(b.level || 0)).forEach((item) => {
+      cumulative += Math.max(0, Number(item.delayminutes || 0));
+      scheduleCrmEmail({ agent, level: item, lead, cumulativeDelayMinutes: cumulative });
+    });
+  });
 };
 
 const emitCrmLeadSubmitted = (lead) => {
@@ -505,7 +556,7 @@ exports.registerCrmAiAgentProcessor = () => {
       const query = { colid, status: /^Active$/i, programcode };
       if (level) query.$or = [{ level }, { level: "" }, { level: { $exists: false } }];
       const agents = await CrmAiAgent.find(query).lean();
-      agents.forEach((agent) => {
+      agents.filter((agent) => stageMatches(agent.pipeline_stage, lead.pipeline_stage)).forEach((agent) => {
         let cumulative = 0;
         (agent.levels || []).slice().sort((a, b) => Number(a.level || 0) - Number(b.level || 0)).forEach((item) => {
           cumulative += Math.max(0, Number(item.delayminutes || 0));

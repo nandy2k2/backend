@@ -44,6 +44,9 @@ type: String
 totalcredits: {
 type: Number
 },
+intakecapacity: {
+type: Number
+},
 excluded: {
 type: String,
 enum: ["Yes", "No"],

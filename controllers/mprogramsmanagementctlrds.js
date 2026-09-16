@@ -15,6 +15,8 @@ const programPayload = (body = {}) => {
   const parsedDuration = durationValue === '' || durationValue === undefined || durationValue === null ? 0 : Number(durationValue);
   const totalCreditsValue = body.totalcredits ?? body.totalCredits ?? body["total credits"] ?? body.TotalCredits ?? body["Total credits"];
   const parsedTotalCredits = totalCreditsValue === '' || totalCreditsValue === undefined || totalCreditsValue === null ? 0 : Number(totalCreditsValue);
+  const intakeCapacityValue = body.intakecapacity ?? body.intakeCapacity ?? body["intake capacity"] ?? body.IntakeCapacity ?? body["Intake capacity"];
+  const parsedIntakeCapacity = intakeCapacityValue === '' || intakeCapacityValue === undefined || intakeCapacityValue === null ? 0 : Number(intakeCapacityValue);
   return {
     name: text(body.name || program),
     user: text(body.user),
@@ -29,6 +31,7 @@ const programPayload = (body = {}) => {
     faculty: text(body.faculty || body.Faculty),
     durationinyear: Number.isNaN(parsedDuration) ? 0 : parsedDuration,
     totalcredits: Number.isNaN(parsedTotalCredits) ? 0 : parsedTotalCredits,
+    intakecapacity: Number.isNaN(parsedIntakeCapacity) ? 0 : parsedIntakeCapacity,
     excluded: /^yes$/i.test(text(body.excluded || body.Excluded)) ? "Yes" : "No",
     typeofsession: text(body.typeofsession || body.typeOfSession || body["type of session"] || body.TypeOfSession || body["Type of session"]),
     introductionyear: text(body.introductionyear || body.introductionYear || body["introduction year"] || body.IntroductionYear || body["Introduction year"]),

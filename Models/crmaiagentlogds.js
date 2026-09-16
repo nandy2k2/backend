@@ -9,6 +9,7 @@ const CrmAiAgentLogSchema = new mongoose.Schema({
   program: { type: String, trim: true },
   programcode: { type: String, trim: true },
   levelname: { type: String, trim: true },
+  pipeline_stage: { type: String, trim: true },
   level: { type: Number, required: true },
   delayminutes: { type: Number, default: 0 },
   scheduledfor: Date,

@@ -13,6 +13,7 @@ const conductExamModeratorSchema = new mongoose.Schema({
   semester: { type: String, trim: true },
   course: { type: String, required: true, trim: true },
   coursecode: { type: String, required: true, trim: true },
+  component: { type: String, trim: true },
   moderatorname: { type: String, required: true, trim: true },
   moderatoremail: { type: String, required: true, trim: true, lowercase: true },
   startdate: { type: Date },
@@ -34,6 +35,7 @@ conductExamModeratorSchema.index({
   examcode: 1,
   programcode: 1,
   coursecode: 1,
+  component: 1,
   moderatoremail: 1
 }, { unique: true });
 

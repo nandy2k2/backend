@@ -27,6 +27,44 @@ const validNumber = (value) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
 };
+const pad2 = (value) => String(value).padStart(2, "0");
+const timezoneOffsetMinutes = (timezone, utcDate) => {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone || "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(utcDate).reduce((acc, part) => {
+      if (part.type !== "literal") acc[part.type] = part.value;
+      return acc;
+    }, {});
+    const localAsUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second || 0));
+    return (localAsUtc - utcDate.getTime()) / 60000;
+  } catch (error) {
+    return 0;
+  }
+};
+const zonedDateTimeToUtcFields = (classdate, classtime, timezone) => {
+  const dateText = text(classdate);
+  const timeText = text(classtime);
+  const zone = text(timezone) || "UTC";
+  if (!dateText || !timeText || zone === "UTC") return { classdate: dateText, classtime: timeText };
+  const [year, month, day] = dateText.split("-").map(Number);
+  const [hour = 0, minute = 0] = timeText.split(":").map(Number);
+  if (![year, month, day, hour, minute].every(Number.isFinite)) return { classdate: dateText, classtime: timeText };
+  const guessedUtc = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+  const offset = timezoneOffsetMinutes(zone, guessedUtc);
+  const utc = new Date(guessedUtc.getTime() - offset * 60000);
+  return {
+    classdate: `${utc.getUTCFullYear()}-${pad2(utc.getUTCMonth() + 1)}-${pad2(utc.getUTCDate())}`,
+    classtime: `${pad2(utc.getUTCHours())}:${pad2(utc.getUTCMinutes())}`
+  };
+};
 const encodeS3Key = (key) => String(key || "").split("/").map(encodeURIComponent).join("/");
 const s3Url = (bucket, region, key) => {
   const encodedKey = encodeS3Key(key);
@@ -75,30 +113,39 @@ const resourcePayload = (body = {}) => ({
   status: text(body.status) || "Active"
 });
 
-const timetablePayload = (body = {}) => ({
-  ...coursePayload(body),
-  faculty: text(body.faculty || body.facultyname),
-  major: text(body.major || body.subject),
-  section: text(body.section),
-  classgroup: text(body.classgroup),
-  enrollmentgroup: text(body.enrollmentgroup),
-  enrollmentgroupid: body.enrollmentgroupid || undefined,
-  specialization: text(body.specialization),
-  classdate: text(body.classdate),
-  classtime: text(body.classtime),
-  period: text(body.period),
-  durationminutes: number(body.durationminutes || body.durationMinutes),
-  module: text(body.module),
-  topic: text(body.topic),
-  lecturetype: text(body.lecturetype) || "Theory",
-  workcompleted: body.workcompleted === undefined ? "" : text(body.workcompleted),
-  onlineenabled: text(body.onlineenabled) || "No",
-  onlineclassstatus: text(body.onlineclassstatus) || "Scheduled",
-  onlineclassstartedat: body.onlineclassstartedat || undefined,
-  onlineclassendedat: body.onlineclassendedat || undefined,
-  onlineclasslink: text(body.onlineclasslink),
-  status: text(body.status) || "Active"
-});
+const timetablePayload = (body = {}) => {
+  const timezone = text(body.timezone) || "UTC";
+  const localclassdate = text(body.localclassdate || body.classdate);
+  const localclasstime = text(body.localclasstime || body.classtime);
+  const adjusted = zonedDateTimeToUtcFields(localclassdate, localclasstime, timezone);
+  return {
+    ...coursePayload(body),
+    faculty: text(body.faculty || body.facultyname),
+    major: text(body.major || body.subject),
+    section: text(body.section),
+    classgroup: text(body.classgroup),
+    enrollmentgroup: text(body.enrollmentgroup),
+    enrollmentgroupid: body.enrollmentgroupid || undefined,
+    specialization: text(body.specialization),
+    timezone,
+    localclassdate,
+    localclasstime,
+    classdate: adjusted.classdate,
+    classtime: adjusted.classtime,
+    period: text(body.period),
+    durationminutes: number(body.durationminutes || body.durationMinutes),
+    module: text(body.module),
+    topic: text(body.topic),
+    lecturetype: text(body.lecturetype) || "Theory",
+    workcompleted: body.workcompleted === undefined ? "" : text(body.workcompleted),
+    onlineenabled: text(body.onlineenabled) || "No",
+    onlineclassstatus: text(body.onlineclassstatus) || "Scheduled",
+    onlineclassstartedat: body.onlineclassstartedat || undefined,
+    onlineclassendedat: body.onlineclassendedat || undefined,
+    onlineclasslink: text(body.onlineclasslink),
+    status: text(body.status) || "Active"
+  };
+};
 
 const courseFilter = (source = {}) => {
   const filter = {};
@@ -127,6 +174,7 @@ const courseFilter = (source = {}) => {
     "floor",
     "roomid",
     "roomno",
+    "timezone",
     "classdate",
     "period",
     "lecturetype",

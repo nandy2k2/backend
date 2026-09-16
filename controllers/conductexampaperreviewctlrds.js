@@ -106,7 +106,7 @@ exports.options = async (req, res) => {
 
 exports.getPapers = async (req, res) => {
   try {
-    const filter = buildFilter(req.query, ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "papersetteremail", "status"]);
+    const filter = buildFilter(req.query, ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "component", "papersetteremail", "status"]);
     if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const data = await QuestionPaper.find(filter).sort({ academicyear: -1, examcode: 1, program: 1, course: 1, papersettername: 1 }).lean();
     res.json({ success: true, data });

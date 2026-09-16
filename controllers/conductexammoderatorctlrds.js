@@ -1,4 +1,5 @@
 const ConductExamCourse = require("../Models/conductexamcourseds");
+const AssessmentComponent = require("../Models/assessmentcomponentds");
 const Moderator = require("../Models/conductexammoderatords");
 const ModeratorPanel = require("../Models/conductexammoderatorpanelds");
 const ModeratorPanelMember = require("../Models/conductexammoderatorpanelmemberds");
@@ -37,7 +38,7 @@ const parseJson = (content) => {
   return JSON.parse(start >= 0 && end > start ? clean.slice(start, end + 1) : clean);
 };
 
-const courseFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode"];
+const courseFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "component"];
 const moderatorFields = [...courseFields, "moderatorname", "moderatoremail", "status"];
 const panelFields = ["academicyear", "regulation", "program", "programcode", "panelname", "status"];
 const panelMemberFields = [...panelFields, "membername", "memberemail", "role", "department", "approvalstatus", "status"];
@@ -49,6 +50,19 @@ const buildFilter = (source = {}, fields = []) => {
   fields.forEach((field) => {
     if (text(source[field])) filter[field] = text(source[field]);
   });
+  return filter;
+};
+
+const moderatorIdentityFilter = (item = {}) => {
+  const filter = {
+    colid: item.colid,
+    academicyear: item.academicyear,
+    examcode: item.examcode,
+    programcode: item.programcode,
+    coursecode: item.coursecode,
+    moderatoremail: item.moderatoremail
+  };
+  if (text(item.component)) filter.component = text(item.component);
   return filter;
 };
 
@@ -65,6 +79,7 @@ const baseCoursePayload = (body = {}) => ({
   semester: text(body.semester),
   course: text(body.course),
   coursecode: text(body.coursecode),
+  component: text(body.component || body.assessmentcomponent),
   user: text(body.user)
 });
 
@@ -164,14 +179,18 @@ const callGemini = async (colid, model, prompt) => {
 
 const moderatorReadyStatuses = ["InvigilatorSubmitted", "Moderation In Progress", "Moderation Submitted"];
 
-const findPaperForModerator = async (moderator) => QuestionPaper.findOne({
-  colid: moderator.colid,
-  academicyear: moderator.academicyear,
-  examcode: moderator.examcode,
-  programcode: moderator.programcode,
-  coursecode: moderator.coursecode,
-  status: { $in: moderatorReadyStatuses }
-}).sort({ updatedAt: -1 }).lean();
+const findPaperForModerator = async (moderator) => {
+  const filter = {
+    colid: moderator.colid,
+    academicyear: moderator.academicyear,
+    examcode: moderator.examcode,
+    programcode: moderator.programcode,
+    coursecode: moderator.coursecode,
+    status: { $in: moderatorReadyStatuses }
+  };
+  if (text(moderator.component)) filter.component = text(moderator.component);
+  return QuestionPaper.findOne(filter).sort({ updatedAt: -1 }).lean();
+};
 
 const auditBase = (moderator, paper, body = {}) => ({
   colid: moderator.colid,
@@ -185,6 +204,7 @@ const auditBase = (moderator, paper, body = {}) => ({
   programcode: moderator.programcode,
   course: moderator.course,
   coursecode: moderator.coursecode,
+  component: text(moderator.component || paper?.component),
   actorname: text(body.actorname || body.name),
   actoremail: text(body.actoremail || body.user),
   user: text(body.user)
@@ -195,12 +215,14 @@ exports.options = async (req, res) => {
     const colid = number(req.query.colid);
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const courseFilter = buildFilter(req.query, courseFields);
-    const [courses, moderators, users] = await Promise.all([
+    const componentFilter = buildFilter(req.query, ["academicyear", "regulation", "program", "programcode", "semester", "course", "coursecode"]);
+    const [courses, moderators, users, components] = await Promise.all([
       ConductExamCourse.find(courseFilter).sort({ academicyear: -1, examcode: 1, program: 1, course: 1 }).lean(),
       Moderator.find({ colid }).sort({ moderatorname: 1 }).lean(),
-      User.find({ colid, role: { $not: /^Student$/i } }).select("name email role department").sort({ name: 1, email: 1 }).lean()
+      User.find({ colid, role: { $not: /^Student$/i } }).select("name email role department").sort({ name: 1, email: 1 }).lean(),
+      AssessmentComponent.find(componentFilter).sort({ academicyear: -1, program: 1, course: 1, assessmentcomponent: 1 }).lean()
     ]);
-    res.json({ success: true, courses, moderators, users, academicyears: uniq(courses.map((row) => row.academicyear)), examcodes: uniq(courses.map((row) => row.examcode)) });
+    res.json({ success: true, courses, moderators, users, components, academicyears: uniq(courses.map((row) => row.academicyear)), examcodes: uniq(courses.map((row) => row.examcode)) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -392,7 +414,7 @@ exports.saveModerator = async (req, res) => {
     const data = req.body.id
       ? await Moderator.findOneAndUpdate({ _id: req.body.id, colid: item.colid }, item, { new: true, runValidators: true })
       : await Moderator.findOneAndUpdate(
-        { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, programcode: item.programcode, coursecode: item.coursecode, moderatoremail: item.moderatoremail },
+        moderatorIdentityFilter(item),
         item,
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
@@ -424,7 +446,7 @@ exports.bulkModerators = async (req, res) => {
         continue;
       }
       await Moderator.findOneAndUpdate(
-        { colid: item.colid, academicyear: item.academicyear, examcode: item.examcode, programcode: item.programcode, coursecode: item.coursecode, moderatoremail: item.moderatoremail },
+        moderatorIdentityFilter(item),
         item,
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
@@ -438,14 +460,14 @@ exports.bulkModerators = async (req, res) => {
 
 exports.assignedPapers = async (req, res) => {
   try {
-    const filter = buildFilter(req.query, ["academicyear", "exam", "examcode", "programcode", "coursecode", "status"]);
+    const filter = buildFilter(req.query, ["academicyear", "exam", "examcode", "programcode", "coursecode", "component", "status"]);
     if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     if (text(req.query.moderatoremail || req.query.email)) filter.moderatoremail = text(req.query.moderatoremail || req.query.email).toLowerCase();
     const moderators = await Moderator.find(filter).sort({ academicyear: -1, examcode: 1, course: 1 }).lean();
     const data = [];
     for (const moderator of moderators) {
       const paper = await findPaperForModerator(moderator);
-      if (paper) data.push({ ...moderator, questionpaperid: paper._id || "", paperstatus: paper.status || "", haspaper: true });
+      if (paper) data.push({ ...moderator, component: text(moderator.component || paper.component), questionpaperid: paper._id || "", paperstatus: paper.status || "", haspaper: true });
     }
     res.json({ success: true, data });
   } catch (error) {

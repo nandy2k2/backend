@@ -1385,6 +1385,146 @@ exports.getExamRolls = async (req, res) => {
   }
 };
 
+exports.getExamRollDatePopulationStatus = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    const academicyear = text(req.query.academicyear);
+    const examcode = text(req.query.examcode);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!academicyear || !examcode) return res.status(400).json({ success: false, message: "Academic year and exam code are required" });
+
+    const courseFilter = { colid, academicyear, examcode };
+    ["regulation", "program", "programcode", "type", "subject", "semester", "course", "coursecode"].forEach((field) => {
+      if (text(req.query[field])) courseFilter[field] = text(req.query[field]);
+    });
+    const courses = await ConductExamCourse.find(courseFilter).sort({ program: 1, semester: 1, course: 1 }).lean();
+    const rows = [];
+    let totalRolls = 0;
+    let matched = 0;
+    let mismatched = 0;
+    let blank = 0;
+    let noRoll = 0;
+    let schedulerBlank = 0;
+
+    for (const course of courses) {
+      const rollFilter = {
+        colid,
+        academicyear,
+        examcode,
+        regulation: course.regulation,
+        programcode: course.programcode,
+        semester: course.semester,
+        coursecode: course.coursecode
+      };
+      const rolls = await ConductExamRoll.find(rollFilter).select("examdate examslot regno student").lean();
+      const schedulerDate = text(course.examdate);
+      const schedulerSlot = text(course.examslot);
+      const schedulerDateSlotBlank = !schedulerDate || !schedulerSlot;
+      const matchingRows = rolls.filter((roll) => text(roll.examdate) === schedulerDate && text(roll.examslot) === schedulerSlot);
+      const blankRows = rolls.filter((roll) => !text(roll.examdate) || !text(roll.examslot));
+      const mismatchRows = rolls.filter((roll) => {
+        if (!text(roll.examdate) || !text(roll.examslot)) return false;
+        return text(roll.examdate) !== schedulerDate || text(roll.examslot) !== schedulerSlot;
+      });
+      const status = !rolls.length
+        ? "No roll"
+        : schedulerDateSlotBlank
+          ? "Scheduler blank"
+          : mismatchRows.length
+            ? "Mismatch"
+            : blankRows.length
+              ? "Blank"
+              : "Matched";
+      totalRolls += rolls.length;
+      matched += matchingRows.length;
+      mismatched += mismatchRows.length;
+      blank += blankRows.length;
+      if (!rolls.length) noRoll += 1;
+      if (schedulerDateSlotBlank) schedulerBlank += 1;
+      rows.push({
+        _id: String(course._id),
+        courseid: String(course._id),
+        academicyear: course.academicyear,
+        regulation: course.regulation,
+        exam: course.exam,
+        examcode: course.examcode,
+        program: course.program,
+        programcode: course.programcode,
+        type: course.type,
+        subject: course.subject,
+        semester: course.semester,
+        course: course.course,
+        coursecode: course.coursecode,
+        schedulerExamDate: schedulerDate,
+        schedulerExamSlot: schedulerSlot,
+        rollCount: rolls.length,
+        matchedCount: matchingRows.length,
+        blankCount: blankRows.length,
+        mismatchCount: mismatchRows.length,
+        status,
+        mismatchSample: mismatchRows.slice(0, 5).map((roll) => `${roll.regno}: ${text(roll.examdate) || "-"} / ${text(roll.examslot) || "-"}`).join("; ")
+      });
+    }
+    res.json({
+      success: true,
+      data: rows,
+      summary: {
+        courses: rows.length,
+        totalRolls,
+        matched,
+        mismatched,
+        blank,
+        noRoll,
+        schedulerBlank
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.populateExamRollDatesFromScheduler = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const academicyear = text(req.body.academicyear);
+    const examcode = text(req.body.examcode);
+    const courseIds = Array.isArray(req.body.courseIds) ? req.body.courseIds.filter(Boolean) : [];
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!academicyear || !examcode) return res.status(400).json({ success: false, message: "Academic year and exam code are required" });
+    if (!courseIds.length) return res.status(400).json({ success: false, message: "Select at least one course" });
+
+    const courses = await ConductExamCourse.find({ _id: { $in: courseIds }, colid, academicyear, examcode }).lean();
+    let updated = 0;
+    const details = [];
+    for (const course of courses) {
+      const schedulerDate = text(course.examdate);
+      const schedulerSlot = text(course.examslot);
+      if (!schedulerDate || !schedulerSlot) {
+        details.push({ coursecode: course.coursecode, course: course.course, updated: 0, skipped: "Scheduler date or slot is blank" });
+        continue;
+      }
+      const result = await ConductExamRoll.updateMany(
+        {
+          colid,
+          academicyear,
+          examcode,
+          regulation: course.regulation,
+          programcode: course.programcode,
+          semester: course.semester,
+          coursecode: course.coursecode
+        },
+        { $set: { examdate: schedulerDate, examslot: schedulerSlot, user: text(req.body.user) } }
+      );
+      const count = result.modifiedCount || result.nModified || 0;
+      updated += count;
+      details.push({ coursecode: course.coursecode, course: course.course, examdate: schedulerDate, examslot: schedulerSlot, updated: count });
+    }
+    res.json({ success: true, updated, courses: courses.length, details });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 exports.getExamRollListReportOptions = async (req, res) => {
   try {
     const colid = number(req.query.colid);
