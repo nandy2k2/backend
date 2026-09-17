@@ -277,13 +277,70 @@ const moduleRules = {
     "Fees Application Auto loads templates by student academicyear or admissionyear, regulation, programcode and semester.",
     "Duplicate fee application is prevented by feeid or by academicyear, regulation, programcode, semester, feegroup and feeitem.",
     "Outstanding fees are ledgerstud rows with balance greater than 0; past due also requires duedate before today.",
-    "Counter fee receipts are stored as CounterFee2Transaction records with item-level ledger history."
+    "Counter fee receipts are stored as CounterFee2Transaction records with item-level ledger history.",
+    "If a student cannot download a fees receipt, first compare regno from User by academicyear, student name and programcode with regno from Student Ledger by academicyear, student and programcode. If regno differs, ask to sync the records; if it matches, advise raising a ticket for further details."
   ],
   academic_configuration: [
     "Program Management is stored in mprograms; course lists are in regulationcoursemapds.",
+    "Admin setup sequence: create Program, create Regulation, upload or add Students, add Regulation Subjects, map courses in Regulation Course Map, assign Workload, then create sectionwise Timetable.",
+    "Programcode should auto-follow selected Program in new pages; semester, course and coursecode dropdowns should cascade from Regulation Course Map wherever possible.",
     "Regulation subjects must match academicyear, regulation, program/programcode, subject group and type.",
     "Assessment components must match academicyear, regulation, programcode, coursecode and component metadata.",
+    "Before LMS or exam work starts, check that student User rows have academicyear/admissionyear, regulation, program, programcode, semester and section populated.",
     "When something is not showing, compare colid first, then academic year, regulation, programcode, semester, coursecode and status."
+  ],
+  admin_academic_setup: [
+    "Use Academic Configuration Wizard when available; embedded wizard pages should use the original pages so updates remain in sync.",
+    "Recommended order: Program Management, Regulation Master, Student Data Upload, Regulation Subjects, Regulation Course Map, Workload, Timetable Manager Sectionwise and Elective Enrollment.",
+    "After Program is saved, confirm faculty, institution, department, intake capacity, excluded status and programcode because later reports and dashboards depend on these fields.",
+    "After Regulation Course Map is saved, confirm course type, semester, credit, coursecode and faculty/institution/department fields.",
+    "Use LMS Doctor or Configuration Doctor to check missing workload, syllabus, CO, timetable and student mapping before classes begin."
+  ],
+  fees_configuration: [
+    "Recommended setup order: fee groups/categories, fee items, fee structure, student fee application or ledger creation, late fine configuration, payment gateway configuration and receipt configuration.",
+    "Student Ledger is the operational source for due, paid, concession, balance, due date, paid date and receipt-related values.",
+    "For online payment, programwise ICICI gateway is used only when a matching program/programcode configuration exists; otherwise the common ICICI gateway configuration is used.",
+    "Late fine should be configured by academic year, regulation, program/programcode and fee item, then applied to matching student ledger rows with progress shown.",
+    "If receipts cannot download, compare User regno and Ledger regno for the same academicyear, student name and programcode before checking payment status."
+  ],
+  hr_leave: [
+    "Recommended setup order: employee/staff users, leave types, weekly off, holiday list, leave eligibility, approval workflow and then leave application.",
+    "Bulk upload and bulk delete should be available for leave masters where applicable.",
+    "Leave reports and HR leave dashboard should use date range, department and category filters to summarize monthwise and departmentwise leave.",
+    "If leave approval is enabled, create approver tasks when the request is submitted and mark the task completed when that approver approves or rejects."
+  ],
+  hr_payroll: [
+    "Recommended setup order: employee users, salary structure, due salary, attendance/leave inputs, payable dashboard and salary reports.",
+    "Employee salary structure should contain the recurring salary components; employee due salary stores payable salary entries.",
+    "Payroll reports should filter by date range, academic year, department, category and designation and should support print preview.",
+    "If salary is not visible, check colid, employee email/user id, salary month/date, department and status."
+  ],
+  hr_attendance: [
+    "HR attendance should be recorded datewise for staff users and can be generated as dummy data for testing.",
+    "Daily attendance report shows absent users daywise for a selected date range with charts and print preview.",
+    "Team attendance report uses organization hierarchy to show direct reports and datewise present/absent status.",
+    "If attendance percentage looks wrong, verify duplicate date rows, date range, present/absent values and matching user email."
+  ],
+  faculty_lms_flow: [
+    "Faculty LMS starts from workload: the faculty must have assigned courses for the selected academic year, regulation, program/programcode and semester.",
+    "Faculty should use My Syllabus and My CO for their assigned courses, then Course Workspace for lesson plans, sequence, course material, assignments and quiz.",
+    "Course material and sequential content should use sections and ordered content; uploaded files must use AWS links.",
+    "Attendance pages require matching workload, timetable class and matching students by academic year, regulation, program/programcode, semester and section.",
+    "Use LMS Doctor or attendance diagnostics when a course, class or student does not appear."
+  ],
+  conduct_examination: [
+    "Recommended setup order: assessment components, create exam, populate exam courses, exam auto scheduler, ATKT scheduler if needed, exam roll/rules check, hall ticket, attendance and marks entry/processing.",
+    "Populate Exam Courses should take course type and semester from Regulation Course Map and should be checked before scheduling.",
+    "Exam roll is the source for admit eligibility and appeared/attendance values; marks processing should use the configured marks models and grading templates.",
+    "Before hall tickets, check academic year, exam/examcode, program/programcode, semester, exam dates, exam roll and admit eligibility.",
+    "Use Student Count, Exam Course Scheduler Report and Exam Conduct Doctor to identify missing courses, students, dates, rooms, grading, paper setters or invigilators."
+  ],
+  question_paper_management: [
+    "Recommended setup order: question pattern, paper setter panel, paper setter member approval, paper setter registration, submit question paper, moderator panel, moderator registration, moderation and review.",
+    "Paper setter and moderator panels approve members, not just the panel header; only approved members should appear in registration pages.",
+    "Question papers can use patternwise, mathematical pattern or templatewise submission depending on whether the format comes from a configured pattern or uploaded sample paper.",
+    "Registration should include start date, end date, component, syllabus link and uploaded admin documents; submission should be active only within the date range.",
+    "Moderator and review pages should show documents uploaded by prior stages and preserve question formatting, math symbols, images, tables and drawings."
   ],
   menu_access: [
     "Menu access is stored rolewise in menuaccessds with menugroup, groupname, title, path, role and access.",
@@ -314,8 +371,8 @@ const moduleRules = {
 const tools = [
   {
     name: "get_default_rules",
-    description: "Return default help rules for workload, course material, attendance, lesson plan, users and operational tools.",
-    schema: { module: "optional: workload | course_material | attendance | fees | academic_configuration | menu_access | lesson_plan | users | operational_tools | all" },
+    description: "Return default help rules and platform how-to definitions for academic setup, fees, HR, LMS, examination and question paper workflows.",
+    schema: { module: "optional module key such as workload, course_material, attendance, fees, academic_configuration, admin_academic_setup, fees_configuration, hr_leave, hr_payroll, hr_attendance, faculty_lms_flow, conduct_examination, question_paper_management, menu_access, lesson_plan, users, operational_tools or all" },
     handler: async ({ module }) => {
       const key = text(module).toLowerCase();
       return key && key !== "all" && moduleRules[key] ? { [key]: moduleRules[key] } : moduleRules;
@@ -777,6 +834,74 @@ tools.push(
     }
   },
   {
+    name: "fees_receipt_download_diagnostic",
+    description: "Diagnose why a fees receipt cannot be downloaded by comparing Student regno in User and Student Ledger for academicyear, programcode and student name.",
+    schema: {
+      academicyear: "required",
+      programcode: "required",
+      studentname: "required. This is the student's name as stored in User.name and Ledgerstud.student."
+    },
+    handler: async ({ colid, academicyear, programcode, studentname, context = {} }) => {
+      const missing = ["academicyear", "programcode", "studentname"].filter((field) => !text({ academicyear, programcode, studentname }[field]));
+      if (missing.length) {
+        return {
+          needsUserInput: true,
+          question: `Please provide ${missing.join(", ")} to check why the fees receipt cannot be downloaded.`,
+          checks: [warn("Missing input", `Required value(s) missing: ${missing.join(", ")}`)]
+        };
+      }
+
+      const studentNameText = text(studentname);
+      const userQuery = {
+        colid,
+        role: /^Student$/i,
+        academicyear: text(academicyear),
+        programcode: text(programcode),
+        name: regex(studentNameText)
+      };
+      const ledgerQuery = {
+        colid,
+        academicyear: text(academicyear),
+        programcode: text(programcode),
+        student: regex(studentNameText)
+      };
+
+      if (!context.adminScope && context.role?.toLowerCase() === "student") {
+        if (context.regno) {
+          userQuery.regno = text(context.regno);
+          ledgerQuery.regno = text(context.regno);
+        }
+      }
+
+      const [users, ledgerRows] = await Promise.all([
+        User.find(userQuery).select("name email user regno academicyear program programcode semester section colid").sort({ name: 1 }).limit(20).lean(),
+        Ledgerstud.find(ledgerQuery).select("student name user regno academicyear programcode semester feegroup feeitem amount paid balance status paiddate classdate").sort({ classdate: -1, paiddate: -1 }).limit(50).lean()
+      ]);
+
+      const userRegnos = [...new Set(users.map((row) => text(row.regno)).filter(Boolean))];
+      const ledgerRegnos = [...new Set(ledgerRows.map((row) => text(row.regno)).filter(Boolean))];
+      const matchingRegnos = userRegnos.filter((regno) => ledgerRegnos.includes(regno));
+      const checks = [
+        verdict(users.length > 0, "User student match", users.length ? `${users.length} matching Student user record(s) found.` : "No Student user record found for academicyear, student name and programcode.", { query: userQuery, rows: users }),
+        verdict(ledgerRows.length > 0, "Student ledger match", ledgerRows.length ? `${ledgerRows.length} matching ledger row(s) found.` : "No Student Ledger row found for academicyear, student and programcode.", { query: ledgerQuery, rows: ledgerRows }),
+        verdict(matchingRegnos.length > 0, "Regno consistency", matchingRegnos.length ? `Regno matches in User and Student Ledger: ${matchingRegnos.join(", ")}.` : `Regno mismatch. User regno: ${userRegnos.join(", ") || "-"}; Ledger regno: ${ledgerRegnos.join(", ") || "-"}.`)
+      ];
+
+      return {
+        input: { academicyear: text(academicyear), programcode: text(programcode), studentname: studentNameText },
+        userRegnos,
+        ledgerRegnos,
+        matchingRegnos,
+        users,
+        ledgerRows,
+        checks,
+        recommendation: matchingRegnos.length
+          ? "No regno mismatch was found. There is no error from this basic receipt-download check; raise a ticket for further details."
+          : "The User regno and Student Ledger regno do not match or one side is missing. Ask the admin to sync the records before trying to download the receipt again."
+      };
+    }
+  },
+  {
     name: "menu_access_diagnostic",
     description: "Diagnose why a menu link is not showing for a role or user.",
     schema: { role: "required", path: "optional", title: "optional", menugroup: "optional" },
@@ -923,9 +1048,10 @@ exports.chat = async (req, res) => {
         : `Role ${currentRole || "User"} is restricted to current user context: ${scopedEmail || currentName || "current user"}.`
     });
     steps.push({ status: "running", label: "Gemini planning", detail: "Gemini will choose permitted tools or answer from rules." });
-    const prompt = `You are AI Help, a LangChain-style ERP help assistant for Central Ticketing.
+const prompt = `You are AI Help, a LangChain-style ERP help assistant for Central Ticketing.
 You can answer normally and can request permitted ERP tools for viewing, adding and updating data. You must never suggest deleting data and no delete tool exists.
 Only add or update data when the user explicitly asks for that action and the required values are clear. If required values are missing, ask a follow-up question instead of guessing.
+When the user asks how to use or configure the platform, answer from Default module rules as a practical playbook: give the order of pages, required fields, checks before moving to the next step, common failure reasons and sample prompts they can try. Keep answers specific to this ERP and do not invent page names outside the available rules/tools.
 
 Current user context:
 ${JSON.stringify({ name: currentName || currentUserRecord?.name, user: currentUser, role: currentRole, regno: scopedRegno, email: scopedEmail, adminScope }, null, 2)}

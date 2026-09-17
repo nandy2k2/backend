@@ -89,7 +89,7 @@ const finalStageRegex = /(final|admitted|admission done|enrolled|converted|fee p
 
 const crmAccessCatalog = {
   crmCore: [
-    ["CRM", "CRM", "CRM Admin Dashboard", "/crm-admin-dashboard"],
+    ["Dashboard", "Dashboard", "CRM admin dashboard", "/crm-admin-dashboard"],
     ["CRM", "CRM", "Add CRM users", "/crm-admin-users"],
     ["CRM", "CRM", "CRM masters and leads", "/crm-management"],
     ["CRM", "CRM", "Raw data management", "/raw-data-management"],
@@ -465,6 +465,8 @@ exports.saveTelecallerMappings = async (req, res) => {
       programcode: clean(req.body.programcode),
       telecallername: clean(person.name || person.telecallername || person.email),
       telecalleremail: clean(person.email || person.telecalleremail),
+      counselorname: clean(req.body.counselorname || req.body.counselor?.name),
+      counseloremail: clean(req.body.counseloremail || req.body.counselor?.email),
       type: clean(req.body.type) === "Campus Visit Counselor" ? "Campus Visit Counselor" : "Telecaller",
       status: clean(req.body.status || "Active"),
       colid,
@@ -1434,6 +1436,9 @@ exports.getCrmAdminUsers = async (req, res) => {
       .select("name email phone role department designation joiningdate googleemail institution excluded authenticator status createdAt updatedAt colid")
       .sort({ role: 1, name: 1 })
       .lean();
+    if (data.some((row) => clean(row.role).toLowerCase() === "crmadmin")) {
+      await seedMenuAccessForRole(colid, "crmadmin", clean(req.query.user || req.body.user || "system"));
+    }
     res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

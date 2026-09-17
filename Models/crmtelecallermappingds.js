@@ -7,6 +7,8 @@ const crmTelecallerMappingSchema = new mongoose.Schema(
     programcode: { type: String, trim: true },
     telecallername: { type: String, trim: true },
     telecalleremail: { type: String, trim: true, index: true },
+    counselorname: { type: String, trim: true },
+    counseloremail: { type: String, trim: true, index: true },
     type: { type: String, trim: true, enum: ["Telecaller", "Campus Visit Counselor"], default: "Telecaller" },
     status: { type: String, trim: true, default: "Active" },
     colid: { type: Number, required: true, index: true },
