@@ -39,19 +39,58 @@ const parseTimeParts = (value) => {
   if (hour > 23 || minute > 59) return null;
   return { hour, minute };
 };
+const pad2 = (value) => String(value).padStart(2, "0");
+const timezoneOffsetMinutes = (timezone, utcDate) => {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone || "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(utcDate).reduce((acc, part) => {
+      if (part.type !== "literal") acc[part.type] = part.value;
+      return acc;
+    }, {});
+    const localAsUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second || 0));
+    return (localAsUtc - utcDate.getTime()) / 60000;
+  } catch (error) {
+    return 0;
+  }
+};
+const zonedDateTimeToUtcDate = (classdate, classtime, timezone) => {
+  const dateText = text(classdate);
+  const parts = parseTimeParts(classtime);
+  if (!dateText || !parts) return null;
+  const [year, month, day] = dateText.split("-").map(Number);
+  if (![year, month, day].every(Number.isFinite)) return null;
+  const guessedUtc = new Date(Date.UTC(year, month - 1, day, parts.hour, parts.minute, 0));
+  const offset = timezoneOffsetMinutes(text(timezone) || "UTC", guessedUtc);
+  return new Date(guessedUtc.getTime() - offset * 60000);
+};
+const utcDateToFields = (date) => ({
+  classdate: `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`,
+  classtime: `${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}`
+});
+const classLocalDate = (classInfo = {}) => text(classInfo.localclassdate || classInfo.displayclassdate || classInfo.classdate);
+const classLocalTime = (classInfo = {}) => text(classInfo.localclasstime || classInfo.displayclasstime || classInfo.classtime);
+const classTimezone = (classInfo = {}) => text(classInfo.timezone) || "UTC";
 const buildOtpValidityWindow = (classInfo = {}) => {
-  const classDate = parseClassDate(classInfo.classdate);
-  const startParts = parseTimeParts(classInfo.classtime);
-  if (!classDate || !startParts) return {};
-  const validfrom = new Date(classDate);
-  validfrom.setHours(startParts.hour, startParts.minute, 0, 0);
+  const startDate = classLocalDate(classInfo);
+  const startTime = classLocalTime(classInfo);
+  const timezone = classTimezone(classInfo);
+  const validfrom = zonedDateTimeToUtcDate(startDate, startTime, timezone);
+  if (!validfrom) return {};
 
-  const timeText = text(classInfo.classtime);
+  const timeText = startTime;
   const endText = timeText.includes("-") ? timeText.split("-").slice(1).join("-") : "";
   const endParts = parseTimeParts(endText);
-  const validtill = new Date(validfrom);
+  let validtill = new Date(validfrom);
   if (endParts) {
-    validtill.setHours(endParts.hour, endParts.minute, 0, 0);
+    validtill = zonedDateTimeToUtcDate(startDate, `${pad2(endParts.hour)}:${pad2(endParts.minute)}`, timezone) || validtill;
     if (validtill <= validfrom) validtill.setDate(validtill.getDate() + 1);
   } else {
     validtill.setMinutes(validtill.getMinutes() + (number(classInfo.durationminutes) || 60));
@@ -519,6 +558,9 @@ exports.saveAttendance = async (req, res) => {
     if (!students.length) return res.status(400).json({ success: false, message: "Select at least one student" });
 
     const classid = classInfo._id || classInfo.classid;
+    const localclassdate = classLocalDate(classInfo);
+    const localclasstime = classLocalTime(classInfo);
+    const timezone = classTimezone(classInfo);
     const previousRows = await NepLmsAttendance.find({ colid, classid, type: attendanceType }).lean();
     const hadExistingAttendance = previousRows.length > 0;
     const saved = [];
@@ -547,8 +589,13 @@ exports.saveAttendance = async (req, res) => {
         facultyemail: text(classInfo.facultyemail),
         course: text(classInfo.course),
         coursecode: text(classInfo.coursecode),
-        classdate: text(classInfo.classdate),
-        classtime: text(classInfo.classtime),
+        timezone,
+        localclassdate,
+        localclasstime,
+        utcclassdate: text(classInfo.classdate),
+        utcclasstime: text(classInfo.classtime),
+        classdate: localclassdate,
+        classtime: localclasstime,
         attendance: Number(item.attendance) === 0 ? 0 : 1,
         type: attendanceType,
         comments,
@@ -637,8 +684,13 @@ const attendancePayloadFrom = ({ colid, classInfo, item, attendanceType, attenda
   facultyemail: text(classInfo.facultyemail),
   course: text(classInfo.course),
   coursecode: text(classInfo.coursecode),
-  classdate: text(classInfo.classdate),
-  classtime: text(classInfo.classtime),
+  timezone: classTimezone(classInfo),
+  localclassdate: classLocalDate(classInfo),
+  localclasstime: classLocalTime(classInfo),
+  utcclassdate: text(classInfo.classdate || classInfo.utcclassdate),
+  utcclasstime: text(classInfo.classtime || classInfo.utcclasstime),
+  classdate: classLocalDate(classInfo),
+  classtime: classLocalTime(classInfo),
   attendance: Number(attendance) === 0 ? 0 : 1,
   type: attendanceType,
   comments: text(comments),
@@ -676,6 +728,9 @@ exports.createAttendanceOtps = async (req, res) => {
     const requiredotpcount = await activeOtpCount(colid);
     const otps = Array.from({ length: requiredotpcount }, randomOtp);
     const classid = classInfo._id || classInfo.classid;
+    const localclassdate = classLocalDate(classInfo);
+    const localclasstime = classLocalTime(classInfo);
+    const timezone = classTimezone(classInfo);
     await NepLmsAttendanceOtp.updateMany({ colid, classid, type: attendanceType, status: "Active" }, { status: "Closed" });
     const validfrom = new Date();
     const validtill = new Date(validfrom);
@@ -694,8 +749,13 @@ exports.createAttendanceOtps = async (req, res) => {
       facultyemail: text(classInfo.facultyemail),
       course: text(classInfo.course),
       coursecode: text(classInfo.coursecode),
-      classdate: text(classInfo.classdate),
-      classtime: text(classInfo.classtime),
+      timezone,
+      localclassdate,
+      localclasstime,
+      utcclassdate: text(classInfo.classdate),
+      utcclasstime: text(classInfo.classtime),
+      classdate: localclassdate,
+      classtime: localclasstime,
       durationminutes: number(classInfo.durationminutes) || 0,
       validfrom,
       validtill,
@@ -793,8 +853,11 @@ exports.submitStudentOtps = async (req, res) => {
       facultyemail: session.facultyemail,
       course: session.course,
       coursecode: session.coursecode,
-      classdate: session.classdate,
-      classtime: session.classtime
+      timezone: session.timezone,
+      localclassdate: session.localclassdate || session.classdate,
+      localclasstime: session.localclasstime || session.classtime,
+      classdate: session.utcclassdate || session.classdate,
+      classtime: session.utcclasstime || session.classtime
     };
     const payload = attendancePayloadFrom({
       colid,

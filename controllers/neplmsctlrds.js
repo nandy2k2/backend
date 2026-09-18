@@ -979,15 +979,24 @@ exports.swapTimetable = async (req, res) => {
     if (!first || !second) return res.status(404).json({ success: false, message: "Both classes are required for swapping" });
 
     const firstSlot = {
+      timezone: first.timezone,
+      localclassdate: first.localclassdate,
+      localclasstime: first.localclasstime,
       classdate: first.classdate,
       classtime: first.classtime,
       period: first.period,
       durationminutes: first.durationminutes
     };
+    first.timezone = second.timezone;
+    first.localclassdate = second.localclassdate;
+    first.localclasstime = second.localclasstime;
     first.classdate = second.classdate;
     first.classtime = second.classtime;
     first.period = second.period;
     first.durationminutes = second.durationminutes;
+    second.timezone = firstSlot.timezone;
+    second.localclassdate = firstSlot.localclassdate;
+    second.localclasstime = firstSlot.localclasstime;
     second.classdate = firstSlot.classdate;
     second.classtime = firstSlot.classtime;
     second.period = firstSlot.period;

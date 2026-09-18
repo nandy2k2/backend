@@ -24,6 +24,44 @@ const dateToInput = (date) => {
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 };
+const pad2 = (value) => String(value).padStart(2, "0");
+const timezoneOffsetMinutes = (timezone, utcDate) => {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone || "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(utcDate).reduce((acc, part) => {
+      if (part.type !== "literal") acc[part.type] = part.value;
+      return acc;
+    }, {});
+    const localAsUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second || 0));
+    return (localAsUtc - utcDate.getTime()) / 60000;
+  } catch (error) {
+    return 0;
+  }
+};
+const zonedDateTimeToUtcFields = (classdate, classtime, timezone) => {
+  const dateText = text(classdate);
+  const timeText = text(classtime);
+  const zone = text(timezone) || "UTC";
+  if (!dateText || !timeText || zone === "UTC") return { classdate: dateText, classtime: timeText };
+  const [year, month, day] = dateText.split("-").map(Number);
+  const [hour = 0, minute = 0] = timeText.split(":").map(Number);
+  if (![year, month, day, hour, minute].every(Number.isFinite)) return { classdate: dateText, classtime: timeText };
+  const guessedUtc = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+  const offset = timezoneOffsetMinutes(zone, guessedUtc);
+  const utc = new Date(guessedUtc.getTime() - offset * 60000);
+  return {
+    classdate: `${utc.getUTCFullYear()}-${pad2(utc.getUTCMonth() + 1)}-${pad2(utc.getUTCDate())}`,
+    classtime: `${pad2(utc.getUTCHours())}:${pad2(utc.getUTCMinutes())}`
+  };
+};
 
 const datesBetween = (start, end) => {
   const from = parseDate(start);
@@ -542,33 +580,43 @@ exports.saveGenerated = async (req, res) => {
     const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
     if (!rows.length) return res.status(400).json({ success: false, message: "No timetable rows received" });
-    const payloads = rows.map((row) => ({
-      academicyear: text(row.academicyear),
-      regulation: text(row.regulation),
-      program: text(row.program),
-      programcode: text(row.programcode),
-      faculty: text(row.faculty || row.facultyname),
-      facultyemail: text(row.facultyemail),
-      campus: text(row.campus),
-      building: text(row.building),
-      floor: text(row.floor),
-      roomid: text(row.roomid),
-      roomno: text(row.roomno),
-      major: text(row.major || row.subject),
-      semester: text(row.semester),
-      course: text(row.course),
-      coursecode: text(row.coursecode),
-      classdate: text(row.classdate),
-      classtime: text(row.classtime),
-      period: text(row.period),
-      durationminutes: Number(row.durationminutes || 0),
-      module: text(row.module),
-      topic: text(row.topic),
-      workcompleted: text(row.workcompleted),
-      status: text(row.status) || "Active",
-      colid,
-      user: text(req.body.user)
-    })).filter((row) => row.coursecode && row.classdate && row.classtime);
+    const defaultTimezone = text(req.body.timezone) || "Asia/Kolkata";
+    const payloads = rows.map((row) => {
+      const timezone = text(row.timezone) || defaultTimezone;
+      const localclassdate = text(row.localclassdate || row.classdate);
+      const localclasstime = text(row.localclasstime || row.classtime);
+      const adjusted = zonedDateTimeToUtcFields(localclassdate, localclasstime, timezone);
+      return {
+        academicyear: text(row.academicyear),
+        regulation: text(row.regulation),
+        program: text(row.program),
+        programcode: text(row.programcode),
+        faculty: text(row.faculty || row.facultyname),
+        facultyemail: text(row.facultyemail),
+        campus: text(row.campus),
+        building: text(row.building),
+        floor: text(row.floor),
+        roomid: text(row.roomid),
+        roomno: text(row.roomno),
+        major: text(row.major || row.subject),
+        semester: text(row.semester),
+        course: text(row.course),
+        coursecode: text(row.coursecode),
+        timezone,
+        localclassdate,
+        localclasstime,
+        classdate: adjusted.classdate,
+        classtime: adjusted.classtime,
+        period: text(row.period),
+        durationminutes: Number(row.durationminutes || 0),
+        module: text(row.module),
+        topic: text(row.topic),
+        workcompleted: text(row.workcompleted),
+        status: text(row.status) || "Active",
+        colid,
+        user: text(req.body.user)
+      };
+    }).filter((row) => row.coursecode && row.classdate && row.classtime);
     if (!payloads.length) return res.status(400).json({ success: false, message: "No valid timetable rows received" });
     const inserted = await NepLmsTimetable.insertMany(payloads, { ordered: false });
     res.json({ success: true, saved: inserted.length });

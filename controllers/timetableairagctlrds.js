@@ -41,6 +41,44 @@ const dateOnly = (date) => {
   if (!d) return "";
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
+const pad2 = (value) => String(value).padStart(2, "0");
+const timezoneOffsetMinutes = (timezone, utcDate) => {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone || "UTC",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23"
+    }).formatToParts(utcDate).reduce((acc, part) => {
+      if (part.type !== "literal") acc[part.type] = part.value;
+      return acc;
+    }, {});
+    const localAsUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), Number(parts.second || 0));
+    return (localAsUtc - utcDate.getTime()) / 60000;
+  } catch (error) {
+    return 0;
+  }
+};
+const zonedDateTimeToUtcFields = (classdate, classtime, timezone) => {
+  const dateText = text(classdate);
+  const timeText = text(classtime);
+  const zone = text(timezone) || "UTC";
+  if (!dateText || !timeText || zone === "UTC") return { classdate: dateText, classtime: timeText };
+  const [year, month, day] = dateText.split("-").map(Number);
+  const [hour = 0, minute = 0] = timeText.split(":").map(Number);
+  if (![year, month, day, hour, minute].every(Number.isFinite)) return { classdate: dateText, classtime: timeText };
+  const guessedUtc = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+  const offset = timezoneOffsetMinutes(zone, guessedUtc);
+  const utc = new Date(guessedUtc.getTime() - offset * 60000);
+  return {
+    classdate: `${utc.getUTCFullYear()}-${pad2(utc.getUTCMonth() + 1)}-${pad2(utc.getUTCDate())}`,
+    classtime: `${pad2(utc.getUTCHours())}:${pad2(utc.getUTCMinutes())}`
+  };
+};
 const weekday = (date) => dayOrder[((date instanceof Date ? date : startOfDay(date))?.getDay?.() || 0) - 1] || "Sunday";
 const datesForDay = (from, to, day) => {
   const start = startOfDay(from);
@@ -445,7 +483,23 @@ exports.confirm = async (req, res) => {
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const generated = await Generated.findOne({ colid, _id: req.body.id }).lean();
     if (!generated) return res.status(404).json({ success: false, message: "Generated timetable not found" });
-    const rows = (generated.expandedrows || []).map((row) => ({ ...row, colid, user: text(req.body.user) }));
+    const defaultTimezone = text(req.body.timezone) || "Asia/Kolkata";
+    const rows = (generated.expandedrows || []).map((row) => {
+      const timezone = text(row.timezone) || defaultTimezone;
+      const localclassdate = text(row.localclassdate || row.classdate);
+      const localclasstime = text(row.localclasstime || row.classtime);
+      const adjusted = zonedDateTimeToUtcFields(localclassdate, localclasstime, timezone);
+      return {
+        ...row,
+        timezone,
+        localclassdate,
+        localclasstime,
+        classdate: adjusted.classdate,
+        classtime: adjusted.classtime,
+        colid,
+        user: text(req.body.user)
+      };
+    });
     if (!rows.length) return res.status(400).json({ success: false, message: "No timetable rows available to insert" });
     await NepLmsTimetable.insertMany(rows, { ordered: false });
     await Generated.updateOne({ _id: generated._id, colid }, { $set: { status: "Inserted", insertedcount: rows.length } });
