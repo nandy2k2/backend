@@ -6,6 +6,8 @@ const RegulationSubject = require("../Models/regulationsubjectds");
 const allowedTypes = new Set(["Major", "Minor", "AEC", "SEC", "VAC", "IDC"]);
 const allowedCourseTypes = new Set(["Theory", "Practical"]);
 const allowedDeliveryTypes = new Set(["Compulsory", "Elective"]);
+const allowedPayTypes = new Set(["Paid", "Unpaid"]);
+const allowedElectiveTypes = new Set(["Internal", "External", "Mooc", ""]);
 
 const toNumber = (value) => {
   if (value === "" || value === null || value === undefined) return undefined;
@@ -35,6 +37,8 @@ const cleanPayload = (input = {}) => ({
   coursecode: text(input.coursecode),
   coursetype: allowedCourseTypes.has(normalizeCourseType(input.coursetype || input.courseType)) ? normalizeCourseType(input.coursetype || input.courseType) : "Theory",
   deliverytype: allowedDeliveryTypes.has(text(input.deliverytype || input.deliveryType || input["Delivery Type"])) ? text(input.deliverytype || input.deliveryType || input["Delivery Type"]) : "Compulsory",
+  paytype: allowedPayTypes.has(text(input.paytype || input.payType || input["Pay Type"])) ? text(input.paytype || input.payType || input["Pay Type"]) : "Unpaid",
+  electivetype: allowedElectiveTypes.has(text(input.electivetype || input.electiveType || input["Elective Type"])) ? text(input.electivetype || input.electiveType || input["Elective Type"]) : "",
   coursemastercode: text(input.coursemastercode || input.courseMasterCode),
   credit: toNumber(input.credit) || 0,
   colid: toNumber(input.colid),
@@ -60,7 +64,7 @@ const buildQuery = (source = {}) => {
   const query = {};
   const colid = toNumber(source.colid);
   if (colid !== undefined) query.colid = colid;
-  ["academicyear", "regulation", "subject", "type", "semester", "programcode", "program", "faculty", "institution", "department", "coursecode", "coursetype", "deliverytype", "coursemastercode", "status"].forEach((field) => {
+  ["academicyear", "regulation", "subject", "type", "semester", "programcode", "program", "faculty", "institution", "department", "coursecode", "coursetype", "deliverytype", "paytype", "electivetype", "coursemastercode", "status"].forEach((field) => {
     if (source[field]) query[field] = source[field];
   });
   return query;

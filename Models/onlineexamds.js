@@ -63,6 +63,7 @@ const OnlineExamSchema = new mongoose.Schema({
   category: String,
   program: String,
   programcode: { type: String, index: true },
+  semester: { type: String, index: true },
   course: String,
   coursecode: { type: String, index: true },
   examname: String,

@@ -175,8 +175,10 @@ const cleanPayload = (input = {}) => ({
   semester: text(input.semester),
   course: text(input.course),
   coursecode: text(input.coursecode),
+  unit: text(input.unit || input.Unit),
   module: text(input.module),
   syllabus: text(input.syllabus),
+  coveragepercentage: toNumber(input.coveragepercentage || input.coveragePercentage || input["Coverage Percentage"]) || 0,
   sourcefilelink: text(input.sourcefilelink || input.sourceFileLink || input.documentlink || input.filelink),
   sourcefilename: text(input.sourcefilename || input.sourceFileName || input.documentname || input.filename),
   colid: toNumber(input.colid),
@@ -217,7 +219,7 @@ const buildQuery = (source = {}) => {
   const query = {};
   const colid = toNumber(source.colid);
   if (colid !== undefined) query.colid = colid;
-  ["academicyear", "regulation", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "module"].forEach((field) => {
+  ["academicyear", "regulation", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "unit", "module"].forEach((field) => {
     if (text(source[field])) query[field] = text(source[field]);
   });
   return query;
@@ -273,6 +275,7 @@ exports.getSyllabusOptions = async (req, res) => {
       courseNames: uniq(courseMaps.map((item) => item.course)),
       courseCodes: uniq(courseMaps.map((item) => item.coursecode)),
       courses: [...courseMap.values()].sort((a, b) => String(a.coursecode).localeCompare(String(b.coursecode))),
+      units: uniq(syllabi.map((item) => item.unit)),
       modules: uniq(syllabi.map((item) => item.module))
     });
   } catch (error) {
@@ -305,7 +308,7 @@ Create a complete module-wise syllabus for the selected course.
 Return only valid JSON with this exact shape:
 {
   "items": [
-    { "module": "Module 1: module title", "syllabus": "Detailed comma-separated / paragraph syllabus topics for this module" }
+    { "unit": "1", "module": "Module 1: module title", "syllabus": "Detailed comma-separated / paragraph syllabus topics for this module", "coveragepercentage": 20 }
   ]
 }
 
@@ -378,8 +381,10 @@ exports.generateSyllabusWithAi = async (req, res) => {
     if (!items.length && Array.isArray(aiResult.modules)) items = aiResult.modules;
     items = items.map((item, index) => ({
       ...coursePayload,
+      unit: text(item.unit) || String(index + 1),
       module: text(item.module) || `Module ${index + 1}`,
-      syllabus: text(item.syllabus || item.topics || item.content)
+      syllabus: text(item.syllabus || item.topics || item.content),
+      coveragepercentage: toNumber(item.coveragepercentage || item.coveragePercentage) || 0
     })).filter((item) => item.module && item.syllabus).slice(0, moduleCount);
 
     if (!items.length) return res.status(400).json({ success: false, message: "AI did not return usable syllabus rows" });

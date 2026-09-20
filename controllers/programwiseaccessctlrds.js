@@ -97,7 +97,7 @@ function groupRows(rows, key) {
 
 async function getAccessPrograms(colid, useremail) {
   const access = await ProgramwiseAccess.find({ colid, useremail: text(useremail) })
-    .select("program programcode department useremail username")
+    .select("program programcode semester department useremail username")
     .lean();
   const codes = uniqueSorted(access.map((row) => row.programcode));
   if (!codes.length) return { access, programs: [], codes: [], departments: [] };
@@ -109,6 +109,7 @@ async function getAccessPrograms(colid, useremail) {
   const merged = access.map((row) => ({
     ...row,
     program: row.program || programByCode.get(text(row.programcode))?.program || row.programcode,
+    semester: row.semester || "",
     department: row.department || programByCode.get(text(row.programcode))?.department || "Not specified"
   }));
   return {
@@ -169,6 +170,7 @@ exports.save = async (req, res) => {
           userid: text(entry.userid),
           program: text(entry.program),
           programcode: text(entry.programcode),
+          semester: text(entry.semester),
           department: text(entry.department),
           createdby: text(req.body.createdby || req.body.user),
           user: text(req.body.user)
@@ -180,7 +182,7 @@ exports.save = async (req, res) => {
       const data = [];
       for (const entry of entries) {
         const saved = await ProgramwiseAccess.findOneAndUpdate(
-          { colid, useremail: entry.useremail, programcode: entry.programcode },
+          { colid, useremail: entry.useremail, programcode: entry.programcode, semester: entry.semester },
           entry,
           { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
         );
@@ -199,6 +201,7 @@ exports.save = async (req, res) => {
       userid: text(req.body.userid),
       program: text(req.body.program),
       programcode: text(req.body.programcode),
+      semester: text(req.body.semester),
       department: text(req.body.department),
       createdby: text(req.body.createdby || req.body.user),
       user: text(req.body.user)
@@ -209,7 +212,7 @@ exports.save = async (req, res) => {
       data = await ProgramwiseAccess.findOneAndUpdate({ _id: req.body.id, colid }, payload, { new: true, runValidators: true });
     } else {
       data = await ProgramwiseAccess.findOneAndUpdate(
-        { colid, useremail: payload.useremail, programcode: payload.programcode },
+        { colid, useremail: payload.useremail, programcode: payload.programcode, semester: payload.semester },
         payload,
         { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true }
       );

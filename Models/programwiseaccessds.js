@@ -31,6 +31,11 @@ const programwiseaccessschema = new mongoose.Schema(
       trim: true,
       index: true
     },
+    semester: {
+      type: String,
+      trim: true,
+      default: ""
+    },
     department: {
       type: String,
       trim: true
@@ -47,7 +52,7 @@ const programwiseaccessschema = new mongoose.Schema(
   { timestamps: true }
 );
 
-programwiseaccessschema.index({ colid: 1, useremail: 1, programcode: 1 }, { unique: true });
+programwiseaccessschema.index({ colid: 1, useremail: 1, programcode: 1, semester: 1 }, { unique: true });
 
 module.exports =
   mongoose.models.programwiseaccessds || mongoose.model("programwiseaccessds", programwiseaccessschema);

@@ -29,7 +29,7 @@ const num = (value, fallback = 0) => {
 const esc = (value) => text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const uniq = (arr) => [...new Set((arr || []).map(text).filter(Boolean))].sort();
 const arr = (value) => Array.isArray(value) ? value.map(text).filter(Boolean) : text(value) ? [text(value)] : [];
-const geminiModels = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"];
+const geminiModels = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"];
 const s3Url = (bucket, region, key) => region === "us-east-1"
   ? `https://${bucket}.s3.amazonaws.com/${key.split("/").map(encodeURIComponent).join("/")}`
   : `https://${bucket}.s3.${region}.amazonaws.com/${key.split("/").map(encodeURIComponent).join("/")}`;
@@ -91,6 +91,7 @@ const examPayload = (body = {}) => ({
   category: text(body.category),
   program: text(body.program),
   programcode: text(body.programcode),
+  semester: text(body.semester),
   course: text(body.course),
   coursecode: text(body.coursecode),
   examname: text(body.examname),
@@ -107,7 +108,7 @@ const examPayload = (body = {}) => ({
 
 const dynamicQuery = (body = {}) => {
   const query = { colid: num(body.colid) };
-  ["examcontext", "academicyear", "category", "program", "programcode", "course", "coursecode", "examname", "examcode", "status", "student", "regno", "applicantid", "applicationnumber", "email"].forEach((field) => {
+  ["examcontext", "academicyear", "category", "program", "programcode", "semester", "course", "coursecode", "examname", "examcode", "status", "student", "regno", "applicantid", "applicationnumber", "email"].forEach((field) => {
     if (text(body[field])) query[field] = { $regex: esc(body[field]), $options: "i" };
   });
   if (Array.isArray(body.dynamicFilters)) {
@@ -216,11 +217,11 @@ exports.options = async (req, res) => {
   try {
     const colid = num(req.query.colid);
     const examcontext = text(req.query.examcontext || req.query.context);
-    const responseFields = ["examcontext", "academicyear", "category", "program", "programcode", "course", "coursecode", "examname", "examcode", "student", "regno", "applicationnumber", "email", "status"];
+    const responseFields = ["examcontext", "academicyear", "category", "program", "programcode", "semester", "course", "coursecode", "examname", "examcode", "student", "regno", "applicationnumber", "email", "status"];
     const attemptBase = { colid };
     if (examcontext) attemptBase.examcontext = examcontext;
     const [courses, users, ollama, ...responseValuesList] = await Promise.all([
-      RegulationCourseMap.find({ colid }).select("academicyear program programcode course coursecode").lean(),
+      RegulationCourseMap.find({ colid }).select("academicyear program programcode semester course coursecode").lean(),
       User.find({ colid, role: /^Student$/i }).select("name email regno academicyear program programcode semester").limit(2000).lean(),
       OllamaConfiguration.find({ colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean(),
       ...responseFields.map((field) => OnlineExamAttempt.distinct(field, attemptBase))
@@ -234,7 +235,7 @@ exports.options = async (req, res) => {
       students: users,
       responseValues,
       ollama,
-      geminiModels: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+      geminiModels
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -415,16 +416,25 @@ exports.uploadFile = async (req, res) => {
 
 exports.generateQuestions = async (req, res) => {
   try {
+    const examcontext = text(req.body.examcontext || req.body.context || "Student");
     const modules = arr(req.body.modules || req.body.module);
     const topics = arr(req.body.topics || req.body.topic);
     const cos = arr(req.body.cos || req.body.co);
     const bloomlevels = arr(req.body.bloomlevels || req.body.blooms);
+    const categories = arr(req.body.categories || req.body.categorytemplates || req.body.category);
+    const contextInstruction = /^psychometric$/i.test(examcontext)
+      ? `This is a psychometric test. Create balanced, non-clinical psychometric questions across the selected categories. Focus on career tendency, work style, leadership, collaboration, resilience, analytical preference, communication, values and role fit. Return sectionname/category for each question when possible.`
+      : /^placementpractice$/i.test(examcontext)
+        ? `This is a placement practice test. Create employability/placement questions across selected categories such as technical aptitude, quantitative aptitude, logical reasoning, verbal ability, coding aptitude, HR/interview readiness and entrance-test style preparation. Return sectionname/category for each question when possible.`
+        : "";
     const mappingInstruction = /^yes|true|1$/i.test(text(req.body.mapWithAi || req.body.useAgentMapping))
       ? "Also verify each generated question and map it to the most suitable modules, topics, COs and Bloom taxonomy levels from the selected lists. Return those mappings in modules, topics, cos and bloomlevels arrays for every question."
       : "Include the selected modules, topics, COs and Bloom taxonomy levels in modules, topics, cos and bloomlevels arrays for every question.";
     const prompt = `Return ONLY JSON array of questions for an online examination.
+Exam context: ${examcontext}
 Question type: ${text(req.body.questiontype || "MCQ")}
 Course: ${text(req.body.course)} (${text(req.body.coursecode)})
+Selected placement/psychometric categories: ${categories.join(", ") || "Not specified"}
 Selected modules: ${modules.join(", ") || "Not specified"}
 Selected topics: ${topics.join(", ") || "Not specified"}
 Selected COs: ${cos.join(", ") || "Not specified"}
@@ -433,9 +443,10 @@ Topic/context/additional prompt: ${text(req.body.prompt || req.body.topic)}
 Number of questions: ${num(req.body.count, 5)}
 Language: ${text(req.body.language || "English")}
 Difficulty: ${text(req.body.difficulty || "Medium")}
+${contextInstruction}
 ${mappingInstruction}
-For MCQ return [{"questiontext":"","marks":1,"modules":[],"topics":[],"cos":[],"bloomlevels":[],"options":[{"optiontext":"","iscorrect":true},{"optiontext":"","iscorrect":false}]}].
-For descriptive return [{"questiontext":"","marks":5,"modules":[],"topics":[],"cos":[],"bloomlevels":[],"options":[]}].`;
+For MCQ return [{"sectionname":"","category":"","questiontext":"","marks":1,"modules":[],"topics":[],"cos":[],"bloomlevels":[],"options":[{"optiontext":"","iscorrect":true},{"optiontext":"","iscorrect":false}]}].
+For descriptive return [{"sectionname":"","category":"","questiontext":"","marks":5,"modules":[],"topics":[],"cos":[],"bloomlevels":[],"options":[]}].`;
     const raw = /^ollama$/i.test(text(req.body.provider))
       ? await callOllama(req.body.colid, prompt, req.body.ollamaConfigId)
       : await callGemini(req.body.colid, prompt, req.body.geminiModel);
@@ -457,9 +468,10 @@ exports.studentExams = async (req, res) => {
   try {
     const colid = num(req.query.colid);
     const regno = text(req.query.regno);
+    const examcontext = text(req.query.examcontext || "Student");
     const user = await User.findOne({ colid, regno }).lean();
     if (!user) return res.status(404).json({ success: false, message: "Student not found" });
-    const query = { colid, academicyear: user.academicyear, programcode: user.programcode, status: /^Published$/i };
+    const query = { colid, examcontext: { $regex: `^${esc(examcontext)}$`, $options: "i" }, academicyear: user.academicyear, programcode: user.programcode, status: /^Published$/i };
     if (text(req.query.coursecode)) query.coursecode = text(req.query.coursecode);
     const exams = await OnlineExam.find(query).sort({ starttime: 1 }).lean();
     const attempts = await OnlineExamAttempt.find({ colid, regno, examid: { $in: exams.map((e) => e._id) } }).lean();
@@ -641,8 +653,8 @@ exports.startApplicantAttempt = async (req, res) => {
     const orderedExam = existing ? examWithAttemptQuestionOrder(exam, existing) : shuffledExamForAttempt(exam);
     const attempt = existing || await OnlineExamAttempt.create({
       colid,
-      examcontext: "Admission",
       examid: exam._id,
+      examcontext: exam.examcontext || "Admission",
       examname: exam.examname,
       examcode: exam.examcode,
       academicyear: exam.academicyear || app.academicyear,
@@ -1202,6 +1214,7 @@ exports.report = async (req, res) => {
     const graded = rows.filter((r) => /^Graded$/i.test(r.status)).length;
     const avg = rows.length ? rows.reduce((s, r) => s + num(r.marksobtained), 0) / rows.length : 0;
     const byCourse = {};
+    const byCategory = {};
     rows.forEach((r) => {
       const key = r.coursecode || "NA";
       byCourse[key] = byCourse[key] || { coursecode: key, attempts: 0, submitted: 0, graded: 0, marks: 0 };
@@ -1209,9 +1222,241 @@ exports.report = async (req, res) => {
       if (r.submittime) byCourse[key].submitted += 1;
       if (/^Graded$/i.test(r.status)) byCourse[key].graded += 1;
       byCourse[key].marks += num(r.marksobtained);
+      const categoryKey = r.category || "General";
+      byCategory[categoryKey] = byCategory[categoryKey] || { category: categoryKey, attempts: 0, submitted: 0, graded: 0, marks: 0 };
+      byCategory[categoryKey].attempts += 1;
+      if (r.submittime) byCategory[categoryKey].submitted += 1;
+      if (/^Graded$/i.test(r.status)) byCategory[categoryKey].graded += 1;
+      byCategory[categoryKey].marks += num(r.marksobtained);
     });
     Object.values(byCourse).forEach((r) => { r.average = r.attempts ? Number((r.marks / r.attempts).toFixed(2)) : 0; });
-    res.json({ success: true, data: rows, summary: { total: rows.length, submitted, graded, average: Number(avg.toFixed(2)) }, byCourse: Object.values(byCourse) });
+    Object.values(byCategory).forEach((r) => { r.average = r.attempts ? Number((r.marks / r.attempts).toFixed(2)) : 0; });
+    res.json({ success: true, data: rows, summary: { total: rows.length, submitted, graded, average: Number(avg.toFixed(2)) }, byCourse: Object.values(byCourse), byCategory: Object.values(byCategory) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.examinationReport = async (req, res) => {
+  try {
+    const colid = num(req.body.colid || req.query.colid);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const examcontext = text(req.body.examcontext || req.query.examcontext || "Student");
+    const query = { colid, examcontext: { $regex: `^${esc(examcontext)}$`, $options: "i" } };
+    ["academicyear", "program", "programcode"].forEach((field) => {
+      if (text(req.body[field] || req.query[field])) query[field] = text(req.body[field] || req.query[field]);
+    });
+    const [exams, courseMaps] = await Promise.all([
+      OnlineExam.find(query).sort({ academicyear: -1, program: 1, semester: 1, course: 1, starttime: 1 }).lean(),
+      RegulationCourseMap.find({
+        colid,
+        ...(text(req.body.academicyear || req.query.academicyear) ? { academicyear: text(req.body.academicyear || req.query.academicyear) } : {}),
+        ...(text(req.body.programcode || req.query.programcode) ? { programcode: text(req.body.programcode || req.query.programcode) } : {})
+      }).select("academicyear program programcode semester course coursecode faculty facultyname facultyemail").lean()
+    ]);
+    const examIds = exams.map((exam) => exam._id);
+    const attempts = examIds.length
+      ? await OnlineExamAttempt.find({ colid, examid: { $in: examIds } }).select("examid status submittime marksobtained totalmarks regno student").lean()
+      : [];
+    const attemptsByExam = {};
+    attempts.forEach((attempt) => {
+      const key = String(attempt.examid);
+      attemptsByExam[key] = attemptsByExam[key] || [];
+      attemptsByExam[key].push(attempt);
+    });
+    const courseMapByKey = {};
+    courseMaps.forEach((row) => {
+      [
+        [row.academicyear, row.programcode, row.coursecode],
+        [row.academicyear, row.program, row.course],
+        [row.programcode, row.coursecode]
+      ].forEach((parts) => {
+        const key = parts.map((part) => text(part).toLowerCase()).join("||");
+        if (key.replace(/\|/g, "")) courseMapByKey[key] = row;
+      });
+    });
+    const findCourseMap = (exam) => {
+      const keys = [
+        [exam.academicyear, exam.programcode, exam.coursecode],
+        [exam.academicyear, exam.program, exam.course],
+        [exam.programcode, exam.coursecode]
+      ].map((parts) => parts.map((part) => text(part).toLowerCase()).join("||"));
+      return keys.map((key) => courseMapByKey[key]).find(Boolean) || {};
+    };
+    const detail = exams.map((exam) => {
+      const map = findCourseMap(exam);
+      const examAttempts = attemptsByExam[String(exam._id)] || [];
+      const submitted = examAttempts.filter((attempt) => attempt.submittime || /^Submitted$|^Graded$/i.test(attempt.status || "")).length;
+      const graded = examAttempts.filter((attempt) => /^Graded$/i.test(attempt.status || "")).length;
+      return {
+        _id: exam._id,
+        academicyear: exam.academicyear,
+        program: exam.program,
+        programcode: exam.programcode,
+        category: exam.category,
+        semester: exam.semester || map.semester || "",
+        course: exam.course,
+        coursecode: exam.coursecode,
+        faculty: exam.username || map.facultyname || map.faculty || exam.user || "",
+        facultyemail: exam.user || map.facultyemail || "",
+        examname: exam.examname,
+        examcode: exam.examcode,
+        status: exam.status,
+        starttime: exam.starttime,
+        endtime: exam.endtime,
+        timezone: exam.timezone,
+        scheduled: exam.starttime,
+        attempts: examAttempts.length,
+        attended: examAttempts.length,
+        submitted,
+        graded
+      };
+    });
+    const grouped = {};
+    const statusSummary = {};
+    detail.forEach((row) => {
+      const key = [row.academicyear, row.programcode, row.category || "-", row.semester || "-", row.coursecode, row.facultyemail || row.faculty || "-"].join("||");
+      grouped[key] = grouped[key] || {
+        academicyear: row.academicyear,
+        program: row.program,
+        programcode: row.programcode,
+        category: row.category || "",
+        semester: row.semester || "-",
+        course: row.course,
+        coursecode: row.coursecode,
+        faculty: row.faculty,
+        facultyemail: row.facultyemail,
+        examinations: 0,
+        attended: 0,
+        submitted: 0,
+        graded: 0
+      };
+      grouped[key].examinations += 1;
+      grouped[key].attended += num(row.attended);
+      grouped[key].submitted += num(row.submitted);
+      grouped[key].graded += num(row.graded);
+      const statusKey = row.status || "Blank";
+      statusSummary[statusKey] = statusSummary[statusKey] || { status: statusKey, examinations: 0, attended: 0 };
+      statusSummary[statusKey].examinations += 1;
+      statusSummary[statusKey].attended += num(row.attended);
+    });
+    const facultySummary = {};
+    Object.values(grouped).forEach((row) => {
+      const key = row.facultyemail || row.faculty || "Blank";
+      facultySummary[key] = facultySummary[key] || { faculty: row.faculty || key, facultyemail: row.facultyemail, examinations: 0, attended: 0 };
+      facultySummary[key].examinations += row.examinations;
+      facultySummary[key].attended += row.attended;
+    });
+    res.json({
+      success: true,
+      details: detail,
+      grouped: Object.values(grouped),
+      statusSummary: Object.values(statusSummary),
+      facultySummary: Object.values(facultySummary),
+      summary: {
+        totalExaminations: detail.length,
+        totalAttended: detail.reduce((sum, row) => sum + num(row.attended), 0),
+        totalSubmitted: detail.reduce((sum, row) => sum + num(row.submitted), 0),
+        totalGraded: detail.reduce((sum, row) => sum + num(row.graded), 0),
+        totalCourses: new Set(detail.map((row) => row.coursecode).filter(Boolean)).size,
+        totalFaculty: new Set(detail.map((row) => row.facultyemail || row.faculty).filter(Boolean)).size
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const examRunStage = (exam = {}, attempts = []) => {
+  const now = new Date();
+  const start = exam.starttime ? new Date(exam.starttime) : null;
+  const end = exam.endtime ? new Date(exam.endtime) : null;
+  if (/^closed$/i.test(exam.status || "") || (end && end < now)) return "Completed";
+  if ((start && start <= now && (!end || end >= now)) || attempts.some((attempt) => /^started$/i.test(attempt.status || "") && !attempt.submittime)) return "Ongoing";
+  return "Pending";
+};
+
+exports.examinationDetailsOptions = async (req, res) => {
+  try {
+    const colid = num(req.query.colid);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const examcontext = text(req.query.examcontext || "Student");
+    const rows = await OnlineExam.find({ colid, examcontext: { $regex: `^${esc(examcontext)}$`, $options: "i" } })
+      .select("academicyear user username")
+      .sort({ academicyear: -1, username: 1 })
+      .lean();
+    const facultyByEmail = {};
+    rows.forEach((row) => {
+      const key = text(row.user || row.username);
+      if (!key) return;
+      facultyByEmail[key.toLowerCase()] = {
+        user: row.user || "",
+        username: row.username || row.user || "",
+        label: [row.username, row.user].filter(Boolean).join(" - ")
+      };
+    });
+    res.json({
+      success: true,
+      academicyears: uniq(rows.map((row) => row.academicyear)),
+      faculty: Object.values(facultyByEmail).sort((a, b) => a.label.localeCompare(b.label))
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.examinationDetails = async (req, res) => {
+  try {
+    const colid = num(req.body.colid || req.query.colid);
+    const academicyear = text(req.body.academicyear || req.query.academicyear);
+    const faculty = text(req.body.faculty || req.body.user || req.body.facultyemail || req.query.faculty || req.query.user || req.query.facultyemail);
+    const examcontext = text(req.body.examcontext || req.query.examcontext || "Student");
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!academicyear) return res.status(400).json({ success: false, message: "Select academic year" });
+    if (!faculty) return res.status(400).json({ success: false, message: "Select faculty" });
+    const query = {
+      colid,
+      examcontext: { $regex: `^${esc(examcontext)}$`, $options: "i" },
+      academicyear,
+      $or: [
+        { user: { $regex: `^${esc(faculty)}$`, $options: "i" } },
+        { username: { $regex: `^${esc(faculty)}$`, $options: "i" } }
+      ]
+    };
+    const exams = await OnlineExam.find(query).sort({ starttime: 1, course: 1, examname: 1 }).lean();
+    const examIds = exams.map((exam) => exam._id);
+    const attempts = examIds.length
+      ? await OnlineExamAttempt.find({ colid, examid: { $in: examIds } }).sort({ updatedAt: -1 }).lean()
+      : [];
+    const attemptsByExam = {};
+    attempts.forEach((attempt) => {
+      const key = String(attempt.examid);
+      attemptsByExam[key] = attemptsByExam[key] || [];
+      attemptsByExam[key].push(attempt);
+    });
+    const rows = exams.map((exam) => {
+      const examAttempts = attemptsByExam[String(exam._id)] || [];
+      const attended = examAttempts.length;
+      const submitted = examAttempts.filter((attempt) => attempt.submittime || /^Submitted$|^Graded$/i.test(attempt.status || "")).length;
+      const graded = examAttempts.filter((attempt) => /^Graded$/i.test(attempt.status || "")).length;
+      return {
+        ...exam,
+        runstage: examRunStage(exam, examAttempts),
+        attended,
+        submitted,
+        graded,
+        attempts: examAttempts
+      };
+    });
+    const summary = {
+      total: rows.length,
+      completed: rows.filter((row) => row.runstage === "Completed").length,
+      ongoing: rows.filter((row) => row.runstage === "Ongoing").length,
+      pending: rows.filter((row) => row.runstage === "Pending").length,
+      attended: rows.reduce((sum, row) => sum + num(row.attended), 0),
+      submitted: rows.reduce((sum, row) => sum + num(row.submitted), 0)
+    };
+    res.json({ success: true, data: rows, summary });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

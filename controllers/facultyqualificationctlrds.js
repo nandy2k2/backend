@@ -13,12 +13,22 @@ const num = (value) => {
 const esc = (value) => text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const uniq = (rows) => [...new Set((rows || []).map(text).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 const norm = (value) => text(value).toLowerCase();
+const list = (value) => {
+  if (Array.isArray(value)) return value.map(text).filter(Boolean);
+  return text(value).split(",").map(text).filter(Boolean);
+};
 
 const cleanQualification = (body = {}) => ({
   user: text(body.user || body.name),
   useremail: text(body.useremail || body.email || body.userEmail),
+  program: text(body.program || body.Program),
+  programcode: text(body.programcode || body.Programcode || body["Program Code"]),
+  semester: text(body.semester || body.Semester),
+  courses: list(body.courses || body.course || body.Course),
+  coursecodes: list(body.coursecodes || body.coursecode || body["Course Code"]),
   subject: text(body.subject),
   expertise: text(body.expertise),
+  noofyears: num(body.noofyears || body.noOfYears || body["No of Years"]) || 0,
   phd: /^yes$/i.test(text(body.phd)) ? "Yes" : "No",
   colid: num(body.colid),
   createdby: text(body.createdby || body.createdBy),
@@ -136,7 +146,7 @@ exports.options = async (req, res) => {
 
 exports.listQualifications = async (req, res) => {
   try {
-    const query = buildFilterQuery(req.query, ["user", "useremail", "subject", "expertise", "phd"]);
+    const query = buildFilterQuery(req.query, ["user", "useremail", "program", "programcode", "semester", "subject", "expertise", "phd"]);
     if (query.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const rows = await FacultyQualification.find(query).sort({ user: 1, subject: 1, expertise: 1 }).lean();
     res.json({ success: true, data: rows });
@@ -226,9 +236,16 @@ exports.previewAutoAllocation = async (req, res) => {
         quals.forEach((qual) => {
           const qSubject = text(qual.subject).toLowerCase();
           const qExpertise = text(qual.expertise).toLowerCase();
-          if (qSubject && (qSubject === subject || subject.includes(qSubject) || qSubject.includes(subject))) score += 60;
-          if (qExpertise && (courseText.includes(qExpertise) || qExpertise.includes(subject))) score += 25;
+          const qProgram = norm(qual.programcode || qual.program);
+          const qSemester = norm(qual.semester);
+          const qCourses = [...(qual.courses || []), ...(qual.coursecodes || [])].map(norm);
+          if (qSubject && (qSubject === subject || subject.includes(qSubject) || qSubject.includes(subject))) score += 50;
+          if (qExpertise && (courseText.includes(qExpertise) || qExpertise.includes(subject))) score += 20;
+          if (qProgram && [norm(course.programcode), norm(course.program)].includes(qProgram)) score += 25;
+          if (qSemester && qSemester === norm(course.semester)) score += 20;
+          if (qCourses.some((item) => item && [norm(course.course), norm(course.coursecode)].includes(item))) score += 35;
           if (/^yes$/i.test(qual.phd)) score += 10;
+          score += Math.min(Number(qual.noofyears || 0), 20);
         });
         score -= (facultyLoad[key] || 0) * 2;
         return { email, user: facultyByEmail.get(key), score, qualifications: quals };
@@ -298,7 +315,7 @@ exports.previewAutoAllocationAi = async (req, res) => {
       email: user.email,
       department: user.department,
       currentload: facultyLoad[user.email] || 0,
-      qualifications: qualifications.filter((q) => norm(q.useremail) === norm(user.email)).map((q) => ({ subject: q.subject, expertise: q.expertise, phd: q.phd }))
+      qualifications: qualifications.filter((q) => norm(q.useremail) === norm(user.email)).map((q) => ({ program: q.program, programcode: q.programcode, semester: q.semester, courses: q.courses, coursecodes: q.coursecodes, subject: q.subject, expertise: q.expertise, noofyears: q.noofyears, phd: q.phd }))
     }));
     const prompt = `Allocate workload courses to faculty. Return ONLY JSON array.
 Each item must be {"courseid":"","facultyemail":"","reason":"","matchscore":0}.

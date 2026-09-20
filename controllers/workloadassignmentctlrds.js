@@ -1,7 +1,9 @@
 const WorkloadAssignment = require("../Models/workloadassignmentds");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
 const RegulationSubject = require("../Models/regulationsubjectds");
+const Syllabus = require("../Models/syllabusds");
 const User = require("../Models/user");
+const DesignationWorkloadHours = require("../Models/designationworkloadhoursds");
 
 const toNumber = (value) => {
   if (value === "" || value === null || value === undefined) return undefined;
@@ -10,6 +12,10 @@ const toNumber = (value) => {
 };
 
 const text = (value) => String(value || "").trim();
+const list = (value) => {
+  if (Array.isArray(value)) return value.map(text).filter(Boolean);
+  return text(value).split(",").map(text).filter(Boolean);
+};
 
 const numeric = (value) => {
   const parsed = toNumber(value);
@@ -27,6 +33,8 @@ const cleanPayload = (input = {}) => ({
   course: text(input.course),
   coursecode: text(input.coursecode),
   coursetype: text(input.coursetype || input.courseType || input["Course Type"]),
+  modules: list(input.modules || input.module || input.Module),
+  module: list(input.modules || input.module || input.Module).join(", "),
   facultyname: text(input.facultyname || input.facultyName),
   facultyemail: text(input.facultyemail || input.facultyEmail),
   facultydepartment: text(input.facultydepartment || input.department || input.facultyDepartment),
@@ -67,6 +75,7 @@ const buildQuery = (source = {}) => {
     "course",
     "coursecode",
     "coursetype",
+    "module",
     "facultyname",
     "facultyemail",
     "facultydepartment",
@@ -140,11 +149,17 @@ exports.getWorkloadAssignmentOptions = async (req, res) => {
     const facultyQuery = { colid, role: "Faculty" };
     if (req.query.department) facultyQuery.department = req.query.department;
 
-    const [courseMaps, regulationSubjects, faculty, assignments] = await Promise.all([
+    const syllabusQuery = { colid };
+    ["academicyear", "regulation", "program", "programcode", "type", "subject", "semester", "course", "coursecode"].forEach((field) => {
+      if (text(req.query[field])) syllabusQuery[field] = text(req.query[field]);
+    });
+
+    const [courseMaps, regulationSubjects, faculty, assignments, syllabi] = await Promise.all([
       RegulationCourseMap.find(courseQuery).sort({ academicyear: 1, regulation: 1, program: 1, type: 1, subject: 1, semester: 1, course: 1 }).lean(),
       RegulationSubject.find(subjectQuery).sort({ academicyear: 1, regulation: 1, program: 1, type: 1, subject: 1 }).lean(),
-      User.find(facultyQuery).select("name email department role colid").sort({ name: 1, email: 1 }).lean(),
-      WorkloadAssignment.find({ colid }).sort({ facultyname: 1, academicyear: 1, course: 1 }).lean()
+      User.find(facultyQuery).select("name email department designation role colid").sort({ name: 1, email: 1 }).lean(),
+      WorkloadAssignment.find({ colid }).sort({ facultyname: 1, academicyear: 1, course: 1 }).lean(),
+      Syllabus.find(syllabusQuery).select("academicyear regulation program programcode type subject semester course coursecode module syllabus").sort({ module: 1, syllabus: 1 }).lean()
     ]);
 
     const allRows = [...courseMaps, ...assignments];
@@ -186,12 +201,15 @@ exports.getWorkloadAssignmentOptions = async (req, res) => {
       subjects: uniq(regulationSubjects.map((item) => item.subject)),
       semesters: uniq(allRows.map((item) => item.semester)),
       courses: [...courseMap.values()].sort((a, b) => String(a.course).localeCompare(String(b.course))),
+      modules: uniq(syllabi.map((item) => item.module)),
+      syllabus: syllabi,
       departments: uniq([...faculty.map((item) => item.department), ...assignments.map((item) => item.facultydepartment)]),
       faculty: faculty.map((item) => ({
         _id: item._id,
         name: item.name || "",
         email: item.email || "",
-        department: item.department || ""
+        department: item.department || "",
+        designation: item.designation || ""
       }))
     });
   } catch (error) {
@@ -276,7 +294,7 @@ exports.getVisualWorkloadOptions = async (req, res) => {
     const colid = toNumber(req.query.colid);
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const [courses, users] = await Promise.all([
-      RegulationCourseMap.find({ colid }).select("academicyear regulation program programcode type subject semester course coursecode coursetype faculty institution department status").lean(),
+      RegulationCourseMap.find({ colid }).select("academicyear regulation program programcode type subject semester course coursecode coursetype faculty institution department status credit credits hoursperweek workloadhours").lean(),
       User.find({ colid, role: { $not: /^student$/i }, excluded: { $ne: "Yes" } }).select("name email role department designation institution faculty").lean()
     ]);
     const courseFields = ["academicyear", "regulation", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "coursetype", "faculty", "institution", "department", "status"];
@@ -297,6 +315,7 @@ exports.searchVisualWorkload = async (req, res) => {
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const [courses, users, assignments] = await Promise.all([
       RegulationCourseMap.find(courseMapQuery(req.query))
+        .select("academicyear regulation program programcode type subject semester course coursecode coursetype faculty institution department status credit credits hoursperweek workloadhours")
         .sort({ academicyear: 1, regulation: 1, program: 1, semester: 1, course: 1 })
         .limit(1000)
         .lean(),
@@ -313,5 +332,83 @@ exports.searchVisualWorkload = async (req, res) => {
     res.json({ success: true, courses, users, assignments });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message || "Unable to load visual workload data" });
+  }
+};
+
+exports.workloadDoctor = async (req, res) => {
+  try {
+    const colid = toNumber(req.query.colid);
+    const academicyear = text(req.query.academicyear);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!academicyear) return res.status(400).json({ success: false, message: "Academic year is required" });
+
+    const [assignments, users, rules] = await Promise.all([
+      WorkloadAssignment.find({ colid, academicyear, status: { $ne: "Inactive" } }).lean(),
+      User.find({ colid, role: { $not: /^student$/i }, excluded: { $ne: "Yes" } }).select("name email role department designation").sort({ name: 1 }).lean(),
+      DesignationWorkloadHours.find({ colid, status: { $ne: "Inactive" } }).lean()
+    ]);
+
+    const ruleFor = (programcode, designation) => {
+      const d = text(designation).toLowerCase();
+      const p = text(programcode).toLowerCase();
+      const exact = rules.find((row) => text(row.programcode).toLowerCase() === p && (row.designations || []).some((item) => text(item).toLowerCase() === d));
+      if (exact) return exact;
+      return rules.find((row) => (row.designations || []).some((item) => text(item).toLowerCase() === d));
+    };
+
+    const assignmentByFaculty = new Map();
+    assignments.forEach((row) => {
+      const email = text(row.facultyemail).toLowerCase();
+      if (!email) return;
+      const listRows = assignmentByFaculty.get(email) || [];
+      listRows.push(row);
+      assignmentByFaculty.set(email, listRows);
+    });
+
+    const details = users.map((user) => {
+      const facultyAssignments = assignmentByFaculty.get(text(user.email).toLowerCase()) || [];
+      const programcodes = [...new Set(facultyAssignments.map((row) => text(row.programcode)).filter(Boolean))];
+      const rule = programcodes.map((programcode) => ruleFor(programcode, user.designation)).find(Boolean)
+        || ruleFor("", user.designation);
+      const assignedhours = facultyAssignments.reduce((sum, row) => sum + Number(row.hoursperweek || 0), 0);
+      const expectedhours = Number(rule?.workloadhours || 0);
+      const variance = assignedhours - expectedhours;
+      const workloadstatus = !expectedhours ? "No rule" : variance === 0 ? "OK" : variance < 0 ? "Less" : "More";
+      return {
+        facultyname: user.name || "",
+        facultyemail: user.email || "",
+        role: user.role || "",
+        department: user.department || "",
+        designation: user.designation || "",
+        assignedhours,
+        expectedhours,
+        variance,
+        workloadstatus,
+        programcodes: programcodes.join(", "),
+        courses: facultyAssignments.length,
+        courseDetails: facultyAssignments.map((row) => ({
+          program: row.program,
+          programcode: row.programcode,
+          semester: row.semester,
+          course: row.course,
+          coursecode: row.coursecode,
+          hoursperweek: row.hoursperweek
+        }))
+      };
+    });
+
+    const summary = {
+      faculty: details.length,
+      ok: details.filter((row) => row.workloadstatus === "OK").length,
+      less: details.filter((row) => row.workloadstatus === "Less").length,
+      more: details.filter((row) => row.workloadstatus === "More").length,
+      norule: details.filter((row) => row.workloadstatus === "No rule").length,
+      assignedhours: details.reduce((sum, row) => sum + row.assignedhours, 0),
+      expectedhours: details.reduce((sum, row) => sum + row.expectedhours, 0)
+    };
+
+    res.json({ success: true, summary, data: details, rules, assignments });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || "Unable to run workload doctor" });
   }
 };

@@ -4,6 +4,7 @@ const path = require('path');
 const multer = require('multer');
 const AWS = require('aws-sdk');
 const Awsconfig = require('../Models/awsconfig');
+const AcademicDesignation = require('../Models/academicdesignationds');
 
 const excludedFilterFields = new Set(['_id', '__v', 'colid', 'user', 'customFields']);
 const hiddenFields = new Set([
@@ -261,6 +262,11 @@ exports.getOptions = async (req, res) => {
     const colid = Number(req.query.colid);
     const field = req.query.field;
     if (!field || excludedFilterFields.has(field) || String(field).includes('$')) return res.json([]);
+    if (field === 'designation') {
+      const masterValues = await AcademicDesignation.distinct('designation', { colid, status: { $ne: 'Inactive' } });
+      const userValues = await User.distinct(field, colidOnlyFilter(colid));
+      return res.json([...new Set([...masterValues, ...userValues].filter((item) => item !== undefined && item !== null && String(item).trim() !== '').map((item) => String(item).trim()))].sort());
+    }
     const values = await User.distinct(field, colidOnlyFilter(colid));
     res.json(values.filter((item) => item !== undefined && item !== null && String(item).trim() !== '').sort());
   } catch (err) {

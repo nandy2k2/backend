@@ -15,6 +15,11 @@ const InternshipStage = require("../Models/placementnewinternshipstageds");
 const SipApplication = require("../Models/placementnewsipapplicationds");
 const PlacementApplication = require("../Models/placementnewplacementapplicationds");
 const PlacementRecord = require("../Models/placementnewrecordds");
+const InternshipPool = require("../Models/placementnewinternshippoolds");
+const InternshipApplication = require("../Models/placementnewinternshipapplicationds");
+const InternshipSchedule = require("../Models/placementnewinternshipscheduleds");
+const InternshipNocWorkflow = require("../Models/placementnewinternshipnocworkflowds");
+const InternshipNoc = require("../Models/placementnewinternshipnocds");
 const User = require("../Models/user");
 const MPrograms = require("../Models/mprograms");
 const VivaMarks = require("../Models/examinationmodel2vivamarksds");
@@ -85,7 +90,10 @@ const modelMap = {
   sipapplication: { Model: SipApplication, fields: ["jobid", "jobtitle", "jobtype", "industry", "company", "companyemail", "student", "studentemail", "phone", "regno", "academicyear", "admissionyear", "program", "programcode", "semester", "section", "applieddate", "stageid", "stagename", "status", "selected", "offerletterlink", "offerlettername", "offeruploadeddate", "remarks"] },
   placementapplication: { Model: PlacementApplication, fields: ["jobid", "jobtitle", "jobtype", "industry", "company", "companyemail", "student", "studentemail", "phone", "regno", "academicyear", "admissionyear", "program", "programcode", "semester", "section", "applieddate", "stageid", "stagename", "status", "selected", "offerletterlink", "offerlettername", "offeruploadeddate", "remarks"] },
   stagestudent: { Model: PlacementStageStudent, fields: ["jobid", "jobtitle", "jobtype", "company", "companyemail", "student", "studentemail", "regno", "phone", "academicyear", "admissionyear", "program", "programcode", "semester", "section", "stageid", "stagename", "stagedate", "status", "placementstatus", "confirmeddate", "offerletterlink", "offerlettername", "contactdetails", "address", "ctc", "industry", "sector", "comments"] },
-  record: { Model: PlacementRecord, fields: ["academicyear", "program", "programcode", "student", "regno", "industry", "sector", "role", "company", "address", "companymail", "companyemail", "salary", "department", "status"] }
+  record: { Model: PlacementRecord, fields: ["academicyear", "program", "programcode", "student", "regno", "industry", "sector", "role", "company", "address", "companymail", "companyemail", "salary", "department", "status"] },
+  internshippool: { Model: InternshipPool, fields: ["academicyear", "program", "programcode", "companyname", "companyemail", "companyphone", "companyaddress", "contactperson", "contactemail", "contactphone", "industry", "sector", "title", "role", "description", "technologies", "location", "mode", "duration", "startdate", "enddate", "stipend", "openings", "eligibility", "applicationdeadline", "status", "name"] },
+  internshipschedule: { Model: InternshipSchedule, fields: ["academicyear", "program", "programcode", "poolid", "title", "companyname", "schedule", "startdate", "enddate", "location", "coordinator", "coordinatoremail", "description", "status"] },
+  internshipnocworkflow: { Model: InternshipNocWorkflow, fields: ["academicyear", "program", "programcode", "level", "approvername", "approveremail", "status"] }
 };
 
 const payloadFor = (kind, source = {}) => {
@@ -103,7 +111,7 @@ const payloadFor = (kind, source = {}) => {
 exports.options = async (req, res) => {
   try {
     const colid = Number(req.query.colid);
-    const [companies, programs, users, internships, sip, placementStages, internshipStages, stageStudents, placementRecords, ollamaConfigs, institution] = await Promise.all([
+    const [companies, programs, users, internships, sip, placementStages, internshipStages, stageStudents, placementRecords, internshipPools, internshipSchedules, internshipNocWorkflows, internshipNocs, ollamaConfigs, institution] = await Promise.all([
       Company.find({ colid }).sort({ company: 1 }).lean(),
       MPrograms.find({ colid }).sort({ Order: 1, program: 1 }).lean(),
       User.find({ colid }).select("name email user phone role program programcode admissionyear academicyear regno semester section photo skills").sort({ name: 1 }).lean(),
@@ -113,6 +121,10 @@ exports.options = async (req, res) => {
       InternshipStage.find({ colid }).sort({ stageorder: 1, stagename: 1 }).lean(),
       PlacementStageStudent.find({ colid }).sort({ updatedAt: -1 }).lean(),
       PlacementRecord.find({ colid }).sort({ updatedAt: -1 }).lean(),
+      InternshipPool.find({ colid }).sort({ createdAt: -1 }).lean(),
+      InternshipSchedule.find({ colid }).sort({ startdate: -1 }).lean(),
+      InternshipNocWorkflow.find({ colid, status: { $not: /^inactive$/i } }).sort({ level: 1 }).lean(),
+      InternshipNoc.find({ colid }).sort({ updatedAt: -1 }).limit(1000).lean(),
       OllamaConfiguration.find({ colid, active: /^yes$/i }).sort({ default: -1, name: 1 }).lean(),
       Institution.findOne({ colid }).lean()
     ]);
@@ -130,6 +142,10 @@ exports.options = async (req, res) => {
       internshipStages,
       stageStudents,
       placementRecords,
+      internshipPools,
+      internshipSchedules,
+      internshipNocWorkflows,
+      internshipNocs,
       academicyears: uniqueSorted([...users.map((item) => item.academicyear), ...placementRecords.map((item) => item.academicyear)]),
       sectors: uniqueSorted(placementRecords.map((item) => item.sector)),
       recordIndustries: uniqueSorted(placementRecords.map((item) => item.industry)),
@@ -798,6 +814,307 @@ exports.applicationStatus = async (req, res) => {
       }
     }
     res.json({ success: true, modified: result.modifiedCount });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.studentInternshipPools = async (req, res) => {
+  try {
+    const colid = Number(req.query.colid);
+    const student = await User.findOne({ colid, $or: [{ email: text(req.query.email || req.query.user) }, { user: text(req.query.email || req.query.user) }, { regno: text(req.query.regno) }] }).lean();
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+    const now = new Date().toISOString().slice(0, 10);
+    const filter = {
+      colid,
+      status: /^active$/i,
+      $and: [
+        { $or: [{ academicyear: text(student.academicyear) }, { academicyear: "" }, { academicyear: { $exists: false } }] },
+        { $or: [{ programcode: text(student.programcode) }, { programcode: "" }, { programcode: { $exists: false } }] },
+        { $or: [{ applicationdeadline: "" }, { applicationdeadline: { $exists: false } }, { applicationdeadline: { $gte: now } }] }
+      ]
+    };
+    const [pools, applications] = await Promise.all([
+      InternshipPool.find(filter).sort({ createdAt: -1 }).lean(),
+      InternshipApplication.find({ colid, ...studentIdentityFilter({ email: student.email || student.user, regno: student.regno }) }).lean()
+    ]);
+    const appMap = new Map(applications.map((item) => [text(item.poolid), item]));
+    res.json({ success: true, student, data: pools.map((pool) => ({ ...pool, applied: appMap.has(String(pool._id)), application: appMap.get(String(pool._id)) || null })) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.applyInternshipPool = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const pool = await InternshipPool.findOne({ _id: req.body.poolid, colid }).lean();
+    if (!pool) return res.status(404).json({ success: false, message: "Internship not found" });
+    const student = await User.findOne({ colid, $or: [{ email: text(req.body.email || req.body.user) }, { user: text(req.body.email || req.body.user) }, { regno: text(req.body.regno) }] }).lean();
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+    const payload = {
+      poolid: String(pool._id),
+      academicyear: text(pool.academicyear || student.academicyear),
+      program: text(pool.program || student.program),
+      programcode: text(pool.programcode || student.programcode),
+      companyname: text(pool.companyname),
+      companyemail: text(pool.companyemail),
+      title: text(pool.title),
+      role: text(pool.role),
+      location: text(pool.location),
+      duration: text(pool.duration),
+      stipend: text(pool.stipend),
+      student: text(student.name),
+      studentemail: text(student.email || student.user),
+      phone: text(student.phone),
+      regno: text(student.regno),
+      semester: text(student.semester),
+      section: text(student.section),
+      applieddate: new Date().toISOString().slice(0, 10),
+      status: "Submitted",
+      approvalstatus: "Pending",
+      selected: "No",
+      colid,
+      user: text(req.body.user)
+    };
+    const identity = text(student.regno) ? { regno: text(student.regno) } : { studentemail: text(student.email || student.user) };
+    const data = await InternshipApplication.findOneAndUpdate({ colid, poolid: String(pool._id), ...identity }, { $setOnInsert: payload }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.code === 11000 ? "Already applied for this internship" : error.message });
+  }
+};
+
+const internshipApplicationFilter = (source = {}) => {
+  const filter = { colid: Number(source.colid) };
+  ["academicyear", "program", "programcode", "companyname", "title", "student", "studentemail", "regno", "semester", "section", "status", "approvalstatus", "selected"].forEach((field) => {
+    if (text(source[field])) filter[field] = regex(source[field]);
+  });
+  if (text(source.appliedFrom) || text(source.appliedTo)) {
+    filter.applieddate = {};
+    if (text(source.appliedFrom)) filter.applieddate.$gte = text(source.appliedFrom);
+    if (text(source.appliedTo)) filter.applieddate.$lte = text(source.appliedTo);
+  }
+  return filter;
+};
+
+exports.internshipApplications = async (req, res) => {
+  try {
+    const data = await InternshipApplication.find(internshipApplicationFilter(req.query)).sort({ updatedAt: -1 }).limit(5000).lean();
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.internshipApplicationStatus = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one application" });
+    const approvalstatus = text(req.body.approvalstatus) || "Approved";
+    const payload = {
+      approvalstatus,
+      status: approvalstatus,
+      selected: /^approved$/i.test(approvalstatus) ? "Yes" : "No",
+      coordinatorcomment: text(req.body.coordinatorcomment),
+      approvedby: text(req.body.name),
+      approvedbyemail: text(req.body.user),
+      approvaldate: new Date().toISOString().slice(0, 10),
+      user: text(req.body.user)
+    };
+    const result = await InternshipApplication.updateMany({ _id: { $in: ids }, colid: Number(req.body.colid) }, { $set: payload });
+    res.json({ success: true, modified: result.modifiedCount });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const firstNocApprover = async (colid, source = {}) => InternshipNocWorkflow.findOne({
+  colid,
+  status: { $not: /^inactive$/i },
+  $or: [
+    { academicyear: text(source.academicyear), programcode: text(source.programcode) },
+    { academicyear: text(source.academicyear), programcode: "" },
+    { academicyear: "", programcode: text(source.programcode) },
+    { academicyear: "", programcode: "" }
+  ]
+}).sort({ level: 1 }).lean();
+
+const nextNocApprover = async (colid, noc, currentLevel) => InternshipNocWorkflow.findOne({
+  colid,
+  status: { $not: /^inactive$/i },
+  level: { $gt: Number(currentLevel || 0) },
+  $or: [
+    { academicyear: text(noc.academicyear), programcode: text(noc.programcode) },
+    { academicyear: text(noc.academicyear), programcode: "" },
+    { academicyear: "", programcode: text(noc.programcode) },
+    { academicyear: "", programcode: "" }
+  ]
+}).sort({ level: 1 }).lean();
+
+exports.submitInternshipNoc = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const student = await User.findOne({ colid, $or: [{ email: text(req.body.email || req.body.user) }, { user: text(req.body.email || req.body.user) }, { regno: text(req.body.regno) }] }).lean();
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+    if (!text(req.body.offerletterlink)) return res.status(400).json({ success: false, message: "Offer letter upload is required" });
+    const approver = await firstNocApprover(colid, { academicyear: req.body.academicyear || student.academicyear, programcode: req.body.programcode || student.programcode });
+    const approvalstatus = approver ? "Under Process" : "Approved";
+    const payload = {
+      academicyear: text(req.body.academicyear || student.academicyear),
+      regulation: text(req.body.regulation || student.regulation),
+      program: text(req.body.program || student.program),
+      programcode: text(req.body.programcode || student.programcode),
+      semester: text(req.body.semester || student.semester),
+      student: text(student.name),
+      studentemail: text(student.email || student.user),
+      phone: text(student.phone || req.body.phone),
+      regno: text(student.regno),
+      companyname: text(req.body.companyname),
+      contactperson: text(req.body.contactperson),
+      officialemail: text(req.body.officialemail),
+      mobile: text(req.body.mobile),
+      location: text(req.body.location),
+      title: text(req.body.title),
+      technologies: text(req.body.technologies),
+      offerletterlink: text(req.body.offerletterlink),
+      offerlettername: text(req.body.offerlettername),
+      submissioncomment: text(req.body.submissioncomment),
+      approvalstatus,
+      currentlevel: approver?.level || 0,
+      currentapprovername: text(approver?.approvername),
+      currentapproveremail: text(approver?.approveremail),
+      finalapprovaldate: approver ? "" : new Date().toISOString().slice(0, 10),
+      history: approver ? [] : [{ level: 0, approvername: "System", approveremail: "", action: "Approved", comments: "No workflow configured", actiondate: new Date().toISOString() }],
+      colid,
+      user: text(req.body.user)
+    };
+    const data = req.body.id
+      ? await InternshipNoc.findOneAndUpdate({ _id: req.body.id, colid, studentemail: payload.studentemail }, payload, { new: true })
+      : await InternshipNoc.create(payload);
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const nocFilter = (source = {}) => {
+  const filter = { colid: Number(source.colid) };
+  ["academicyear", "regulation", "program", "programcode", "semester", "student", "studentemail", "regno", "companyname", "title", "approvalstatus", "currentapproveremail"].forEach((field) => {
+    if (text(source[field])) filter[field] = regex(source[field]);
+  });
+  return filter;
+};
+
+exports.internshipNocs = async (req, res) => {
+  try {
+    const filter = nocFilter(req.query);
+    if (/^student$/i.test(text(req.query.mode))) {
+      const identity = studentIdentityFilter({ email: req.query.email || req.query.user, regno: req.query.regno });
+      Object.assign(filter, identity);
+    }
+    if (/^approver$/i.test(text(req.query.mode))) filter.currentapproveremail = regex(req.query.email || req.query.user);
+    const [data, institution] = await Promise.all([
+      InternshipNoc.find(filter).sort({ updatedAt: -1 }).limit(5000).lean(),
+      Institution.findOne({ colid: Number(req.query.colid) }).lean()
+    ]);
+    res.json({ success: true, data, institution });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.internshipNocDecision = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const action = /^reject/i.test(text(req.body.action)) ? "Rejected" : "Approved";
+    const noc = await InternshipNoc.findOne({ _id: req.body.id, colid }).lean();
+    if (!noc) return res.status(404).json({ success: false, message: "NOC request not found" });
+    if (text(noc.currentapproveremail).toLowerCase() !== text(req.body.user).toLowerCase()) {
+      return res.status(403).json({ success: false, message: "This request is not pending for the logged in approver" });
+    }
+    const historyItem = {
+      level: Number(noc.currentlevel || 0),
+      approvername: text(req.body.name || noc.currentapprovername),
+      approveremail: text(req.body.user || noc.currentapproveremail),
+      action,
+      comments: text(req.body.comments),
+      actiondate: new Date().toISOString()
+    };
+    const next = action === "Approved" ? await nextNocApprover(colid, noc, noc.currentlevel) : null;
+    const update = action === "Rejected"
+      ? { approvalstatus: "Rejected", currentapprovername: "", currentapproveremail: "", history: [...(noc.history || []), historyItem], user: text(req.body.user) }
+      : next
+        ? { approvalstatus: "Under Process", currentlevel: next.level, currentapprovername: text(next.approvername), currentapproveremail: text(next.approveremail), history: [...(noc.history || []), historyItem], user: text(req.body.user) }
+        : { approvalstatus: "Approved", currentlevel: Number(noc.currentlevel || 0), currentapprovername: "", currentapproveremail: "", finalapprovaldate: new Date().toISOString().slice(0, 10), history: [...(noc.history || []), historyItem], user: text(req.body.user) };
+    const data = await InternshipNoc.findOneAndUpdate({ _id: req.body.id, colid }, update, { new: true });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.internshipReport = async (req, res) => {
+  try {
+    const colid = Number(req.query.colid);
+    const appFilter = internshipApplicationFilter(req.query);
+    const poolFilter = { colid };
+    ["academicyear", "program", "programcode", "companyname", "title", "status"].forEach((field) => {
+      if (text(req.query[field])) poolFilter[field] = regex(req.query[field]);
+    });
+    const [pools, applications, schedules, institution] = await Promise.all([
+      InternshipPool.find(poolFilter).sort({ createdAt: -1 }).limit(5000).lean(),
+      InternshipApplication.find(appFilter).sort({ updatedAt: -1 }).limit(5000).lean(),
+      InternshipSchedule.find(poolFilter).sort({ startdate: -1 }).limit(5000).lean(),
+      Institution.findOne({ colid }).lean()
+    ]);
+    const approved = applications.filter((item) => /^approved$/i.test(text(item.approvalstatus))).length;
+    const rejected = applications.filter((item) => /^rejected$/i.test(text(item.approvalstatus))).length;
+    res.json({
+      success: true,
+      pools,
+      applications,
+      schedules,
+      institution,
+      byProgram: countBy(applications, (item) => item.programcode || item.program),
+      byCompany: countBy(applications, (item) => item.companyname),
+      byStatus: countBy(applications, (item) => item.approvalstatus || item.status),
+      summary: { pools: pools.length, applications: applications.length, approved, rejected, pending: applications.length - approved - rejected, schedules: schedules.length }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.internshipNocDashboard = async (req, res) => {
+  try {
+    const colid = Number(req.query.colid);
+    const filter = { colid };
+    if (text(req.query.academicyear)) filter.academicyear = text(req.query.academicyear);
+    const [rows, institution] = await Promise.all([
+      InternshipNoc.find(filter).sort({ updatedAt: -1 }).limit(5000).lean(),
+      Institution.findOne({ colid }).lean()
+    ]);
+    const byProgramMap = {};
+    rows.forEach((item) => {
+      const key = text(item.programcode || item.program) || "Not specified";
+      byProgramMap[key] = byProgramMap[key] || { name: key, program: text(item.program), programcode: text(item.programcode), applied: 0, approved: 0, rejected: 0, underprocess: 0 };
+      byProgramMap[key].applied += 1;
+      if (/^approved$/i.test(text(item.approvalstatus))) byProgramMap[key].approved += 1;
+      else if (/^rejected$/i.test(text(item.approvalstatus))) byProgramMap[key].rejected += 1;
+      else byProgramMap[key].underprocess += 1;
+    });
+    const approved = rows.filter((item) => /^approved$/i.test(text(item.approvalstatus))).length;
+    const rejected = rows.filter((item) => /^rejected$/i.test(text(item.approvalstatus))).length;
+    res.json({
+      success: true,
+      rows,
+      institution,
+      byProgram: Object.values(byProgramMap),
+      byStatus: countBy(rows, (item) => item.approvalstatus),
+      academicyears: uniqueSorted(rows.map((item) => item.academicyear)),
+      summary: { applied: rows.length, approved, rejected, underprocess: rows.length - approved - rejected }
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
