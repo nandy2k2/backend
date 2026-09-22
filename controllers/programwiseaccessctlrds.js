@@ -95,6 +95,29 @@ function groupRows(rows, key) {
   return Array.from(grouped.values()).sort((a, b) => b.amount - a.amount);
 }
 
+let programwiseAccessIndexPromise = null;
+
+async function ensureProgramwiseAccessIndexes() {
+  if (!programwiseAccessIndexPromise) {
+    programwiseAccessIndexPromise = (async () => {
+      const indexes = await ProgramwiseAccess.collection.indexes();
+      const staleIndex = indexes.find((index) => index.name === "colid_1_useremail_1_programcode_1");
+      if (staleIndex) {
+        await ProgramwiseAccess.collection.dropIndex(staleIndex.name);
+      }
+      await ProgramwiseAccess.collection.createIndex(
+        { colid: 1, useremail: 1, programcode: 1, semester: 1 },
+        { unique: true, name: "colid_1_useremail_1_programcode_1_semester_1" }
+      );
+    })().catch((error) => {
+      programwiseAccessIndexPromise = null;
+      if (error?.codeName === "IndexNotFound" || error?.code === 27) return;
+      throw error;
+    });
+  }
+  return programwiseAccessIndexPromise;
+}
+
 async function getAccessPrograms(colid, useremail) {
   const access = await ProgramwiseAccess.find({ colid, useremail: text(useremail) })
     .select("program programcode semester department useremail username")
@@ -159,6 +182,7 @@ exports.list = async (req, res) => {
 
 exports.save = async (req, res) => {
   try {
+    await ensureProgramwiseAccessIndexes();
     const colid = toNumber(req.body.colid);
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     if (Array.isArray(req.body.entries)) {

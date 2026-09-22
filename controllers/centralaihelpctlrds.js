@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const AiConfiguration = require("../Models/aiconfigurationds");
 const User = require("../Models/user");
 const MPrograms = require("../Models/mprograms");
@@ -6,6 +7,10 @@ const Ledgerstud = require("../Models/ledgerstud");
 const MFeesCol = require("../Models/mfeescol");
 const CounterFee2Transaction = require("../Models/counterfee2transactionds");
 const FeesReceiptNote = require("../Models/feesreceiptnoteds");
+const StudentOnlinePayment = require("../Models/studentonlinepaymentds");
+const IciciPayment = require("../Models/icicipaymentds");
+const IciciGateway = require("../Models/icicigatewayds");
+const LateFine = require("../Models/latefineds");
 const MenuAccess = require("../Models/menuaccessds");
 const RegulationMaster = require("../Models/regulationmasterds");
 const RegulationSubject = require("../Models/regulationsubjectds");
@@ -19,8 +24,11 @@ const NepLmsLessonContent = require("../Models/neplmslessoncontentds");
 const NepLmsQuiz = require("../Models/neplmsquizds");
 const NepLmsAssignmentSubmission = require("../Models/neplmsassignmentsubmissionds");
 const Attendance = require("../Models/neplmsattendanceds");
+const CentralTicket = require("../Models/centralticketds");
+const CentralTicketResponse = require("../Models/centralticketresponseds");
 
 const MODEL_CHANGE_PASSWORD = "kumropatash";
+const GLOBAL_SUPPORT_PASSWORD = "kumropatash";
 
 const text = (value) => String(value ?? "").trim();
 const number = (value) => {
@@ -37,10 +45,17 @@ const readGeminiText = (payload = {}) => (
   || ""
 );
 
-const getGeminiConfig = async (colid) => (
-  await AiConfiguration.findOne({ colid, type: /^gemini$/i, active: /^yes$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
-  || await AiConfiguration.findOne({ colid, type: /^gemini$/i, active: /^yes$/i }).sort({ _id: -1 }).lean()
-);
+const getGeminiConfig = async (colid) => {
+  const id = number(colid);
+  const base = { colid: id, apikey: { $exists: true, $ne: "" } };
+  return (
+    await AiConfiguration.findOne({ ...base, type: /^gemini$/i, active: /^yes$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
+    || await AiConfiguration.findOne({ ...base, type: /^gemini$/i, active: /^yes$/i }).sort({ default: -1, _id: -1 }).lean()
+    || await AiConfiguration.findOne({ ...base, type: /gemini|google/i, active: /^yes$/i }).sort({ default: -1, _id: -1 }).lean()
+    || await AiConfiguration.findOne({ ...base, active: /^yes$/i }).sort({ default: -1, _id: -1 }).lean()
+    || await AiConfiguration.findOne(base).sort({ default: -1, active: -1, _id: -1 }).lean()
+  );
+};
 
 const callGemini = async ({ colid, prompt, model = "gemini-2.5-flash" }) => {
   const config = await getGeminiConfig(colid);
@@ -81,6 +96,8 @@ const normalizeHistory = (history) => (
     })).filter((item) => item.content)
     : []
 );
+
+const hasGlobalSupportAccess = (req) => text(req.body.supportpassword || req.query.supportpassword || req.headers["x-support-password"]) === GLOBAL_SUPPORT_PASSWORD;
 
 const addIf = (query, field, value, exact = false) => {
   if (text(value)) query[field] = exact ? text(value) : regex(value);
@@ -183,6 +200,28 @@ const buildFeeDuplicateKey = (row = {}) => [
   text(row.feeeitem || row.feeitem)
 ].join("|").toLowerCase();
 
+const lateFineAmount = (duedate, perDay, maxAmount) => {
+  const due = duedate ? new Date(duedate) : null;
+  if (!due || Number.isNaN(due.getTime())) return 0;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  due.setHours(0, 0, 0, 0);
+  const days = Math.max(0, Math.floor((today - due) / 86400000));
+  const raw = days * (Number(perDay) || 0);
+  const cap = Number(maxAmount) || 0;
+  return cap > 0 ? Math.min(raw, cap) : raw;
+};
+
+const summarizeBy = (rows = [], field) => rows.reduce((acc, row) => {
+  const key = text(row[field]) || "Blank";
+  if (!acc[key]) acc[key] = { key, count: 0, amount: 0, paidamount: 0, totalamount: 0 };
+  acc[key].count += 1;
+  acc[key].amount += Number(row.amount || 0);
+  acc[key].paidamount += Number(row.paidamount || 0);
+  acc[key].totalamount += Number(row.totalamount || 0);
+  return acc;
+}, {});
+
 const dateQuery = ({ from, to }) => {
   const range = {};
   if (text(from)) range.$gte = new Date(from);
@@ -257,7 +296,8 @@ const moduleRules = {
     "Use Workload Assignment to map academic year, regulation, program, semester, course and faculty.",
     "Faculty workload should normally be created after Program, Regulation Course Map and faculty users are ready.",
     "Important fields are academicyear, regulation, programcode, semester, coursecode, facultyemail and hoursperweek.",
-    "For troubleshooting, verify that coursecode matches Regulation Course Map and faculty email matches User email."
+    "For troubleshooting, verify that coursecode matches Regulation Course Map and faculty email matches User email.",
+    "If a student is not showing workload or assigned courses, first check the student's academicyear, regulation, programcode and semester from User, then compare with Workload Assignment rows for the same context."
   ],
   course_material: [
     "Course material is stored as LMS resources with resourcetype Course Material and may include files, video links, sections and order.",
@@ -278,7 +318,9 @@ const moduleRules = {
     "Duplicate fee application is prevented by feeid or by academicyear, regulation, programcode, semester, feegroup and feeitem.",
     "Outstanding fees are ledgerstud rows with balance greater than 0; past due also requires duedate before today.",
     "Counter fee receipts are stored as CounterFee2Transaction records with item-level ledger history.",
-    "If a student cannot download a fees receipt, first compare regno from User by academicyear, student name and programcode with regno from Student Ledger by academicyear, student and programcode. If regno differs, ask to sync the records; if it matches, advise raising a ticket for further details."
+    "If a student cannot download a fees receipt, first compare regno from User by academicyear, student name and programcode with regno from Student Ledger by academicyear, student and programcode. If regno differs, ask to sync the records; if it matches, advise raising a ticket for further details.",
+    "If payment is received but ledger is not updated, check ICICI Payment View for the same regno/refno. If gateway status is SUCCESS, ledger should be reconciled; if status is INITIATED or FAILED but payment is actually received, ask user to use ICICI Manual Success.",
+    "Use Late Fine page to configure academic year, regulation, program/programcode, fee item, late fine per day and max amount, then Apply selected rules to update Latefinedue and balance in Student Ledger."
   ],
   academic_configuration: [
     "Program Management is stored in mprograms; course lists are in regulationcoursemapds.",
@@ -301,7 +343,9 @@ const moduleRules = {
     "Student Ledger is the operational source for due, paid, concession, balance, due date, paid date and receipt-related values.",
     "For online payment, programwise ICICI gateway is used only when a matching program/programcode configuration exists; otherwise the common ICICI gateway configuration is used.",
     "Late fine should be configured by academic year, regulation, program/programcode and fee item, then applied to matching student ledger rows with progress shown.",
-    "If receipts cannot download, compare User regno and Ledger regno for the same academicyear, student name and programcode before checking payment status."
+    "If receipts cannot download, compare User regno and Ledger regno for the same academicyear, student name and programcode before checking payment status.",
+    "ICICI Payment View is the read-only operational view for datewise/refno/regno/status checks. ICICI Manual Success is used only when real payment is received but gateway status is INITIATED or FAILED.",
+    "Common ICICI gateway configuration is in the payment gateway setup. Programwise ICICI configuration is selected by program/programcode when available, otherwise the default/common gateway is used."
   ],
   hr_leave: [
     "Recommended setup order: employee/staff users, leave types, weekly off, holiday list, leave eligibility, approval workflow and then leave application.",
@@ -406,6 +450,65 @@ const tools = [
       const query = { colid };
       ["academicyear", "coursecode", "facultyemail", "programcode", "semester"].forEach((field) => addIf(query, field, input[field], true));
       return WorkloadAssignment.find(query).sort({ updatedAt: -1 }).limit(limitNumber(limit)).lean();
+    }
+  },
+  {
+    name: "student_workload_visibility_diagnostic",
+    description: "Diagnose why a student is not showing workload or assigned courses by matching User academic fields against Workload Assignment rows.",
+    schema: { regno: "optional", studentname: "optional", email: "optional", academicyear: "optional override", regulation: "optional override", programcode: "optional override", semester: "optional override", limit: "optional" },
+    handler: async ({ colid, regno, studentname, email, limit, context = {}, ...input }) => {
+      const userQuery = { colid, role: /^Student$/i };
+      if (text(regno || context.regno)) userQuery.regno = text(regno || context.regno);
+      if (text(email)) userQuery.email = text(email);
+      if (text(studentname)) userQuery.name = regex(studentname);
+      const students = await User.find(userQuery).select("name email regno academicyear admissionyear regulation program programcode semester section role colid").sort({ name: 1 }).limit(limitNumber(limit, 10)).lean();
+      const diagnostics = [];
+      for (const student of students) {
+        const academic = exactStudentCourseFields(student, input);
+        const workloadQuery = { colid };
+        ["academicyear", "regulation", "programcode", "semester"].forEach((field) => {
+          if (academic[field]) workloadQuery[field] = academic[field];
+        });
+        const workloads = await WorkloadAssignment.find(workloadQuery).sort({ course: 1, coursecode: 1, facultyemail: 1 }).limit(100).lean();
+        const courseMapQuery = { colid };
+        ["academicyear", "regulation", "programcode", "semester"].forEach((field) => {
+          if (academic[field]) courseMapQuery[field] = academic[field];
+        });
+        const courseMaps = await RegulationCourseMap.find(courseMapQuery).sort({ course: 1, coursecode: 1 }).limit(100).lean();
+        const workloadCourseKeys = new Set(workloads.map((row) => text(row.coursecode || row.course).toLowerCase()).filter(Boolean));
+        const courseMapKeys = new Set(courseMaps.map((row) => text(row.coursecode || row.course).toLowerCase()).filter(Boolean));
+        const missingFromWorkload = courseMaps.filter((row) => !workloadCourseKeys.has(text(row.coursecode || row.course).toLowerCase()));
+        diagnostics.push({
+          student,
+          studentContext: academic,
+          workloadQuery,
+          courseMapQuery,
+          counts: {
+            workloadCourses: workloadCourseKeys.size,
+            workloadRows: workloads.length,
+            regulationCourseMapCourses: courseMapKeys.size,
+            coursesMissingFromWorkload: missingFromWorkload.length
+          },
+          checks: [
+            verdict(!!student.regno, "Student regno", student.regno ? `Student regno is ${student.regno}.` : "Student regno is blank."),
+            verdict(!!academic.academicyear && !!academic.programcode && !!academic.semester, "Student academic fields", academic.academicyear && academic.programcode && academic.semester ? "Student has academic year, programcode and semester." : "Student is missing academicyear/programcode/semester."),
+            verdict(workloads.length > 0, "Workload match", workloads.length ? `${workloads.length} workload row(s), ${workloadCourseKeys.size} distinct course(s), found for student's academicyear/programcode/semester.` : "No workload assignment rows match this student's academicyear, regulation, programcode and semester."),
+            courseMaps.length ? info("Regulation course map", `${courseMaps.length} course map row(s), ${courseMapKeys.size} distinct course(s), found for comparison.`) : warn("Regulation course map", "No course map rows found for the same student context."),
+            missingFromWorkload.length ? warn("Course map vs workload mismatch", `${missingFromWorkload.length} course(s) exist in course map but not in workload.`, missingFromWorkload) : verdict(true, "Course map vs workload", "No course-map course is missing from workload for this context.")
+          ],
+          workloads,
+          courseMaps,
+          missingFromWorkload
+        });
+      }
+      return {
+        query: userQuery,
+        studentsFound: students.length,
+        diagnostics,
+        recommendation: students.length
+          ? "If workload count is zero, create or correct Workload Assignment rows for the same academicyear, regulation, programcode and semester as the student."
+          : "Student not found. Check regno/name/email, role Student and colid."
+      };
     }
   },
   {
@@ -902,6 +1005,170 @@ tools.push(
     }
   },
   {
+    name: "payment_gateway_configuration_diagnostic",
+    description: "Check active ICICI payment gateway configuration selection for common/default and programwise payment gateway pages.",
+    schema: { program: "optional", programcode: "optional", includeInactive: "yes/no optional" },
+    handler: async ({ colid, program, programcode, includeInactive }) => {
+      const base = { colid };
+      if (text(includeInactive).toLowerCase() !== "yes") base.isactive = true;
+      const allConfigs = await IciciGateway.find(base).select("-secretkey").sort({ isactive: -1, programcode: 1, updatedAt: -1 }).lean();
+      const programText = text(program);
+      const programCodeText = text(programcode);
+      const exact = allConfigs.find((row) => text(row.program).toLowerCase() === programText.toLowerCase() && text(row.programcode).toLowerCase() === programCodeText.toLowerCase());
+      const codeOnly = allConfigs.find((row) => text(row.programcode).toLowerCase() === programCodeText.toLowerCase() && !text(row.program));
+      const programOnly = allConfigs.find((row) => text(row.program).toLowerCase() === programText.toLowerCase() && !text(row.programcode));
+      const common = allConfigs.find((row) => !text(row.program) && !text(row.programcode));
+      const selected = exact || codeOnly || programOnly || common || null;
+      return {
+        input: { program: programText, programcode: programCodeText },
+        selectedGateway: selected,
+        activeConfigs: allConfigs,
+        checks: [
+          verdict(allConfigs.length > 0, "ICICI configurations", allConfigs.length ? `${allConfigs.length} ICICI gateway configuration row(s) found.` : "No active ICICI gateway configuration found."),
+          programCodeText || programText ? (selected ? verdict(true, "Programwise/default selection", `Gateway selected by ${exact ? "exact program + programcode" : codeOnly ? "programcode" : programOnly ? "program" : "common/default"} match.`) : warn("Programwise/default selection", "No programwise or common gateway matched the requested program/programcode.")) : info("Common gateway", common ? "Common/default gateway exists." : "No common/default gateway exists."),
+          common ? verdict(true, "Fallback gateway", "Common/default gateway exists for fallback.") : warn("Fallback gateway", "No common/default ICICI gateway is available if programwise match is missing.")
+        ],
+        pageGuide: [
+          "Use Payment Gateway / ICICI Gateway for common/default configuration.",
+          "Use ICICI Program Gateway for programwise configuration.",
+          "Student online payment should use program/programcode from User; if no programwise configuration matches, it should fall back to the common/default gateway."
+        ]
+      };
+    }
+  },
+  {
+    name: "icici_payment_view_report",
+    description: "Read ICICI Payment View datewise/details by regno, refno, status, type or date range.",
+    schema: { fromdate: "optional yyyy-mm-dd", todate: "optional yyyy-mm-dd", regno: "optional", refno: "optional", status: "optional", type: "optional Student/Event/Admission", student: "optional", limit: "optional" },
+    handler: async ({ colid, fromdate, todate, limit, ...input }) => {
+      const query = { colid };
+      ["regno", "refno", "status", "type"].forEach((field) => addIf(query, field, input[field], true));
+      ["student", "feeitem"].forEach((field) => addIf(query, field, input[field]));
+      const range = dateQuery({ from: fromdate, to: todate });
+      if (range) query.initiationdate = range;
+      const rows = await IciciPayment.find(query).sort({ initiationdate: -1 }).limit(limitNumber(limit, 50)).lean();
+      const byStatus = Object.values(summarizeBy(rows, "status"));
+      const byDate = rows.reduce((acc, row) => {
+        const key = row.initiationdate ? new Date(row.initiationdate).toISOString().slice(0, 10) : "Blank";
+        if (!acc[key]) acc[key] = { date: key, count: 0, amount: 0, paidamount: 0 };
+        acc[key].count += 1;
+        acc[key].amount += Number(row.amount || 0);
+        acc[key].paidamount += Number(row.paidamount || 0);
+        return acc;
+      }, {});
+      return {
+        query,
+        count: rows.length,
+        totalAmount: rows.reduce((sum, row) => sum + Number(row.amount || 0), 0),
+        totalPaidAmount: rows.reduce((sum, row) => sum + Number(row.paidamount || 0), 0),
+        byStatus,
+        byDate: Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date)),
+        rows
+      };
+    }
+  },
+  {
+    name: "payment_received_ledger_not_updated_diagnostic",
+    description: "Diagnose payment received but student ledger not updated. Checks ICICI Payment View, Student Online Payment and linked ledger rows.",
+    schema: { regno: "required unless refno or studentonlinepaymentid is supplied", refno: "optional", studentonlinepaymentid: "optional", academicyear: "optional", programcode: "optional" },
+    handler: async ({ colid, regno, refno, studentonlinepaymentid, academicyear, programcode }) => {
+      const iciciQuery = { colid };
+      if (text(refno)) iciciQuery.refno = text(refno);
+      if (text(regno)) iciciQuery.regno = text(regno);
+      if (text(studentonlinepaymentid)) iciciQuery.$or = [{ studentonlinepaymentid: text(studentonlinepaymentid) }, { sourceid: text(studentonlinepaymentid) }];
+      const iciciPayments = await IciciPayment.find(iciciQuery).sort({ initiationdate: -1 }).limit(25).lean();
+
+      const onlineQuery = { colid };
+      if (text(studentonlinepaymentid) && mongoose.Types.ObjectId.isValid(text(studentonlinepaymentid))) onlineQuery._id = text(studentonlinepaymentid);
+      if (text(regno)) onlineQuery.regno = text(regno);
+      if (text(academicyear)) onlineQuery.academicyear = text(academicyear);
+      if (text(programcode)) onlineQuery.programcode = text(programcode);
+      const onlinePayments = await StudentOnlinePayment.find(onlineQuery).sort({ initiationdate: -1 }).limit(25).lean();
+
+      const ledgerIds = [...new Set(onlinePayments.flatMap((payment) => (payment.ledgeritems || []).map((item) => text(item.ledgerid))).filter(Boolean))];
+      const ledgerRows = ledgerIds.length
+        ? await Ledgerstud.find({ colid, _id: { $in: ledgerIds } }).select("student regno academicyear programcode semester feegroup feeitem amount paid balance pg paymode paydetails paiddate status Latefinedue").lean()
+        : await Ledgerstud.find({ colid, ...(text(regno) ? { regno: text(regno) } : {}), ...(text(academicyear) ? { academicyear: text(academicyear) } : {}), ...(text(programcode) ? { programcode: text(programcode) } : {}) }).sort({ paiddate: -1, duedate: 1 }).limit(50).lean();
+
+      const statuses = [...new Set(iciciPayments.map((row) => text(row.status).toUpperCase()).filter(Boolean))];
+      const hasSuccess = statuses.some((status) => ["SUCCESS", "SUCCESSFUL", "PAID"].includes(status));
+      const hasInitiatedOrFailed = statuses.some((status) => ["INITIATED", "FAILED", "FAIL", "PENDING"].includes(status));
+      const onlineSettled = onlinePayments.some((payment) => ["PAID", "SUCCESS"].includes(text(payment.paymentstatus).toUpperCase()));
+      const linkedLedgerUpdated = ledgerRows.some((row) => Number(row.paid || 0) > 0 || Number(row.pg || 0) > 0 || Number(row.balance || 0) === 0);
+      const recommendation = hasSuccess
+        ? (onlineSettled && linkedLedgerUpdated
+          ? "ICICI status is SUCCESS and linked online payment/ledger appears settled. If UI still shows pending, reload the report or check selected filters."
+          : "ICICI status is SUCCESS but online payment or ledger does not look settled. Run/retry reconciliation by opening student online payment report or ask technical support to inspect settlement.")
+        : hasInitiatedOrFailed
+          ? "Gateway record is INITIATED/FAILED/PENDING. If payment is actually received, use ICICI Manual Success to mark it SUCCESS; that page will settle the student ledger."
+          : "No successful ICICI record was found. Verify refno/regno/date and payment gateway response.";
+      return {
+        queries: { iciciQuery, onlineQuery, ledgerIds },
+        checks: [
+          verdict(iciciPayments.length > 0, "ICICI Payment View", iciciPayments.length ? `${iciciPayments.length} gateway transaction(s) found.` : "No ICICI gateway transaction found."),
+          hasSuccess ? verdict(true, "Gateway status", "At least one ICICI transaction is SUCCESS/SUCCESSFUL/PAID.") : warn("Gateway status", `No SUCCESS status found. Statuses: ${statuses.join(", ") || "-"}.`),
+          onlinePayments.length ? info("Student Online Payment", `${onlinePayments.length} student online payment row(s) found.`) : warn("Student Online Payment", "No matching student online payment row found."),
+          onlineSettled ? verdict(true, "Online payment status", "Student online payment is marked Paid/Success.") : warn("Online payment status", "Student online payment is not marked Paid/Success."),
+          linkedLedgerUpdated ? verdict(true, "Ledger update", "At least one linked ledger row has paid/pg updated or balance cleared.") : warn("Ledger update", "Linked ledger rows do not appear paid yet.")
+        ],
+        statuses,
+        iciciPayments,
+        onlinePayments,
+        ledgerRows,
+        recommendation
+      };
+    }
+  },
+  {
+    name: "late_fine_usage_help",
+    description: "Explain how to configure and apply late fine and which fields/pages are involved.",
+    schema: { topic: "optional configure/apply/report" },
+    handler: async () => ({
+      page: "Late fine",
+      route: "/latefine",
+      requiredFields: ["academicyear", "regulation", "program", "programcode", "feeitem", "latefineperday", "maxamount"],
+      calculation: "fineapplicabletillnow = days after ledger duedate * latefineperday, capped by maxamount when maxamount is greater than 0.",
+      applyBehavior: "When Apply is clicked for selected late fine rules, matching Student Ledger rows are found by colid, academicyear, regulation, programcode and feeitem. Latefinedue is set to the newly calculated fine and balance is adjusted by the difference from the old Latefinedue.",
+      notes: [
+        "Use filters to load only the rules you want; the page does not need to load the full database.",
+        "Review fineapplicabletillnow and affectedledgercount before applying.",
+        "If a student ledger balance looks wrong after late fine, compare old Latefinedue with new Latefinedue and check duedate."
+      ]
+    })
+  },
+  {
+    name: "late_fine_configuration_report",
+    description: "Read late fine configurations, compute current applicable fine and show matching student ledger rows.",
+    schema: { academicyear: "optional", regulation: "optional", programcode: "optional", feeitem: "optional", status: "optional", limit: "optional" },
+    handler: async ({ colid, limit, ...input }) => {
+      const query = { colid };
+      ["academicyear", "regulation", "programcode", "feeitem", "status"].forEach((field) => addIf(query, field, input[field], ["academicyear", "regulation", "programcode", "status"].includes(field)));
+      const configs = await LateFine.find(query).sort({ academicyear: -1, programcode: 1, feeitem: 1 }).limit(limitNumber(limit, 50)).lean();
+      const rows = [];
+      for (const config of configs) {
+        const ledgerQuery = {
+          colid,
+          academicyear: config.academicyear,
+          programcode: config.programcode,
+          feeitem: config.feeitem
+        };
+        if (text(config.regulation)) ledgerQuery.regulation = text(config.regulation);
+        const ledgers = await Ledgerstud.find(ledgerQuery).select("student regno duedate amount paid balance Latefinedue feeitem academicyear programcode regulation").sort({ duedate: 1 }).limit(100).lean();
+        const computed = ledgers.map((ledger) => ({ ...ledger, fineapplicabletillnow: lateFineAmount(ledger.duedate, config.latefineperday, config.maxamount) }));
+        rows.push({
+          config,
+          ledgerQuery,
+          affectedledgercount: ledgers.length,
+          maxFineApplicableTillNow: computed.length ? Math.max(...computed.map((row) => row.fineapplicabletillnow || 0)) : 0,
+          totalCurrentLateFineDue: computed.reduce((sum, row) => sum + Number(row.Latefinedue || 0), 0),
+          totalApplicableFine: computed.reduce((sum, row) => sum + Number(row.fineapplicabletillnow || 0), 0),
+          ledgerRows: computed
+        });
+      }
+      return { query, count: rows.length, rows };
+    }
+  },
+  {
     name: "menu_access_diagnostic",
     description: "Diagnose why a menu link is not showing for a role or user.",
     schema: { role: "required", path: "optional", title: "optional", menugroup: "optional" },
@@ -1164,6 +1431,140 @@ Give a helpful answer with steps. Include only relevant records/summaries and cl
     });
   } catch (error) {
     steps.push({ status: "error", label: "AI Help failed", detail: error.message });
+    res.status(500).json({ success: false, message: error.message, steps });
+  }
+};
+
+exports.processTickets = async (req, res) => {
+  const steps = [];
+  try {
+    if (!hasGlobalSupportAccess(req)) {
+      return res.status(403).json({ success: false, message: "Global support password is required" });
+    }
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(text).filter(Boolean) : [];
+    const selectedModel = text(req.body.model) || "gemini-2.5-flash-lite";
+    const currentUser = text(req.body.user) || "AI Processing";
+    const currentName = text(req.body.name) || "AI Processing";
+    const aiColid = number(req.body.aicolid || req.body.colid);
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select tickets for AI processing" });
+    const tickets = await CentralTicket.find({ _id: { $in: ids } }).sort({ createdAt: -1 }).lean();
+    const results = [];
+    steps.push({ status: "done", label: "Tickets loaded", detail: `${tickets.length} ticket(s) loaded for AI processing.` });
+
+    for (const ticket of tickets) {
+      const colid = number(ticket.colid);
+      const responses = await CentralTicketResponse.find({ ticketid: ticket._id, colid: ticket.colid }).sort({ createdAt: 1 }).lean();
+      const ticketContext = {
+        ticketno: ticket.ticketno,
+        title: ticket.title,
+        details: ticket.details,
+        category: ticket.category,
+        priority: ticket.priority,
+        status: ticket.status,
+        raisedby: ticket.raisedby,
+        raisedbyemail: ticket.raisedbyemail,
+        raisedbyrole: ticket.raisedbyrole,
+        assignedto: ticket.assignedto,
+        assignedtoemail: ticket.assignedtoemail,
+        institutionColid: ticket.colid,
+        previousResponses: responses.map((row) => ({
+          response: row.response,
+          status: row.status,
+          respondedby: row.respondedby,
+          respondedbyemail: row.respondedbyemail,
+          createdAt: row.createdAt
+        }))
+      };
+      steps.push({ status: "running", label: `Planning: ${ticket.ticketno}`, detail: "Gemini is reading ticket problem and selecting relevant ERP tools." });
+      const planPrompt = `You are AI Help ticket processing for a centralized ERP support desk.
+Analyze the ticket problem and use tools if needed to find the most likely solution. You may use one or more tools. Do not delete anything; no delete tool exists.
+The ticket belongs to colid ${ticket.colid}. All tools must be scoped to this colid.
+
+Ticket:
+${JSON.stringify(ticketContext, null, 2)}
+
+Available tools:
+${JSON.stringify(publicTools, null, 2)}
+
+Default rules:
+${JSON.stringify(moduleRules, null, 2)}
+
+Return JSON only:
+{
+  "reply": "short interim plan",
+  "toolCalls": [
+    { "name": "exact tool name", "arguments": { "key": "value" }, "reason": "why this tool is needed" }
+  ]
+}`;
+      const aiText = await callGemini({ colid: aiColid || colid, model: selectedModel, prompt: planPrompt });
+      const plan = extractJson(aiText) || { reply: aiText, toolCalls: [] };
+      const toolResults = [];
+      for (const call of Array.isArray(plan.toolCalls) ? plan.toolCalls : []) {
+        const tool = toolRegistry[text(call.name)];
+        if (!tool) {
+          toolResults.push({ name: call.name, status: "skipped", result: "Tool is not registered." });
+          continue;
+        }
+        steps.push({ status: "running", label: `Tool: ${tool.name}`, detail: `${ticket.ticketno}: ${call.reason || tool.description}` });
+        const result = await tool.handler({
+          ...(call.arguments || {}),
+          colid,
+          user: currentUser,
+          context: {
+            name: currentName,
+            user: currentUser,
+            email: currentUser,
+            role: "All",
+            adminScope: true
+          }
+        });
+        toolResults.push({ name: tool.name, status: "done", reason: call.reason, result });
+      }
+
+      steps.push({ status: "running", label: `Answering: ${ticket.ticketno}`, detail: "Gemini is preparing the final AI response." });
+      const finalAnswer = await callGemini({
+        colid: aiColid || colid,
+        model: selectedModel,
+        prompt: `You are AI Help. Prepare a clear support response for this ticket.
+Use the ticket problem, previous responses, ERP rules and tool results. If the issue needs manual verification, say exactly what to check next.
+Do not claim a database update was done unless a tool result confirms it. Do not mention internal JSON.
+
+Ticket:
+${JSON.stringify(ticketContext, null, 2)}
+
+Plan:
+${JSON.stringify(plan, null, 2)}
+
+Tool results:
+${JSON.stringify(toolResults, null, 2)}
+
+Write the final AI response with:
+1. Problem understood
+2. Findings
+3. Likely solution / steps
+4. Next action if still unresolved`
+      });
+
+      const response = await CentralTicketResponse.create({
+        ticketid: ticket._id,
+        ticketno: ticket.ticketno,
+        response: finalAnswer,
+        status: "Closed",
+        respondedby: "AI Response",
+        respondedbyemail: currentUser,
+        attachments: [],
+        colid: ticket.colid,
+        user: currentUser
+      });
+      const update = { status: "Closed", closedat: new Date() };
+      if (!ticket.firstresponseat) update.firstresponseat = new Date();
+      await CentralTicket.updateOne({ _id: ticket._id }, { $set: update });
+      results.push({ ticketid: String(ticket._id), ticketno: ticket.ticketno, colid: ticket.colid, status: "Closed", responseid: String(response._id), airesponse: finalAnswer, toolResults });
+      steps.push({ status: "done", label: `Closed: ${ticket.ticketno}`, detail: "AI response saved and ticket moved to Closed." });
+    }
+    res.json({ success: true, processed: results.length, results, steps });
+  } catch (error) {
+    steps.push({ status: "error", label: "AI ticket processing failed", detail: error.message });
     res.status(500).json({ success: false, message: error.message, steps });
   }
 };

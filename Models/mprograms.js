@@ -47,6 +47,10 @@ type: Number
 intakecapacity: {
 type: Number
 },
+amount: {
+type: Number,
+default: 0
+},
 excluded: {
 type: String,
 enum: ["Yes", "No"],

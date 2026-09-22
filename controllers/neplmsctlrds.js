@@ -94,24 +94,27 @@ const coursePayload = (body = {}) => ({
   user: text(body.user)
 });
 
-const resourcePayload = (body = {}) => ({
-  ...coursePayload(body),
-  resourcetype: text(body.resourcetype),
-  title: text(body.title),
-  section: text(body.section),
-  module: text(body.module),
-  topic: text(body.topic),
-  description: text(body.description),
-  order: optionalNumber(body.order),
-  employabilityrelated: text(body.employabilityrelated || body.employabilityRelated || body.employability) || "No",
-  duedate: text(body.duedate),
-  fullmarks: optionalNumber(body.fullmarks),
-  filename: text(body.filename),
-  originalname: text(body.originalname || body.filename || body.title),
-  mimetype: text(body.mimetype),
-  url: text(body.url || body.filelink || body.link),
-  status: text(body.status) || "Active"
-});
+const resourcePayload = (body = {}) => {
+  const resourcetype = text(body.resourcetype);
+  return {
+    ...coursePayload(body),
+    resourcetype,
+    title: text(body.title),
+    section: text(body.section),
+    module: text(body.module),
+    topic: text(body.topic),
+    description: text(body.description),
+    order: optionalNumber(body.order),
+    employabilityrelated: text(body.employabilityrelated || body.employabilityRelated || body.employability) || "No",
+    duedate: text(body.duedate),
+    fullmarks: optionalNumber(body.fullmarks),
+    filename: text(body.filename),
+    originalname: text(body.originalname || body.filename || body.title),
+    mimetype: text(body.mimetype),
+    url: text(body.url || body.filelink || body.link),
+    status: text(body.status) || (["Course Material", "Lesson Plan"].includes(resourcetype) ? "Published" : "Active")
+  };
+};
 
 const timetablePayload = (body = {}) => {
   const timezone = text(body.timezone) || "UTC";
@@ -449,7 +452,9 @@ Rules:
 };
 
 const getAiConfig = async (colid, provider = "Gemini") => {
-  const providerRegex = new RegExp(`^${escapeRegex(provider)}$`, "i");
+  const providerRegex = /^(chatgpt|openai)$/i.test(text(provider))
+    ? /^(chatgpt|openai)$/i
+    : new RegExp(`^${escapeRegex(provider)}$`, "i");
   return AiConfiguration.findOne({ colid: Number(colid), type: providerRegex, active: /^yes$/i, default: /^yes$/i }).sort({ _id: -1 }).lean()
     || AiConfiguration.findOne({ colid: Number(colid), type: providerRegex, active: /^yes$/i }).sort({ _id: -1 }).lean();
 };
@@ -484,6 +489,47 @@ const callGemini = async (apikey, prompt, preferredModel = "gemini-2.5-flash") =
   throw new Error(lastError || "Gemini API request failed");
 };
 
+const callChatGpt = async (apikey, prompt, preferredModel = "gpt-4o-mini") => {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apikey}`
+    },
+    body: JSON.stringify({
+      model: text(preferredModel) || "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "You are an academic assignment evaluator. Return valid JSON only." },
+        { role: "user", content: prompt }
+      ],
+      temperature: 0.2
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error?.message || "OpenAI/ChatGPT request failed");
+  return data.choices?.[0]?.message?.content || "";
+};
+
+const callClaude = async (apikey, prompt, preferredModel = "claude-3-5-haiku-latest") => {
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apikey,
+      "anthropic-version": "2023-06-01"
+    },
+    body: JSON.stringify({
+      model: text(preferredModel) || "claude-3-5-haiku-latest",
+      max_tokens: 4000,
+      temperature: 0.2,
+      messages: [{ role: "user", content: prompt }]
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error?.message || "Claude request failed");
+  return data.content?.map((part) => part.text || "").join("\n") || "";
+};
+
 const callOllama = async (config, prompt) => {
   const server = text(config.serveraddress || "http://localhost:11434").replace(/\/+$/, "");
   const model = text(config.modelname);
@@ -497,6 +543,70 @@ const callOllama = async (config, prompt) => {
   if (!response.ok) throw new Error(data.error || "Ollama request failed");
   return data.response || "";
 };
+
+const callEvaluationAi = async ({ colid, provider, model, ollamaConfigId, prompt }) => {
+  const normalized = text(provider || "Gemini").toLowerCase();
+  if (normalized === "ollama") {
+    const ollamaConfig = await getOllamaConfig(colid, ollamaConfigId);
+    if (!ollamaConfig) throw new Error("Active Ollama configuration is missing");
+    return callOllama(ollamaConfig, prompt);
+  }
+  const configProvider = normalized === "claude" ? "Claude" : normalized === "chatgpt" || normalized === "openai" ? "ChatGPT" : "Gemini";
+  const aiConfig = await getAiConfig(colid, configProvider);
+  if (!aiConfig?.apikey) throw new Error(`Active/default ${configProvider} AI configuration is missing`);
+  if (configProvider === "Claude") return callClaude(aiConfig.apikey, prompt, model);
+  if (configProvider === "ChatGPT") return callChatGpt(aiConfig.apikey, prompt, model);
+  return callGemini(aiConfig.apikey, prompt, model);
+};
+
+const parseEvaluationJson = (content = "") => {
+  const clean = stripCodeFence(content).replace(/^```json\s*/i, "").trim();
+  const start = clean.indexOf("{");
+  const end = clean.lastIndexOf("}");
+  const jsonText = start >= 0 && end > start ? clean.slice(start, end + 1) : clean;
+  try {
+    const parsed = JSON.parse(jsonText);
+    return {
+      marks: optionalNumber(parsed.marks ?? parsed.score ?? parsed.obtainedmarks),
+      comments: text(parsed.comments || parsed.feedback || parsed.facultycomments),
+      strengths: text(parsed.strengths),
+      improvements: text(parsed.improvements)
+    };
+  } catch (error) {
+    return { marks: 0, comments: clean, strengths: "", improvements: "" };
+  }
+};
+
+const buildAssignmentEvaluationPrompt = ({ assignment = {}, submission = {}, fullmarks }) => `Evaluate this student assignment submission and return JSON only.
+
+Return format:
+{
+  "marks": number,
+  "comments": "clear faculty feedback",
+  "strengths": "short summary",
+  "improvements": "specific improvement suggestions"
+}
+
+Rules:
+1. Marks must be between 0 and ${Number(fullmarks || 0)}.
+2. Consider the assignment brief, student comments, and the uploaded attachment link.
+3. If the attachment link cannot be accessed by the model, evaluate from the available metadata and clearly mention that the attachment could not be inspected.
+4. Do not invent evidence that is not present.
+
+Assignment:
+Title: ${text(assignment.title || submission.assignmenttitle)}
+Course: ${text(assignment.course || submission.course)} (${text(assignment.coursecode || submission.coursecode)})
+Description: ${text(assignment.description)}
+Module: ${text(assignment.module)}
+Topic: ${text(assignment.topic)}
+Full marks: ${Number(fullmarks || 0)}
+
+Student submission:
+Student: ${text(submission.student)} (${text(submission.regno)})
+Student comments: ${text(submission.comments)}
+File name: ${text(submission.originalname || submission.filename)}
+Attachment URL: ${text(submission.url)}
+Submitted date: ${submission.submitteddate || ""}`;
 
 const selectedSyllabusRows = async (body = {}) => {
   const modules = Array.isArray(body.modules) ? body.modules.map(text).filter(Boolean) : text(body.module).split(",").map(text).filter(Boolean);
@@ -660,6 +770,48 @@ exports.gradeAssignmentSubmission = async (req, res) => {
   }
 };
 
+exports.aiEvaluateAssignmentSubmission = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const id = text(req.body.id);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!id) return res.status(400).json({ success: false, message: "Submission is required" });
+
+    const submission = await NepLmsAssignmentSubmission.findOne({ _id: id, colid });
+    if (!submission) return res.status(404).json({ success: false, message: "Submission not found" });
+
+    const assignment = await NepLmsResource.findOne({ _id: submission.assignmentid, colid, resourcetype: "Assignment" }).lean();
+    const fullmarks = optionalNumber(req.body.fullmarks || submission.fullmarks || assignment?.fullmarks);
+    if (!fullmarks) return res.status(400).json({ success: false, message: "Full marks are required before AI evaluation" });
+
+    const raw = await callEvaluationAi({
+      colid,
+      provider: req.body.provider || "Gemini",
+      model: req.body.model,
+      ollamaConfigId: req.body.ollamaConfigId,
+      prompt: buildAssignmentEvaluationPrompt({ assignment, submission, fullmarks })
+    });
+    const parsed = parseEvaluationJson(raw);
+    const marks = Math.max(0, Math.min(fullmarks, optionalNumber(parsed.marks)));
+    const comments = [
+      parsed.comments,
+      parsed.strengths ? `Strengths: ${parsed.strengths}` : "",
+      parsed.improvements ? `Improvements: ${parsed.improvements}` : ""
+    ].filter(Boolean).join("\n\n");
+
+    submission.fullmarks = fullmarks;
+    submission.marks = marks;
+    submission.facultycomments = comments || text(raw);
+    submission.gradedby = text(req.body.gradedby || req.body.user);
+    submission.gradeddate = new Date();
+    submission.status = "AI Evaluated";
+    const data = await submission.save();
+    res.json({ success: true, data, raw });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.uploadResource = async (req, res) => {
   try {
     const payload = resourcePayload(req.body);
@@ -768,7 +920,7 @@ exports.generateAiResource = async (req, res) => {
       region: awsConfig.region,
       key,
       url: s3Url(awsConfig.bucket, awsConfig.region, key),
-      status: "Active"
+      status: payload.status || (payload.resourcetype === "Assignment" ? "Active" : "Published")
     });
 
     res.json({ success: true, data, url: data.url });
@@ -853,7 +1005,7 @@ exports.generateAiPptResource = async (req, res) => {
       region: awsConfig.region,
       key,
       url: s3Url(awsConfig.bucket, awsConfig.region, key),
-      status: "Active"
+      status: payload.status || "Published"
     });
 
     res.json({ success: true, data, url: data.url, slides: slides.length });

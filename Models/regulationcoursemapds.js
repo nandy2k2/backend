@@ -17,9 +17,12 @@ const regulationCourseMapSchema = new mongoose.Schema(
     coursetype: { type: String, enum: ["Theory", "Practical"], default: "Theory" },
     deliverytype: { type: String, enum: ["Compulsory", "Elective"], default: "Compulsory" },
     paytype: { type: String, enum: ["Paid", "Unpaid"], default: "Unpaid" },
-    electivetype: { type: String, enum: ["Internal", "External", "Mooc", ""], default: "" },
+    electivetype: { type: String, enum: ["Open", "Programwise", "Internal", "External", "Mooc", ""], default: "" },
+    prerequisitecourse: { type: String, trim: true, default: "" },
+    prerequisitecoursecode: { type: String, trim: true, default: "" },
     coursemastercode: { type: String, trim: true, default: "" },
     credit: { type: Number, default: 0 },
+    amount: { type: Number, default: 0 },
     colid: { type: Number, required: true, index: true },
     user: { type: String, trim: true },
     status: { type: String, trim: true, default: "Active" }

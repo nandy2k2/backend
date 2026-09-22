@@ -131,6 +131,29 @@ const enrichInstitution = async (tickets = []) => {
   }));
 };
 
+const attachLatestAiResponses = async (tickets = []) => {
+  if (!tickets.length) return tickets;
+  const ticketIds = tickets.map((ticket) => ticket._id).filter(Boolean);
+  const responses = await CentralTicketResponse.find({
+    ticketid: { $in: ticketIds },
+    respondedby: { $regex: /^AI Response$/i }
+  }).sort({ createdAt: -1 }).lean();
+  const latestByTicket = {};
+  responses.forEach((response) => {
+    const key = String(response.ticketid);
+    if (!latestByTicket[key]) latestByTicket[key] = response;
+  });
+  return tickets.map((ticket) => {
+    const latest = latestByTicket[String(ticket._id)];
+    return {
+      ...ticket,
+      airesponseid: latest?._id || "",
+      airesponse: latest?.response || "",
+      airesponseat: latest?.createdAt || null
+    };
+  });
+};
+
 exports.uploadMiddleware = upload.single("file");
 
 exports.getUsers = async (req, res) => {
@@ -183,7 +206,7 @@ exports.getTickets = async (req, res) => {
       filter.$or = [{ ticketno: regex }, { title: regex }, { details: regex }, { raisedby: regex }, { raisedbyemail: regex }, { assignedtoemail: regex }];
     }
     const data = await CentralTicket.find(filter).sort({ createdAt: -1 }).limit(1000).lean();
-    res.json({ success: true, data });
+    res.json({ success: true, data: await attachLatestAiResponses(data) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -228,7 +251,7 @@ exports.getAllInstitutionTickets = async (req, res) => {
       filter.$or = [{ ticketno: regex }, { title: regex }, { details: regex }, { raisedby: regex }, { raisedbyemail: regex }, { assignedtoemail: regex }, { category: regex }];
     }
     const rows = await CentralTicket.find(filter).sort({ createdAt: -1 }).limit(2000).lean();
-    res.json({ success: true, data: await enrichInstitution(rows) });
+    res.json({ success: true, data: await enrichInstitution(await attachLatestAiResponses(rows)) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -311,6 +334,24 @@ exports.respondTicket = async (req, res) => {
       update.assignedat = new Date();
     }
     await CentralTicket.updateOne({ _id: ticket._id }, { $set: update });
+    res.json({ success: true, data: response });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.updateTicketResponse = async (req, res) => {
+  try {
+    if (clean(req.body.supportpassword) && requireGlobalSupportAccess(req, res)) return;
+    const colid = asNumber(req.body.colid);
+    const filter = { _id: req.body.responseid };
+    if (colid) filter.colid = colid;
+    const response = await CentralTicketResponse.findOneAndUpdate(
+      filter,
+      { $set: { response: clean(req.body.response), user: clean(req.body.user) } },
+      { new: true }
+    );
+    if (!response) return res.status(404).json({ success: false, message: "Response not found" });
     res.json({ success: true, data: response });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

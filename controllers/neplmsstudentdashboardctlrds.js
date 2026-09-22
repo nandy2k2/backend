@@ -177,12 +177,27 @@ exports.getStudentDashboard = async (req, res) => {
     const emptyOr = baseQueries.length ? { $or: baseQueries } : { coursecode: { $in: [] } };
     const [attendanceRows, resources, timetableRows, submissions, quizzes, quizAttempts, lessonContent] = await Promise.all([
       NepLmsAttendance.find({ colid, regno, coursecode: { $in: courseCodes } }).sort({ classdate: 1 }).lean(),
-      NepLmsResource.find({ ...emptyOr, colid }).sort({ duedate: 1, createdAt: -1 }).lean(),
+      NepLmsResource.find({
+        ...emptyOr,
+        colid,
+        $or: [
+          { resourcetype: { $nin: ["Course Material", "Lesson Plan"] } },
+          { status: { $in: ["", "Active", "Published"] } },
+          { status: { $exists: false } }
+        ]
+      }).sort({ duedate: 1, createdAt: -1 }).lean(),
       NepLmsTimetable.find({ ...emptyOr, colid }).sort({ classdate: 1, classtime: 1 }).lean(),
       NepLmsAssignmentSubmission.find({ colid, regno, coursecode: { $in: courseCodes } }).lean(),
       NepLmsQuiz.find({ ...emptyOr, colid, status: "Active" }).sort({ startdatetime: 1 }).lean(),
       NepLmsQuizAttempt.find({ colid, regno, coursecode: { $in: courseCodes } }).lean(),
-      NepLmsLessonContent.find({ ...emptyOr, colid, status: "Active" }).sort({ sequence: 1 }).lean()
+      NepLmsLessonContent.find({
+        ...emptyOr,
+        colid,
+        $or: [
+          { status: { $in: ["", "Active", "Published"] } },
+          { status: { $exists: false } }
+        ]
+      }).sort({ sequence: 1 }).lean()
     ]);
     const studentSection = text(student.section);
     const timetable = timetableRows.filter((row) => {

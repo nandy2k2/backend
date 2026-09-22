@@ -27,6 +27,12 @@ const scholarshipdsschema = new mongoose.Schema({
     category: {
         type: String,
     },
+    scholarshiptype: {
+        type: String,
+    },
+    details: {
+        type: String,
+    },
     program: {
         type: String,
     },

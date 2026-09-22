@@ -11,6 +11,7 @@ const upload = multer({
 });
 
 exports.uploadMiddleware = upload.single("file");
+exports.bulkUserPhotoMiddleware = upload.array("files", 1000);
 exports.groupPhotosMiddleware = upload.fields([
   { name: "files", maxCount: 10 },
   { name: "file", maxCount: 10 }
@@ -324,6 +325,82 @@ exports.uploadUserPhoto = async (req, res) => {
     ).select(userSelect).lean();
     if (!data) return res.status(404).json({ success: false, message: "User not found" });
     res.json({ success: true, data, url: uploaded.url });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bulkUploadStudentPhotos = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const selectedExtension = text(req.body.extension).replace(/^\./, "").toLowerCase();
+    const allowedExtensions = new Set(["jpg", "jpeg", "png"]);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!allowedExtensions.has(selectedExtension)) return res.status(400).json({ success: false, message: "Select jpg, jpeg or png format" });
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) return res.status(400).json({ success: false, message: "Select one or more photo files" });
+
+    const results = [];
+    let updated = 0;
+    let failed = 0;
+
+    for (const file of files) {
+      const originalname = file.originalname || "";
+      const parsed = path.parse(originalname);
+      const fileExtension = parsed.ext.replace(/^\./, "").toLowerCase();
+      const regno = text(parsed.name);
+      const result = {
+        filename: originalname,
+        regno,
+        status: "Pending",
+        message: "",
+        url: ""
+      };
+
+      try {
+        if (!regno) throw new Error("Reg no could not be read from filename");
+        if (fileExtension !== selectedExtension) {
+          throw new Error(`File extension .${fileExtension || "blank"} does not match selected .${selectedExtension}`);
+        }
+        if (!/^image\//i.test(file.mimetype || "")) throw new Error("Only image files are allowed");
+
+        const uploaded = await uploadToAws({
+          colid,
+          buffer: file.buffer,
+          originalname,
+          mimetype: file.mimetype,
+          folder: "student-photos"
+        });
+
+        const data = await User.findOneAndUpdate(
+          { colid, role: /^Student$/i, regno },
+          { photo: uploaded.url },
+          { new: true }
+        ).select(userSelect).lean();
+        if (!data) throw new Error("Student not found for this reg no");
+
+        updated += 1;
+        result.status = "Updated";
+        result.message = "Photo updated";
+        result.url = uploaded.url;
+        result.student = data.name || "";
+        result.programcode = data.programcode || "";
+      } catch (error) {
+        failed += 1;
+        result.status = "Failed";
+        result.message = error.message || "Unable to upload photo";
+      }
+
+      results.push(result);
+    }
+
+    res.json({
+      success: true,
+      total: files.length,
+      updated,
+      failed,
+      results
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

@@ -83,6 +83,19 @@ const verifyCourseForStudent = async (source, student) => {
 const uniq = (items) => [...new Set(items.map(text).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 const getDefaultAwsConfig = async (colid) => Awsconfig.findOne({ colid: Number(colid), type: /^aws$/i, default: /^yes$/i }).sort({ _id: -1 }).lean();
 const emailRegex = (email) => ({ $regex: `^${escRegex(text(email))}$`, $options: "i" });
+const publishedResourceClause = {
+  $or: [
+    { resourcetype: { $nin: ["Course Material", "Lesson Plan"] } },
+    { status: { $in: ["", "Active", "Published"] } },
+    { status: { $exists: false } }
+  ]
+};
+const visiblePublishedStatusClause = {
+  $or: [
+    { status: { $in: ["", "Active", "Published"] } },
+    { status: { $exists: false } }
+  ]
+};
 
 const buildFacultyCourseQuery = (source = {}) => {
   const query = {
@@ -180,7 +193,7 @@ exports.getCourseWorkspace = async (req, res) => {
     const quizAttemptFilter = { colid: Number(req.query.colid), regno: text(req.query.regno), coursecode: course.coursecode };
     if (coursegroup) quizAttemptFilter.coursegroup = coursegroup;
     const [resources, timetable, rawSubmissions, quizzes, quizAttempts] = await Promise.all([
-      NepLmsResource.find(base).sort({ resourcetype: 1, duedate: 1, createdAt: -1 }).lean(),
+      NepLmsResource.find({ ...base, ...publishedResourceClause }).sort({ resourcetype: 1, duedate: 1, createdAt: -1 }).lean(),
       NepLmsTimetable.find(timetableQuery).sort({ classdate: 1, classtime: 1 }).lean(),
       NepLmsAssignmentSubmission.find({ colid: Number(req.query.colid), regno: text(req.query.regno), coursecode: course.coursecode }).sort({ submitteddate: -1 }).lean(),
       NepLmsQuiz.find({ ...base, status: "Active" }).sort({ startdatetime: 1 }).lean(),
@@ -225,7 +238,7 @@ exports.getCourseMaterials = async (req, res) => {
       semester: course.semester,
       coursecode: course.coursecode,
       resourcetype: "Course Material",
-      status: "Active"
+      ...visiblePublishedStatusClause
     };
     if (course.regulation) query.regulation = course.regulation;
     if (course.program) query.program = course.program;
@@ -271,7 +284,7 @@ exports.getFacultyCourseMaterials = async (req, res) => {
       semester: course.semester,
       coursecode: course.coursecode,
       resourcetype: "Course Material",
-      status: "Active"
+      ...visiblePublishedStatusClause
     };
     if (course.regulation) query.regulation = course.regulation;
     if (course.program) query.program = course.program;

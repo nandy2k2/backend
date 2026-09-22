@@ -1,6 +1,7 @@
 const NepClassEnrollment = require("../Models/nepclassenrollmentds");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
 const User = require("../Models/user");
+const LedgerStud = require("../Models/ledgerstud");
 
 const text = (value) => String(value ?? "").trim();
 const number = (value, fallback = 0) => {
@@ -100,6 +101,96 @@ const upsertEnrollment = async (payload) => NepClassEnrollment.findOneAndUpdate(
   payload,
   { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
 );
+
+const electiveFeeItem = (payload = {}) => [text(payload.course), text(payload.coursecode)].filter(Boolean).join(" - ");
+
+const findElectiveCourse = async (payload = {}) => {
+  const base = {
+    colid: number(payload.colid, 0),
+    academicyear: text(payload.academicyear),
+    regulation: text(payload.regulation),
+    programcode: text(payload.programcode),
+    semester: text(payload.semester),
+    coursecode: text(payload.coursecode),
+    deliverytype: "Elective",
+    status: "Active"
+  };
+  let course = await RegulationCourseMap.findOne(base).lean();
+  if (!course && payload.course) {
+    const fallback = { ...base, course: text(payload.course) };
+    delete fallback.coursecode;
+    course = await RegulationCourseMap.findOne(fallback).lean();
+  }
+  return course;
+};
+
+const ensureElectiveLedger = async (payload = {}, actor = "") => {
+  if (text(payload.status).toLowerCase() !== "approved") return null;
+  const course = await findElectiveCourse(payload);
+  const amount = number(course?.amount, 0);
+  if (!course || amount <= 0) return null;
+
+  const student = await User.findOne({
+    colid: payload.colid,
+    role: /^Student$/i,
+    $or: [
+      ...(payload.regno ? [{ regno: payload.regno }] : []),
+      ...(payload.studentemail ? [{ email: re(payload.studentemail) }] : [])
+    ]
+  }).lean();
+
+  const feeitem = electiveFeeItem({ ...payload, course: course.course || payload.course, coursecode: course.coursecode || payload.coursecode });
+  const filter = {
+    colid: payload.colid,
+    academicyear: payload.academicyear,
+    regulation: payload.regulation,
+    programcode: payload.programcode,
+    semester: payload.semester,
+    regno: payload.regno,
+    feegroup: "Elective",
+    feeitem
+  };
+  const now = new Date();
+  const existing = await LedgerStud.findOne(filter).lean();
+  const paid = number(existing?.paid, 0);
+  const concession = number(existing?.concession, 0);
+  const balance = Math.max(0, amount - paid - concession);
+  const data = {
+    name: text(actor) || text(payload.approvedby) || text(payload.user) || text(payload.student),
+    user: text(actor) || text(payload.approvedby) || text(payload.user) || text(payload.studentemail) || text(payload.regno),
+    feegroup: "Elective",
+    feecategory: "Elective",
+    feetype: "Elective",
+    regno: payload.regno,
+    student: payload.student,
+    feeitem,
+    amount,
+    paid,
+    concession,
+    balance,
+    Latefinedue: number(existing?.Latefinedue, 0),
+    Latefinepaid: number(existing?.Latefinepaid, 0),
+    refundable: existing?.refundable || "No",
+    refundamount: number(existing?.refundamount, 0),
+    refundedamount: number(existing?.refundedamount, 0),
+    semester: payload.semester,
+    institution: student?.institution || "",
+    type: "positive",
+    installment: "",
+    comments: `Elective fee for ${feeitem}`,
+    academicyear: payload.academicyear,
+    colid: payload.colid,
+    classdate: existing?.classdate || now,
+    duedate: existing?.duedate || now,
+    status: balance > 0 ? "Due" : "Paid",
+    programcode: payload.programcode,
+    regulation: payload.regulation,
+    admissionyear: student?.admissionyear || payload.academicyear
+  };
+
+  const ledger = await LedgerStud.findOneAndUpdate(filter, { $set: data }, { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true });
+  return ledger;
+};
 
 exports.options = async (req, res) => {
   try {
@@ -217,15 +308,18 @@ exports.enrollStudents = async (req, res) => {
     const students = Array.isArray(req.body.students) ? req.body.students : [];
     if (!students.length) return res.status(400).json({ success: false, message: "Select students" });
     let saved = 0;
+    let ledgerProcessed = 0;
     for (const student of students) {
       const payload = cleanEnrollment({ ...course, ...student, status: "Approved", approvedby: req.body.user, user: req.body.user, colid: req.body.colid || course.colid });
       payload.approveddate = new Date();
       const error = validate(payload);
       if (error) continue;
       await upsertEnrollment(payload);
+      const ledger = await ensureElectiveLedger(payload, req.body.user);
+      if (ledger) ledgerProcessed += 1;
       saved += 1;
     }
-    res.json({ success: true, saved });
+    res.json({ success: true, saved, ledgerProcessed });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -248,11 +342,17 @@ exports.approve = async (req, res) => {
     const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
     const colid = number(req.body.colid, 0);
     if (!colid || !ids.length) return res.status(400).json({ success: false, message: "Select applications" });
+    const applications = await NepClassEnrollment.find({ colid, _id: { $in: ids } }).lean();
     const result = await NepClassEnrollment.updateMany(
       { colid, _id: { $in: ids } },
       { $set: { status: "Approved", approvedby: text(req.body.user), approveddate: new Date() } }
     );
-    res.json({ success: true, updated: result.modifiedCount || 0 });
+    let ledgerProcessed = 0;
+    for (const row of applications) {
+      const ledger = await ensureElectiveLedger({ ...row, status: "Approved", approvedby: text(req.body.user), approveddate: new Date(), user: text(req.body.user) || row.user }, req.body.user);
+      if (ledger) ledgerProcessed += 1;
+    }
+    res.json({ success: true, updated: result.modifiedCount || 0, ledgerProcessed });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

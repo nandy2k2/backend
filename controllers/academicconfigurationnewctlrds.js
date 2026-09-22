@@ -20,7 +20,7 @@ const uniqueSorted = (values = []) => [...new Set(values.map(text).filter(Boolea
 const config = {
   institution: {
     Model: InstitutionMaster,
-    fields: ["institution", "institutioncode", "description", "status"],
+    fields: ["institution", "institutioncode", "shortname", "parentschool", "university", "yearofestablishment", "institutiontype", "type", "description", "status"],
     required: ["institution"]
   },
   faculty: {
@@ -38,10 +38,18 @@ const config = {
 function masterPayload(kind, source = {}) {
   const meta = config[kind];
   const payload = { colid: num(source.colid), user: text(source.user) };
+  if (kind === "institution") {
+    source = {
+      ...source,
+      yearofestablishment: source.yearofestablishment || source.yesrofestablishment || source.year || source["year of establishment"],
+      institutiontype: source.institutiontype || source.instotutetype || source.institutetype || source["institute type"]
+    };
+  }
   meta.fields.forEach((field) => {
     if (Object.prototype.hasOwnProperty.call(source, field)) payload[field] = source[field];
   });
   if (!payload.status) payload.status = "Active";
+  if (kind === "institution" && !payload.type) payload.type = "Active";
   return payload;
 }
 
@@ -120,11 +128,25 @@ exports.bulkMaster = async (req, res) => {
     const kind = text(req.params.kind).toLowerCase();
     if (!config[kind]) return res.status(400).json({ success: false, message: "Invalid master type" });
     const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
-    const docs = rows.map((row) => masterPayload(kind, { ...row, colid: req.body.colid, user: req.body.user }));
-    const data = docs.length ? await config[kind].Model.insertMany(docs, { ordered: false }) : [];
-    res.json({ success: true, inserted: data.length, data });
+    const data = [];
+    const errors = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      const payload = masterPayload(kind, { ...rows[index], colid: req.body.colid, user: req.body.user });
+      const missing = config[kind].required.filter((field) => !text(payload[field]));
+      if (missing.length) {
+        errors.push(`Row ${index + 2}: ${missing.join(", ")} required`);
+        continue;
+      }
+      let key = { colid: payload.colid };
+      if (kind === "institution") key.institution = payload.institution;
+      if (kind === "faculty") key.faculty = payload.faculty;
+      if (kind === "department") key = { colid: payload.colid, faculty: payload.faculty, institution: payload.institution, department: payload.department };
+      const saved = await config[kind].Model.findOneAndUpdate(key, payload, { new: true, upsert: true, setDefaultsOnInsert: true, runValidators: true });
+      data.push(saved);
+    }
+    res.json({ success: true, inserted: data.length, saved: data.length, errors, data });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.code === 11000 ? "Some entries are duplicate" : error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 

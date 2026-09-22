@@ -137,7 +137,7 @@ const contentPayload = async (body = {}) => {
     mindmapid: text(body.mindmapid) || undefined,
     mindmaptitle: text(body.mindmaptitle || mindmap?.title),
     flashcards: parseFlashcards(body.flashcards),
-    status: text(body.status) || "Active"
+    status: text(body.status) || "Published"
   };
 };
 
@@ -147,6 +147,13 @@ const buildFilter = (source = {}) => {
     if (text(source[field])) filter[field] = source[field];
   });
   return filter;
+};
+
+const publishedStatusClause = {
+  $or: [
+    { status: { $in: ["", "Active", "Published"] } },
+    { status: { $exists: false } }
+  ]
 };
 
 const safeHtml = (value) => String(value || "").replace(/[&<>"']/g, (char) => ({
@@ -446,8 +453,7 @@ exports.getStudentLessonContent = async (req, res) => {
   try {
     const student = await studentForRequest(req.query);
     await verifyStudentCourseGroup(req.query, student);
-    const filter = buildFilter(req.query);
-    filter.status = "Active";
+    const filter = { ...buildFilter(req.query), ...publishedStatusClause };
     const contents = await NepLmsLessonContent.find(filter).sort({ lessonresourceid: 1, sequence: 1, createdAt: 1 }).lean();
     const progressRows = await NepLmsLessonContentProgress.find({
       colid: Number(req.query.colid),
@@ -484,7 +490,7 @@ exports.completeContent = async (req, res) => {
   try {
     const student = await studentForRequest(req.body);
     const colid = Number(req.body.colid);
-    const content = await NepLmsLessonContent.findOne({ _id: req.body.contentid, colid, status: "Active" }).lean();
+    const content = await NepLmsLessonContent.findOne({ _id: req.body.contentid, colid, ...publishedStatusClause }).lean();
     if (!content) return res.status(404).json({ success: false, message: "Content not found" });
     await verifyStudentCourseGroup(content, student);
 
@@ -492,7 +498,7 @@ exports.completeContent = async (req, res) => {
       colid,
       lessonresourceid: content.lessonresourceid,
       sequence: { $lt: content.sequence },
-      status: "Active"
+      ...publishedStatusClause
     }).sort({ sequence: 1 }).lean();
     if (earlier.length) {
       const earlierProgress = await NepLmsLessonContentProgress.find({
@@ -513,7 +519,7 @@ exports.completeContent = async (req, res) => {
     const lessonSteps = await NepLmsLessonContent.find({
       colid,
       lessonresourceid: content.lessonresourceid,
-      status: "Active"
+      ...publishedStatusClause
     }).sort({ sequence: 1 }).lean();
     const currentProgress = await NepLmsLessonContentProgress.find({
       colid,
