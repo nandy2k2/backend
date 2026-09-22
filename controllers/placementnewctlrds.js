@@ -15,6 +15,7 @@ const InternshipStage = require("../Models/placementnewinternshipstageds");
 const SipApplication = require("../Models/placementnewsipapplicationds");
 const PlacementApplication = require("../Models/placementnewplacementapplicationds");
 const PlacementRecord = require("../Models/placementnewrecordds");
+const PlacementInterest = require("../Models/placementnewstudentinterestds");
 const InternshipPool = require("../Models/placementnewinternshippoolds");
 const InternshipApplication = require("../Models/placementnewinternshipapplicationds");
 const InternshipSchedule = require("../Models/placementnewinternshipscheduleds");
@@ -79,7 +80,7 @@ const callAi = (body, prompt) => /^ollama$/i.test(text(body.provider)) ? callOll
 
 const modelMap = {
   company: { Model: Company, fields: ["company", "companyemail", "contactnumber", "industry", "login", "password", "address", "status"] },
-  job: { Model: Job, fields: ["industry", "company", "companyemail", "type", "jobtitle", "jobdetails", "description", "startdate", "enddate", "programs", "minimumcgpa", "skills", "status"] },
+  job: { Model: Job, fields: ["industry", "company", "companyemail", "type", "jobtitle", "jobdetails", "description", "startdate", "enddate", "programs", "semester", "minimumcgpa", "salary", "bondrequired", "joiningdate", "termsandconditions", "interntohire", "internshipsalary", "eligibilitycriteria", "cgpachecking", "atktno", "skills", "status"] },
   internship: { Model: Internship, fields: ["student", "studentemail", "regno", "program", "programcode", "admissionyear", "academicyear", "company", "areaofexpertise", "startdate", "enddate", "description", "status"] },
   sip: { Model: SipStudent, fields: ["jobid", "jobtitle", "type", "program", "programcode", "student", "studentemail", "regno", "admissionyear", "academicyear", "company", "companyemail", "project", "startdate", "enddate", "companycontact", "mentor", "mentoremail", "status"] },
   mentor: { Model: Mentor, fields: ["mentor", "mentoremail", "student", "studentemail", "regno", "academicyear", "admissionyear", "program", "programcode", "status"] },
@@ -104,6 +105,11 @@ const payloadFor = (kind, source = {}) => {
   });
   if (kind === "job" && typeof payload.programs === "string") {
     payload.programs = payload.programs.split(",").map((item) => ({ programcode: text(item), program: "" })).filter((item) => item.programcode);
+  }
+  if (kind === "job") {
+    if (typeof payload.semester === "string") payload.semester = payload.semester.split(",").map(text).filter(Boolean);
+    if (typeof payload.cgpachecking === "string") payload.cgpachecking = payload.cgpachecking.split(",").map(text).filter(Boolean);
+    if (Object.prototype.hasOwnProperty.call(source, "interntoohire")) payload.interntohire = text(source.interntoohire);
   }
   return payload;
 };
@@ -678,6 +684,150 @@ exports.applyJob = async (req, res) => {
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.code === 11000 ? "Already applied for this job" : error.message });
+  }
+};
+
+const interestFilter = (source = {}) => {
+  const filter = { colid: Number(source.colid) };
+  ["academicyear", "regulation", "program", "programcode", "semester", "section", "department", "category", "gender", "student", "studentemail", "regno", "interested", "industry"].forEach((field) => {
+    if (text(source[field])) filter[field] = regex(source[field]);
+  });
+  return filter;
+};
+
+exports.studentPlacementInterest = async (req, res) => {
+  try {
+    const colid = Number(req.query.colid);
+    const student = await User.findOne({ colid, $or: [{ email: text(req.query.email || req.query.user) }, { user: text(req.query.email || req.query.user) }, { regno: text(req.query.regno) }] }).lean();
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+    const identity = text(student.regno) ? { regno: text(student.regno) } : { studentemail: text(student.email || student.user) };
+    const [interest, companies, records, jobs] = await Promise.all([
+      PlacementInterest.findOne({ colid, academicyear: text(student.academicyear), ...identity }).lean(),
+      Company.find({ colid }).select("industry").lean(),
+      PlacementRecord.find({ colid }).select("industry sector").lean(),
+      Job.find({ colid }).select("industry").lean()
+    ]);
+    res.json({ success: true, student, interest, industries: uniqueSorted([...companies.map((item) => item.industry), ...records.map((item) => item.industry || item.sector), ...jobs.map((item) => item.industry)]) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.savePlacementInterest = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const student = await User.findOne({ colid, $or: [{ email: text(req.body.email || req.body.user) }, { user: text(req.body.email || req.body.user) }, { regno: text(req.body.regno) }] }).lean();
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+    const payload = {
+      academicyear: text(student.academicyear),
+      regulation: text(student.regulation),
+      program: text(student.program),
+      programcode: text(student.programcode),
+      semester: text(student.semester),
+      section: text(student.section),
+      department: text(student.department),
+      category: text(student.category),
+      gender: text(student.gender),
+      student: text(student.name),
+      studentemail: text(student.email || student.user),
+      regno: text(student.regno),
+      interested: /^no$/i.test(text(req.body.interested)) ? "No" : "Yes",
+      industry: text(req.body.industry),
+      comments: text(req.body.comments),
+      colid,
+      user: text(req.body.user)
+    };
+    const identity = text(student.regno) ? { regno: text(student.regno) } : { studentemail: text(student.email || student.user) };
+    const data = await PlacementInterest.findOneAndUpdate({ colid, academicyear: payload.academicyear, ...identity }, { $set: payload }, { upsert: true, new: true, setDefaultsOnInsert: true });
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.placementInterests = async (req, res) => {
+  try {
+    const [data, institution] = await Promise.all([
+      PlacementInterest.find(interestFilter(req.body)).sort({ updatedAt: -1 }).limit(5000).lean(),
+      Institution.findOne({ colid: Number(req.body.colid) }).lean()
+    ]);
+    res.json({ success: true, data, institution });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.placementInterestAnalysis = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const rows = await PlacementInterest.find(interestFilter(req.body)).sort({ updatedAt: -1 }).limit(5000).lean();
+    const institution = await Institution.findOne({ colid }).lean();
+    const interested = rows.filter((item) => /^yes$/i.test(text(item.interested))).length;
+    const notInterested = rows.filter((item) => /^no$/i.test(text(item.interested))).length;
+    res.json({
+      success: true,
+      rows,
+      institution,
+      byProgram: countBy(rows, (item) => item.programcode || item.program),
+      bySemester: countBy(rows, (item) => item.semester),
+      byIndustry: countBy(rows.filter((item) => /^yes$/i.test(text(item.interested))), (item) => item.industry),
+      byInterest: countBy(rows, (item) => item.interested),
+      summary: { total: rows.length, interested, notInterested, undecided: rows.length - interested - notInterested }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const bestCgpaForStudent = (marks = []) => {
+  const values = marks.map((item) => num(item.gpa || item.sgpa || item.api || item.overallgradepoint)).filter((value) => value > 0);
+  return values.length ? Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2)) : 0;
+};
+
+exports.eligibleStudentsForJob = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const job = await Job.findOne({ _id: req.body.jobid, colid }).lean();
+    if (!job) return res.status(404).json({ success: false, message: "Job not found" });
+    const programCodes = (Array.isArray(job.programs) ? job.programs : []).map((item) => text(item.programcode)).filter(Boolean);
+    const semesters = (Array.isArray(job.semester) ? job.semester : []).map(text).filter(Boolean);
+    const studentQuery = { colid, role: /^Student$/i };
+    if (text(req.body.academicyear)) studentQuery.academicyear = text(req.body.academicyear);
+    if (programCodes.length) studentQuery.programcode = { $in: programCodes };
+    if (semesters.length) studentQuery.semester = { $in: semesters };
+    const students = await User.find(studentQuery).select("name email user phone regno academicyear regulation program programcode semester section category gender tenth twelfth percentage10 percentage12 cgpa").sort({ programcode: 1, semester: 1, name: 1 }).limit(10000).lean();
+    const regnos = students.map((student) => text(student.regno)).filter(Boolean);
+    const marks = await VivaMarks.find({ colid, regno: { $in: regnos } }).select("regno status gpa overallgradepoint overallgrade overallpercentage semester course coursecode").lean();
+    const marksByRegno = marks.reduce((acc, item) => {
+      const key = text(item.regno);
+      acc[key] = acc[key] || [];
+      acc[key].push(item);
+      return acc;
+    }, {});
+    const requiredCgpa = num(job.minimumcgpa);
+    const maxAtkt = num(job.atktno);
+    const checks = Array.isArray(job.cgpachecking) ? job.cgpachecking.map(text) : [];
+    const data = students.map((student) => {
+      const studentMarks = marksByRegno[text(student.regno)] || [];
+      const atkt = studentMarks.filter((item) => /^fail$/i.test(text(item.status)) || /^f$/i.test(text(item.overallgrade)) || (text(item.status) && !/^pass$/i.test(text(item.status)))).length;
+      const cgpa = num(student.cgpa) || bestCgpaForStudent(studentMarks);
+      const reasons = [];
+      if (requiredCgpa && cgpa && cgpa < requiredCgpa) reasons.push(`CGPA ${cgpa} below required ${requiredCgpa}`);
+      if (requiredCgpa && !cgpa) reasons.push("CGPA not available");
+      if (maxAtkt && atkt > maxAtkt) reasons.push(`ATKT ${atkt} above allowed ${maxAtkt}`);
+      if (checks.some((item) => /^10th$/i.test(item)) && !text(student.tenth || student.percentage10)) reasons.push("10th details not available");
+      if (checks.some((item) => /^12th$/i.test(item)) && !text(student.twelfth || student.percentage12)) reasons.push("12th details not available");
+      return {
+        ...student,
+        cgpa,
+        atkt,
+        eligible: reasons.length ? "No" : "Yes",
+        reasons: reasons.join("; ") || "Eligible"
+      };
+    });
+    res.json({ success: true, job, data, eligible: data.filter((item) => item.eligible === "Yes"), ineligible: data.filter((item) => item.eligible !== "Yes"), summary: { total: data.length, eligible: data.filter((item) => item.eligible === "Yes").length, ineligible: data.filter((item) => item.eligible !== "Yes").length } });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 

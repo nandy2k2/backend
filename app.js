@@ -549,6 +549,8 @@ app.post("/api/v2/placement-new/ai-candidate-search", placementnewctlrds.aiCandi
 app.get("/api/v2/placement-new-student/assignments", placementnewctlrds.studentAssignments);
 app.get("/api/v2/placement-new-student/jobs", placementnewctlrds.studentJobs);
 app.post("/api/v2/placement-new-student/apply", placementnewctlrds.applyJob);
+app.get("/api/v2/placement-new-student/interest", placementnewctlrds.studentPlacementInterest);
+app.post("/api/v2/placement-new-student/interest", placementnewctlrds.savePlacementInterest);
 app.get("/api/v2/placement-new-student/internship-pools", placementnewctlrds.studentInternshipPools);
 app.post("/api/v2/placement-new-student/internship-apply", placementnewctlrds.applyInternshipPool);
 app.get("/api/v2/placement-new/applications", placementnewctlrds.applicationList);
@@ -570,6 +572,9 @@ app.post("/api/v2/placement-new/stage-students/confirm", placementnewctlrds.conf
 app.get("/api/v2/placement-new/stage-report", placementnewctlrds.placementStageReport);
 app.post("/api/v2/placement-new/unemployed-students", placementnewctlrds.unemployedStudents);
 app.get("/api/v2/placement-new/placement-dashboard", placementnewctlrds.placementDashboard);
+app.post("/api/v2/placement-new/interests", placementnewctlrds.placementInterests);
+app.post("/api/v2/placement-new/interest-analysis", placementnewctlrds.placementInterestAnalysis);
+app.post("/api/v2/placement-new/eligible-students", placementnewctlrds.eligibleStudentsForJob);
 app.get("/api/v2/placement-new/:kind", placementnewctlrds.list);
 app.post("/api/v2/placement-new/:kind", placementnewctlrds.save);
 app.post("/api/v2/placement-new/:kind/delete", placementnewctlrds.deleteOne);
@@ -5619,6 +5624,7 @@ const programperiodslotctlrds = require("./controllers/programperiodslotctlrds")
 const facultyavailabilityctlrds = require("./controllers/facultyavailabilityctlrds");
 const neplmsctlrds = require("./controllers/neplmsctlrds");
 const roomresourcectlrds = require("./controllers/roomresourcectlrds");
+const resourcemanagementctlrds = require("./controllers/resourcemanagementctlrds");
 const neplmsquizctlrds = require("./controllers/neplmsquizctlrds");
 const neplmslivequizctlrds = require("./controllers/neplmslivequizctlrds");
 const neplmsprereadingctlrds = require("./controllers/neplmsprereadingctlrds");
@@ -6340,6 +6346,20 @@ app.post("/api/v2/neplms/room-resources", roomresourcectlrds.saveRoom);
 app.post("/api/v2/neplms/room-resources/delete", roomresourcectlrds.deleteRoom);
 app.post("/api/v2/neplms/room-resources/bulk", roomresourcectlrds.bulkRooms);
 app.get("/api/v2/neplms/room-calendar", roomresourcectlrds.calendar);
+app.get("/api/v2/resource-management/options", resourcemanagementctlrds.options);
+app.get("/api/v2/resource-management/room-time-owners", resourcemanagementctlrds.roomTimeOwners);
+app.post("/api/v2/resource-management/room-time-owners", resourcemanagementctlrds.saveRoomTimeOwner);
+app.post("/api/v2/resource-management/room-time-owners/delete", resourcemanagementctlrds.deleteRoomTimeOwner);
+app.get("/api/v2/resource-management/types", resourcemanagementctlrds.listResourceTypes);
+app.post("/api/v2/resource-management/types", resourcemanagementctlrds.saveResourceType);
+app.post("/api/v2/resource-management/types/delete", resourcemanagementctlrds.deleteResourceType);
+app.get("/api/v2/resource-management/resources", resourcemanagementctlrds.listResources);
+app.post("/api/v2/resource-management/resources", resourcemanagementctlrds.saveResource);
+app.post("/api/v2/resource-management/resources/delete", resourcemanagementctlrds.deleteResource);
+app.get("/api/v2/resource-management/bookings", resourcemanagementctlrds.listBookings);
+app.post("/api/v2/resource-management/bookings", resourcemanagementctlrds.saveBooking);
+app.post("/api/v2/resource-management/bookings/delete", resourcemanagementctlrds.deleteBooking);
+app.get("/api/v2/resource-management/report", resourcemanagementctlrds.report);
 app.get("/api/v2/neplms/resources", neplmsctlrds.getResources);
 app.get("/api/v2/neplms/assignment-submissions", neplmsctlrds.getAssignmentSubmissions);
 app.post("/api/v2/neplms/assignment-submissions/grade", neplmsctlrds.gradeAssignmentSubmission);
@@ -6869,6 +6889,7 @@ app.get('/api/v2/dsgetaccountgroupsds', transactionrefdsctlr.dsgetaccountgroupsd
 
 const scholarshipdsctlr = require("./controllers/scholarshipdsctlr");
 const scholarshipapplicationdsctlr = require("./controllers/scholarshipapplicationdsctlr");
+const scholarshipnewctlrds = require("./controllers/scholarshipnewctlrds");
 
 // ---- Scholarship Endpoints ----
 app.post("/api/v2/createscholarshipds", scholarshipdsctlr.createscholarshipds);
@@ -6879,6 +6900,14 @@ app.get("/api/v2/getallscholarshipds", scholarshipdsctlr.getallscholarshipds);
 app.get("/api/v2/scholarshipds/suggestions", scholarshipdsctlr.suggestScholarshipsForStudent);
 app.get("/api/v2/scholarshipds/suggestion-options", scholarshipdsctlr.scholarshipSuggestionOptions);
 app.get("/api/v2/scholarshipds/program-suggestions", scholarshipdsctlr.suggestScholarshipsForProgram);
+
+app.get("/api/v2/scholarshipnew/options", scholarshipnewctlrds.options);
+app.get("/api/v2/scholarshipnew/rules", scholarshipnewctlrds.listRules);
+app.post("/api/v2/scholarshipnew/rules", scholarshipnewctlrds.uploadMiddleware, scholarshipnewctlrds.saveRule);
+app.post("/api/v2/scholarshipnew/rules-delete", scholarshipnewctlrds.deleteRule);
+app.post("/api/v2/scholarshipnew/students", scholarshipnewctlrds.searchStudents);
+app.post("/api/v2/scholarshipnew/generate", scholarshipnewctlrds.generate);
+app.get("/api/v2/scholarshipnew/report", scholarshipnewctlrds.report);
 
 // ---- Scholarship Application Endpoints ----
 app.post("/api/v2/createscholarshipapplicationds", scholarshipapplicationdsctlr.createscholarshipapplicationds);
@@ -6952,6 +6981,7 @@ const feeapplicationctlrds = require("./controllers/feeapplicationctlrds");
 const studentledgercrudctlrds = require("./controllers/studentledgercrudctlrds");
 const studentledgermasterctlrds = require("./controllers/studentledgermasterctlrds");
 const latefinedsctlr = require("./controllers/latefinedsctlr");
+const latefeewaiverctlrds = require("./controllers/latefeewaiverctlrds");
 const studentledgerapprovalrolectlr = require("./controllers/studentledgerapprovalrolectlr");
 const studentledgerapprovalctlr = require("./controllers/studentledgerapprovalctlr");
 const studentledgeradjustctlr = require("./controllers/studentledgeradjustctlr");
@@ -7025,6 +7055,16 @@ app.post("/api/v2/latefine/save", latefinedsctlr.save);
 app.post("/api/v2/latefine/delete", latefinedsctlr.deleteMany);
 app.post("/api/v2/latefine/bulk", latefinedsctlr.bulk);
 app.post("/api/v2/latefine/apply", latefinedsctlr.applyLateFine);
+app.get("/api/v2/latefeewaiver/options", latefeewaiverctlrds.options);
+app.post("/api/v2/latefeewaiver/workflow", latefeewaiverctlrds.saveWorkflow);
+app.post("/api/v2/latefeewaiver/workflow-delete", latefeewaiverctlrds.deleteWorkflow);
+app.get("/api/v2/latefeewaiver/student-ledger", latefeewaiverctlrds.studentLedger);
+app.post("/api/v2/latefeewaiver/submit", latefeewaiverctlrds.submit);
+app.get("/api/v2/latefeewaiver/status", latefeewaiverctlrds.status);
+app.get("/api/v2/latefeewaiver/approvals", latefeewaiverctlrds.approvals);
+app.post("/api/v2/latefeewaiver/approve", latefeewaiverctlrds.approve);
+app.post("/api/v2/latefeewaiver/reject", latefeewaiverctlrds.reject);
+app.post("/api/v2/latefeewaiver/records", latefeewaiverctlrds.records);
 app.get("/api/v2/studentledgermaster/options", studentledgermasterctlrds.getOptions);
 app.post("/api/v2/studentledgermaster/list", studentledgermasterctlrds.list);
 app.post("/api/v2/studentledgermaster/save", studentledgermasterctlrds.save);

@@ -38,7 +38,7 @@ const conductExamFormSchema = new mongoose.Schema(
     academicyear: { type: String, required: true, trim: true },
     program: { type: String, required: true, trim: true },
     programcode: { type: String, required: true, trim: true },
-    examtype: { type: String, enum: ["Regular", "Supplementary"], required: true },
+    examtype: { type: String, enum: ["Regular", "Supplementary", "ATKT"], required: true },
     status: { type: String, trim: true, default: "Active" },
     instructions: { type: String, trim: true, default: "" },
     mandatorycriteria: { type: String, trim: true, default: "" },

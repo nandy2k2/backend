@@ -11,6 +11,7 @@ const ConductExamRoll = require("../Models/conductexamrollds");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
 const NepClassEnrollment = require("../Models/nepclassenrollmentds");
 const ExamModel2Marks = require("../Models/examinationmodel2marksds");
+const ExamVivaMarks = require("../Models/examinationmodel2vivamarksds");
 const Ledgerstud = require("../Models/ledgerstud");
 const User = require("../Models/user");
 const Awsconfig = require("../Models/awsconfig");
@@ -405,6 +406,24 @@ const examFeeLedgerForStudent = async ({ colid, academicyear, regno, programcode
   examLedgerFilter({ colid, academicyear, regno, programcode, semester })
 ).sort({ classdate: 1, feeitem: 1 }).lean();
 
+const atktStatusFilter = { $not: /^Pass$/i };
+
+const atktMarksQuery = ({ colid, academicyear, regulation, program, programcode, semester, regno }) => {
+  const query = {
+    colid,
+    status: atktStatusFilter
+  };
+  if (clean(academicyear)) query.academicyear = clean(academicyear);
+  if (clean(regulation)) query.regulation = clean(regulation);
+  if (clean(program)) query.program = clean(program);
+  if (clean(programcode)) query.programcode = clean(programcode);
+  if (clean(semester)) query.semester = clean(semester);
+  if (clean(regno)) query.regno = clean(regno);
+  return query;
+};
+
+const atktModeFrom = (source = {}) => /^ATKT$/i.test(clean(source.mode || source.examtype));
+
 exports.studentContext = async (req, res) => {
   try {
     const colid = num(req.query.colid);
@@ -412,6 +431,7 @@ exports.studentContext = async (req, res) => {
     const academicyear = clean(req.query.academicyear);
     const examcode = clean(req.query.examcode);
     const examtype = clean(req.query.examtype) || "Regular";
+    const atktMode = atktModeFrom(req.query);
     if (!colid || !regno || !academicyear || !examcode) return res.status(400).json({ message: "colid, regno, academic year and exam code are required" });
 
     const student = await User.findOne({ colid, regno }).lean();
@@ -421,7 +441,7 @@ exports.studentContext = async (req, res) => {
       colid,
       academicyear,
       programcode: student.programcode,
-      examtype,
+      examtype: atktMode ? { $in: ["ATKT", "Supplementary"] } : examtype,
       status: { $ne: "Inactive" }
     }).sort({ formname: 1 }).lean();
 
@@ -448,14 +468,24 @@ exports.studentContext = async (req, res) => {
       regno,
       status: /^Approved$/i
     }).lean();
-    const failed = await ExamModel2Marks.find({
-      colid,
-      academicyear,
-      programcode: student.programcode,
-      semester,
-      regno,
-      status: "Fail"
-    }).lean();
+    const failed = atktMode
+      ? await ExamVivaMarks.find(atktMarksQuery({
+        colid,
+        academicyear,
+        regulation,
+        program: student.program,
+        programcode: student.programcode,
+        semester,
+        regno
+      })).lean()
+      : await ExamModel2Marks.find({
+        colid,
+        academicyear,
+        programcode: student.programcode,
+        semester,
+        regno,
+        status: "Fail"
+      }).lean();
     const fees = await feeMapFor({ colid, academicyear, examcode, programcode: student.programcode, semester });
     const enrich = (row, feeField, fallbackExamType) => {
       const feeRow = fees[clean(row.coursecode).toLowerCase()] || {};
@@ -479,12 +509,12 @@ exports.studentContext = async (req, res) => {
       .filter((row, index, arr) => row.coursecode && arr.findIndex((item) => item.coursecode === row.coursecode) === index)
       .sort((a, b) => sortText(a.coursecode, b.coursecode));
     const supplementaryCourses = failed
-      .map((row) => enrich(row, "supplementaryfee", "Supplementary"))
+      .map((row) => enrich(row, "supplementaryfee", atktMode ? "ATKT" : "Supplementary"))
       .filter((row, index, arr) => row.coursecode && arr.findIndex((item) => item.coursecode === row.coursecode) === index)
       .sort((a, b) => sortText(a.coursecode, b.coursecode));
     const maxFee = await examFeeMaxFor({ colid, academicyear, regulation, programcode: student.programcode, examcode });
     const examFeeLedger = await examFeeLedgerForStudent({ colid, academicyear, regno, programcode: student.programcode, semester });
-    res.json({ data: { student, exam, forms, regularCourses, supplementaryCourses, examFeeLedger, maxFee } });
+    res.json({ data: { student, exam, forms, regularCourses, supplementaryCourses, atktCourses: atktMode ? supplementaryCourses : [], examFeeLedger, maxFee } });
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to load student exam form context" });
   }
@@ -496,6 +526,60 @@ exports.studentExamFormReportOptions = async (req, res) => {
   try {
     const colid = num(req.query.colid);
     if (!colid) return res.status(400).json({ message: "colid is required" });
+    if (atktModeFrom(req.query)) {
+      const marksQuery = atktMarksQuery({
+        colid,
+        academicyear: req.query.academicyear,
+        regulation: req.query.regulation,
+        program: req.query.program,
+        programcode: req.query.programcode,
+        semester: req.query.semester
+      });
+      const examQuery = { colid, ...queryFrom(req.query, ["academicyear", "regulation", "program", "programcode", "semester"]) };
+      const [rows, examRows] = await Promise.all([
+        ExamVivaMarks.find(marksQuery)
+          .select("academicyear regulation program programcode semester exam examcode")
+          .sort({ academicyear: 1, program: 1, semester: 1 })
+          .lean(),
+        ConductExam.find(examQuery)
+          .select("academicyear regulation program programcode semester exam examname examcode")
+          .sort({ academicyear: 1, examcode: 1, program: 1, semester: 1 })
+          .lean()
+      ]);
+      const exams = [];
+      const examSeen = new Set();
+      examRows.forEach((row) => {
+        const key = `${clean(row.academicyear)}||${clean(row.examcode)}`;
+        if (!clean(row.examcode) || examSeen.has(key)) return;
+        examSeen.add(key);
+        exams.push({
+          academicyear: clean(row.academicyear),
+          exam: clean(row.exam) || clean(row.examname),
+          examcode: clean(row.examcode),
+          regulation: clean(row.regulation),
+          program: clean(row.program),
+          programcode: clean(row.programcode),
+          semester: clean(row.semester)
+        });
+      });
+      const programs = [];
+      const programSeen = new Set();
+      rows.forEach((row) => {
+        const key = `${clean(row.programcode)}||${clean(row.program)}`;
+        if (!clean(row.programcode) || programSeen.has(key)) return;
+        programSeen.add(key);
+        programs.push({ program: clean(row.program), programcode: clean(row.programcode) });
+      });
+      return res.json({
+        data: {
+          academicyears: distinctFromRows([...rows, ...examRows], "academicyear"),
+          regulations: distinctFromRows([...rows, ...examRows], "regulation"),
+          semesters: distinctFromRows([...rows, ...examRows], "semester"),
+          exams,
+          programs
+        }
+      });
+    }
     const query = { colid, ...queryFrom(req.query, ["academicyear", "exam", "examcode", "program", "programcode", "semester"]) };
     const rows = await ConductExamRoll.find(query)
       .select("academicyear exam examcode regulation program programcode semester")
@@ -538,6 +622,71 @@ exports.studentExamFormReport = async (req, res) => {
     const filter = { colid, ...queryFrom(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "semester", "regno"]) };
     if (!filter.academicyear || !filter.examcode || !filter.programcode) {
       return res.status(400).json({ message: "Academic year, exam code and program code are required" });
+    }
+    if (atktModeFrom(req.query)) {
+      const rows = await ExamVivaMarks.find(atktMarksQuery(filter)).sort({ regno: 1, semester: 1, coursecode: 1, course: 1 }).lean();
+      const regnos = uniqueSorted(rows.map((row) => row.regno));
+      const users = regnos.length
+        ? await User.find({ colid, regno: { $in: regnos } }).lean()
+        : [];
+      const userMap = new Map(users.map((user) => [clean(user.regno), user]));
+      const ledgerRows = regnos.length
+        ? await Ledgerstud.find(examLedgerFilter({ colid, academicyear: filter.academicyear, regnos, programcode: filter.programcode, semester: filter.semester }))
+          .sort({ regno: 1, classdate: 1, feeitem: 1 })
+          .lean()
+        : [];
+      const ledgerMap = new Map();
+      ledgerRows.forEach((row) => {
+        const key = clean(row.regno);
+        if (!ledgerMap.has(key)) ledgerMap.set(key, []);
+        ledgerMap.get(key).push(row);
+      });
+      const students = regnos.map((regno) => {
+        const user = userMap.get(regno) || {};
+        const markRows = rows.filter((row) => clean(row.regno) === regno);
+        const first = markRows[0] || {};
+        const courses = markRows
+          .map((row) => ({
+            id: String(row._id),
+            academicyear: clean(filter.academicyear),
+            regulation: clean(row.regulation) || clean(filter.regulation),
+            exam: clean(filter.exam) || clean(row.exam),
+            examcode: clean(filter.examcode),
+            program: clean(row.program) || clean(filter.program),
+            programcode: clean(row.programcode) || clean(filter.programcode),
+            semester: clean(row.semester) || clean(filter.semester),
+            subject: clean(row.subject),
+            type: clean(row.type) || "ATKT",
+            course: clean(row.course),
+            coursecode: clean(row.coursecode),
+            examdate: clean(row.examdate),
+            examslot: clean(row.examslot),
+            examsection: clean(row.examsection),
+            status: clean(row.status),
+            overallgrade: clean(row.overallgrade),
+            examtype: "ATKT"
+          }))
+          .filter((row, index, arr) => row.coursecode && arr.findIndex((item) => item.coursecode === row.coursecode) === index);
+        return {
+          id: regno,
+          student: {
+            ...user,
+            name: clean(user.name) || clean(first.student),
+            regno,
+            email: clean(user.email),
+            phone: clean(user.phone),
+            program: clean(user.program) || clean(first.program),
+            programcode: clean(user.programcode) || clean(first.programcode),
+            regulation: clean(user.regulation) || clean(first.regulation),
+            semester: clean(first.semester) || clean(user.semester),
+            section: clean(user.section)
+          },
+          courses,
+          examFeeLedger: ledgerMap.get(regno) || []
+        };
+      });
+      const institution = await Institution.findOne({ colid }).sort({ _id: -1 }).lean();
+      return res.json({ data: { students, institution } });
     }
     const rows = await ConductExamRoll.find(filter).sort({ regno: 1, semester: 1, coursecode: 1, course: 1 }).lean();
     const regnos = uniqueSorted(rows.map((row) => row.regno));
@@ -729,6 +878,7 @@ exports.submitStudentExamForm = async (req, res) => {
       const coursecode = clean(course.coursecode);
       if (!coursecode) continue;
       const examCourse = await ConductExamCourse.findOne({ colid, academicyear, examcode, programcode: student.programcode, semester, coursecode }).lean();
+      const atktSubmission = /^ATKT$/i.test(examtype);
       const roll = await ConductExamRoll.findOneAndUpdate(
         { colid, academicyear, regulation: clean(course.regulation) || clean(student.regulation), examcode, programcode: clean(student.programcode), semester, coursecode, regno },
         {
@@ -751,7 +901,8 @@ exports.submitStudentExamForm = async (req, res) => {
           section: clean(student.section),
           applied: "Yes",
           admitcardeligible: "No",
-          attended: "No",
+          attended: atktSubmission ? "Yes" : "No",
+          attendance: atktSubmission ? "Yes" : "",
           examdate: clean(examCourse?.examdate || course.examdate),
           examslot: clean(examCourse?.examslot || course.examslot),
           remarks: `${examtype} exam form submitted: ${submission._id}`,

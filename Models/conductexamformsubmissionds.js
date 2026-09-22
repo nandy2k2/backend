@@ -32,7 +32,7 @@ const conductExamFormSubmissionSchema = new mongoose.Schema(
     regulation: { type: String, trim: true, default: "" },
     exam: { type: String, required: true, trim: true },
     examcode: { type: String, required: true, trim: true },
-    examtype: { type: String, enum: ["Regular", "Supplementary"], required: true },
+    examtype: { type: String, enum: ["Regular", "Supplementary", "ATKT"], required: true },
     program: { type: String, trim: true, default: "" },
     programcode: { type: String, required: true, trim: true },
     semester: { type: String, trim: true, default: "" },

@@ -138,6 +138,14 @@ const userschema = new mongoose.Schema({
     quota: {
         type: String
     },
+    annualincome: {
+        type: String
+    },
+    freeshipcardholder: {
+        type: String,
+        enum: ['Yes', 'No'],
+        default: 'No'
+    },
     user: {
         type: String
     },

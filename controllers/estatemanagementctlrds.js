@@ -275,6 +275,17 @@ exports.options = async (req, res) => {
     const realEstateTypes = await EstateRealEstateType.find({ colid }).sort({ typename: 1 }).lean();
     const campuses = await EstateCampus.find({ colid }).sort({ campus: 1 }).lean();
     const estates = await EstateRealEstate.find({ colid }).sort({ estatename: 1 }).lean();
+    const realEstateTypeMap = new Map();
+    realEstateTypes.forEach((item) => {
+      const typename = text(item.typename || item.type || item.estatetype);
+      if (typename) realEstateTypeMap.set(typename.toLowerCase(), { ...item, typename });
+    });
+    estates.forEach((item) => {
+      const typename = text(item.estatetype || item.type);
+      if (typename && !realEstateTypeMap.has(typename.toLowerCase())) {
+        realEstateTypeMap.set(typename.toLowerCase(), { _id: `existing-${typename}`, typename, status: "Active" });
+      }
+    });
     const providers = await EstateServiceProvider.find({ colid }).sort({ providername: 1 }).lean();
     const allocations = await EstateServiceAllocation.find({ colid, status: { $ne: "Inactive" } }).sort({ employeename: 1 }).lean();
     const shifts = await HrShiftTiming.find({ colid }).sort({ location: 1, shift: 1 }).lean();
@@ -285,7 +296,7 @@ exports.options = async (req, res) => {
     res.json({
       success: true,
       serviceTypes,
-      realEstateTypes,
+      realEstateTypes: [...realEstateTypeMap.values()].sort((a, b) => text(a.typename).localeCompare(text(b.typename), undefined, { numeric: true })),
       campuses,
       estates,
       providers,

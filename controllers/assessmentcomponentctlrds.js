@@ -64,10 +64,12 @@ const buildQuery = (source = {}) => {
   ["academicyear", "regulation", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "assessmentgroup", "grouptype", "scoretype", "componenttype", "assessmentcomponent", "status"].forEach((field) => {
     if (source[field]) query[field] = source[field];
   });
+  if (source.programcodes && !query.programcode) query.programcode = { $in: String(source.programcodes).split(",").map(text).filter(Boolean) };
   return query;
 };
 
 const uniq = (items) => [...new Set(items.map(text).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+const programCodeList = (value) => String(value || "").split(",").map(text).filter(Boolean);
 
 const geminiModels = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash"];
 
@@ -122,16 +124,20 @@ exports.getAssessmentComponentOptions = async (req, res) => {
     ["academicyear", "regulation", "programcode", "type", "subject", "semester"].forEach((field) => {
       if (req.query[field]) courseQuery[field] = req.query[field];
     });
+    if (req.query.programcodes && !courseQuery.programcode) courseQuery.programcode = { $in: programCodeList(req.query.programcodes) };
     const subjectQuery = { colid };
     ["academicyear", "regulation", "program", "programcode", "type"].forEach((field) => {
       if (req.query[field]) subjectQuery[field] = req.query[field];
     });
+    if (req.query.programcodes && !subjectQuery.programcode) subjectQuery.programcode = { $in: programCodeList(req.query.programcodes) };
     if (req.query.status) subjectQuery.status = req.query.status;
+    const assessmentQuery = { colid };
+    if (req.query.programcodes) assessmentQuery.programcode = { $in: programCodeList(req.query.programcodes) };
 
     const [courseMaps, regulationSubjects, assessments] = await Promise.all([
       RegulationCourseMap.find(courseQuery).sort({ academicyear: 1, regulation: 1, program: 1, type: 1, subject: 1, semester: 1, course: 1 }).lean(),
       RegulationSubject.find(subjectQuery).sort({ academicyear: 1, regulation: 1, program: 1, type: 1, subject: 1 }).lean(),
-      AssessmentComponent.find({ colid }).sort({ academicyear: 1, regulation: 1, program: 1, type: 1, course: 1 }).lean()
+      AssessmentComponent.find(assessmentQuery).sort({ academicyear: 1, regulation: 1, program: 1, type: 1, course: 1 }).lean()
     ]);
 
     const allRows = [...courseMaps, ...assessments];

@@ -1,6 +1,7 @@
 const LateFine = require("../Models/latefineds");
 const Ledgerstud = require("../Models/ledgerstud");
 const MPrograms = require("../Models/mprograms");
+const LateFeeWaiverRequest = require("../Models/latefeewaiverrequestds");
 
 const configFields = ["academicyear", "regulation", "program", "programcode", "feeitem", "latefineperday", "maxamount", "status", "comments"];
 const filterFields = ["academicyear", "regulation", "program", "programcode", "feeitem", "status"];
@@ -244,12 +245,18 @@ exports.applyLateFine = async (req, res) => {
     const details = [];
     for (const config of configs) {
       const ledgers = await Ledgerstud.find(ledgerQueryForConfig(config)).select("_id duedate Latefinedue balance student regno feeitem").lean();
+      const approvedWaivers = await LateFeeWaiverRequest.find({
+        colid,
+        approvalstatus: "Approved",
+        ledgerid: { $in: ledgers.map((ledger) => ledger._id) }
+      }).select("ledgerid").lean();
+      const waivedLedgerIds = new Set(approvedWaivers.map((row) => String(row.ledgerid)));
       let ruleModified = 0;
       let ruleDelta = 0;
       let ruleFine = 0;
       for (const ledger of ledgers) {
         matched += 1;
-        const newFine = calculateFine(ledger.duedate, config.latefineperday, config.maxamount);
+        const newFine = waivedLedgerIds.has(String(ledger._id)) ? 0 : calculateFine(ledger.duedate, config.latefineperday, config.maxamount);
         const oldFine = toNumber(ledger.Latefinedue);
         const delta = newFine - oldFine;
         if (delta !== 0) {
