@@ -18,6 +18,11 @@ const startOfToday = () => {
 const splitValues = (value) => text(value).split(",").map((item) => item.trim()).filter(Boolean);
 const uniqueSorted = (values = []) => [...new Set(values.map(text).filter(Boolean))]
   .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+const chunks = (values = [], size = 500) => {
+  const out = [];
+  for (let index = 0; index < values.length; index += size) out.push(values.slice(index, index + size));
+  return out;
+};
 
 const addMultiFilter = (query, source, field) => {
   const values = splitValues(source[field]);
@@ -55,11 +60,14 @@ exports.getPendingFeesOptions = async (req, res) => {
   try {
     const colid = number(req.query.colid);
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
-    const rows = await Ledgerstud.find({ colid }).lean();
-    const options = {};
-    ledgerFilterFields.forEach((field) => {
-      options[field] = uniqueSorted(rows.map((row) => row[field]));
-    });
+    const baseQuery = { colid };
+    const values = await Promise.all(
+      ledgerFilterFields.map(async (field) => {
+        const distinctValues = await Ledgerstud.distinct(field, baseQuery);
+        return [field, uniqueSorted(distinctValues)];
+      })
+    );
+    const options = Object.fromEntries(values);
     res.json({ success: true, fields: ledgerFilterFields, options });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -71,6 +79,17 @@ exports.getPendingFees = async (req, res) => {
     const query = buildPendingFeesQuery(req.query);
     if (query.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const rows = await Ledgerstud.find(query).sort({ duedate: 1, programcode: 1, regno: 1 }).lean();
+    const regnos = uniqueSorted(rows.map((row) => row.regno));
+    const users = [];
+    for (const group of chunks(regnos)) {
+      const userRows = await User.find({ colid: query.colid, role: /^student$/i, regno: { $in: group } }).select("regno rollno").lean();
+      users.push(...userRows);
+    }
+    const usersByRegno = new Map(users.map((user) => [text(user.regno), user]));
+    const enrichedRows = rows.map((row) => {
+      const user = usersByRegno.get(text(row.regno));
+      return { ...row, rollno: user?.rollno || row.rollno || "" };
+    });
     const totals = rows.reduce((acc, row) => {
       acc.count += 1;
       acc.amount += Number(row.amount || 0);
@@ -93,7 +112,7 @@ exports.getPendingFees = async (req, res) => {
       acc[key].balance += Number(row.balance || 0);
       return acc;
     }, {}));
-    res.json({ success: true, data: rows, totals, summaries: { byProgram, byFeeGroup } });
+    res.json({ success: true, data: enrichedRows, totals, summaries: { byProgram, byFeeGroup } });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

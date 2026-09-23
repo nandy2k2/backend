@@ -7026,6 +7026,7 @@ const repairmaintenancectlrds = require("./controllers/repairmaintenancectlrds")
 const librarynewctlrds = require("./controllers/librarynewctlrds");
 const purchase2crudctlrds = require("./controllers/purchase2crudctlrds");
 const prconfigdsctlr2 = require("./controllers/prconfigdsctlr2");
+const convocationnewctlrds = require("./controllers/convocationnewctlrds");
 // Ledger routes
 app.post("/api/v2/addledgerds", ledgerstuddsctlr.addledgerds);
 app.get("/api/v2/getledgersds", ledgerstuddsctlr.getledgersds);
@@ -7035,6 +7036,20 @@ app.get("/api/v2/getfilteroptionsds", ledgerstuddsctlr.getfilteroptionsds);
 app.get("/api/v2/getledgerbystudentds", ledgerstuddsctlr.getledgerbystudentds);
 app.get("/api/v2/pendingfees/options", exameligibilityctlrds.getPendingFeesOptions);
 app.get("/api/v2/pendingfees", exameligibilityctlrds.getPendingFees);
+app.get("/api/v2/convocation-new/options", convocationnewctlrds.options);
+app.get("/api/v2/convocation-new-student/profile", convocationnewctlrds.studentProfile);
+app.post("/api/v2/convocation-new-student/dress", convocationnewctlrds.applyDress);
+app.post("/api/v2/convocation-new-student/register", convocationnewctlrds.studentRegister);
+app.get("/api/v2/convocation-new/shipping", convocationnewctlrds.shippingRows);
+app.post("/api/v2/convocation-new/shipping", convocationnewctlrds.updateShipping);
+app.get("/api/v2/convocation-new/reports/dress", convocationnewctlrds.dressReport);
+app.get("/api/v2/convocation-new/reports/fees", convocationnewctlrds.convocationFeeReport);
+app.get("/api/v2/convocation-new/gold-medal-list", convocationnewctlrds.goldMedalList);
+app.get("/api/v2/convocation-new/eligible-students", convocationnewctlrds.eligibleStudents);
+app.post("/api/v2/convocation-new/send-mail", convocationnewctlrds.sendStudentMail);
+app.get("/api/v2/convocation-new/:kind", convocationnewctlrds.list);
+app.post("/api/v2/convocation-new/:kind", convocationnewctlrds.save);
+app.post("/api/v2/convocation-new/:kind/delete", convocationnewctlrds.remove);
 app.get("/api/v2/disciplinary/options", exameligibilityctlrds.getDisciplinaryOptions);
 app.get("/api/v2/disciplinary/students", exameligibilityctlrds.searchDisciplinaryStudents);
 app.get("/api/v2/disciplinary/actions", exameligibilityctlrds.getDisciplinaryActions);
