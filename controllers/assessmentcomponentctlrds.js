@@ -4,7 +4,7 @@ const RegulationSubject = require("../Models/regulationsubjectds");
 const AiConfiguration = require("../Models/aiconfigurationds");
 const OllamaConfiguration = require("../Models/ollamaconfigurationds");
 
-const allowedTypes = new Set(["Major", "Minor"]);
+const allowedTypes = new Set(["Major", "Minor", "IDC", "MDC", "AEC", "SEC", "VAC"]);
 const allowedGroupTypes = new Set(["Best", "Average"]);
 const allowedScoreTypes = new Set(["Internal", "External"]);
 const allowedComponentTypes = new Set(["Theory", "Practical", "Viva"]);
@@ -172,7 +172,7 @@ exports.getAssessmentComponentOptions = async (req, res) => {
       regulations: uniq(allRows.map((item) => item.regulation)),
       programs: [...programMap.values()].sort((a, b) => String(a.programcode).localeCompare(String(b.programcode))),
       types: uniq(allRows.map((item) => item.type)).filter((item) => allowedTypes.has(item)),
-      subjects: uniq(regulationSubjects.map((item) => item.subject)),
+      subjects: uniq([...regulationSubjects, ...courseMaps, ...assessments].map((item) => item.subject)),
       semesters: uniq(courseMaps.map((item) => item.semester)),
       courses: [...courseMap.values()],
       assessmentgroups: uniq(assessments.map((item) => item.assessmentgroup)),

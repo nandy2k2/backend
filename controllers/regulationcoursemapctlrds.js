@@ -3,7 +3,7 @@ const RegulationMaster = require("../Models/regulationmasterds");
 const MPrograms = require("../Models/mprograms");
 const RegulationSubject = require("../Models/regulationsubjectds");
 
-const allowedTypes = new Set(["Major", "Minor", "AEC", "SEC", "VAC", "IDC"]);
+const allowedTypes = new Set(["Major", "Minor", "IDC", "MDC", "AEC", "SEC", "VAC"]);
 const allowedCourseTypes = new Set(["Theory", "Practical"]);
 const allowedDeliveryTypes = new Set(["Compulsory", "Elective"]);
 const allowedPayTypes = new Set(["Paid", "Unpaid"]);

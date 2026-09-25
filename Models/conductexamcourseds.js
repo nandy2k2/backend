@@ -8,7 +8,7 @@ const conductExamCourseSchema = new mongoose.Schema({
   examcode: { type: String, required: true, trim: true },
   program: { type: String, required: true, trim: true },
   programcode: { type: String, required: true, trim: true },
-  type: { type: String, enum: ["Major", "Minor", "AEC", "SEC", "VAC", "IDC"], required: true },
+  type: { type: String, enum: ["Major", "Minor", "IDC", "MDC", "AEC", "SEC", "VAC"], required: true },
   subject: { type: String, required: true, trim: true },
   semester: { type: String, required: true, trim: true },
   course: { type: String, required: true, trim: true },

@@ -10,7 +10,7 @@ const regulationSubjectSchema = new mongoose.Schema(
     subject: { type: String, trim: true, required: true },
     type: {
       type: String,
-      enum: ["Major", "Minor", "AEC", "SEC", "VAC", "IDC"],
+      enum: ["Major", "Minor", "IDC", "MDC", "AEC", "SEC", "VAC"],
       required: true
     },
     totalseats: { type: Number, default: 0 },

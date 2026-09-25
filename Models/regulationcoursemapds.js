@@ -5,7 +5,7 @@ const regulationCourseMapSchema = new mongoose.Schema(
     academicyear: { type: String, trim: true, required: true },
     regulation: { type: String, trim: true, required: true },
     subject: { type: String, trim: true, required: true },
-    type: { type: String, enum: ["Major", "Minor", "AEC", "SEC", "VAC", "IDC"], required: true },
+    type: { type: String, enum: ["Major", "Minor", "IDC", "MDC", "AEC", "SEC", "VAC"], required: true },
     semester: { type: String, trim: true, required: true },
     program: { type: String, trim: true, required: true },
     programcode: { type: String, trim: true, required: true },

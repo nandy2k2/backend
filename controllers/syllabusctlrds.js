@@ -198,7 +198,7 @@ const validatePayload = (payload) => {
   if (!payload.coursecode) return "Course code is required";
   if (!payload.module) return "Module is required";
   if (!payload.syllabus) return "Syllabus is required";
-  if (!["Major", "Minor"].includes(payload.type)) return "Type should be Major or Minor";
+  if (!["Major", "Minor", "IDC", "MDC", "AEC", "SEC", "VAC"].includes(payload.type)) return "Type should be Major, Minor, IDC, MDC, AEC, SEC or VAC";
   return "";
 };
 
@@ -230,7 +230,7 @@ exports.getSyllabusOptions = async (req, res) => {
     const colid = toNumber(req.query.colid);
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
 
-    const courseQuery = { colid, type: { $in: ["Major", "Minor"] } };
+    const courseQuery = { colid, type: { $in: ["Major", "Minor", "IDC", "MDC", "AEC", "SEC", "VAC"] } };
     ["academicyear", "regulation", "program", "programcode", "subject", "semester", "course", "coursecode"].forEach((field) => {
       if (text(req.query[field])) courseQuery[field] = text(req.query[field]);
     });

@@ -212,6 +212,41 @@ const scheduleExamCourseRows = async ({ colid, filter, fromdate, todate, slot1, 
   return { saved: assignments.length, data: updated, assignments };
 };
 
+const populateExamRollDatesForCourses = async ({ colid, courseIds = [], academicyear = "", examcode = "", user = "" }) => {
+  const courseFilter = { colid };
+  if (Array.isArray(courseIds) && courseIds.length) courseFilter._id = { $in: courseIds };
+  if (text(academicyear)) courseFilter.academicyear = text(academicyear);
+  if (text(examcode)) courseFilter.examcode = text(examcode);
+
+  const courses = await ConductExamCourse.find(courseFilter).lean();
+  let updated = 0;
+  const details = [];
+  for (const course of courses) {
+    const schedulerDate = text(course.examdate);
+    const schedulerSlot = text(course.examslot);
+    if (!schedulerDate || !schedulerSlot) {
+      details.push({ coursecode: course.coursecode, course: course.course, updated: 0, skipped: "Scheduler date or slot is blank" });
+      continue;
+    }
+    const result = await ConductExamRoll.updateMany(
+      {
+        colid,
+        academicyear: course.academicyear,
+        examcode: course.examcode,
+        regulation: course.regulation,
+        programcode: course.programcode,
+        semester: course.semester,
+        coursecode: course.coursecode
+      },
+      { $set: { examdate: schedulerDate, examslot: schedulerSlot, user: text(user) } }
+    );
+    const count = result.modifiedCount || result.nModified || 0;
+    updated += count;
+    details.push({ coursecode: course.coursecode, course: course.course, examdate: schedulerDate, examslot: schedulerSlot, updated: count });
+  }
+  return { updated, courses: courses.length, details };
+};
+
 const examPayload = (body = {}) => ({
   colid: number(body.colid),
   academicyear: text(body.academicyear),
@@ -318,7 +353,7 @@ const validateExamCourse = (p) => {
   for (const field of ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode"]) {
     if (!p[field]) return `${field} is required`;
   }
-  if (!["Major", "Minor", "AEC", "SEC", "VAC", "IDC"].includes(p.type)) return "Type must be Major, Minor, AEC, SEC, VAC, IDC";
+  if (!["Major", "Minor", "IDC", "MDC", "AEC", "SEC", "VAC"].includes(p.type)) return "Type must be Major, Minor, IDC, MDC, AEC, SEC, VAC";
   return "";
 };
 
@@ -1288,7 +1323,12 @@ exports.autoScheduleExamCourses = async (req, res) => {
       slots: req.body.slots,
       useHrHolidayList: req.body.useHrHolidayList === true || /^yes$/i.test(text(req.body.useHrHolidayList))
     });
-    res.json({ success: true, ...result, message: `${result.saved} papers scheduled.` });
+    const rollSync = await populateExamRollDatesForCourses({
+      colid,
+      courseIds: (result.assignments || []).map((item) => item.id),
+      user: req.body.user
+    });
+    res.json({ success: true, ...result, examrollUpdated: rollSync.updated, examrollSync: rollSync, message: `${result.saved} papers scheduled. ${rollSync.updated} exam roll row(s) updated.` });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -1340,7 +1380,12 @@ exports.aiScheduleExamCourses = async (req, res) => {
       useHrHolidayList: req.body.useHrHolidayList === true || /^yes$/i.test(text(req.body.useHrHolidayList)),
       aiOrder
     });
-    res.json({ success: true, ...result, aiText, message: `${result.saved} papers scheduled with Gemini guidance.` });
+    const rollSync = await populateExamRollDatesForCourses({
+      colid,
+      courseIds: (result.assignments || []).map((item) => item.id),
+      user: req.body.user
+    });
+    res.json({ success: true, ...result, examrollUpdated: rollSync.updated, examrollSync: rollSync, aiText, message: `${result.saved} papers scheduled with AI guidance. ${rollSync.updated} exam roll row(s) updated.` });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -1493,33 +1538,8 @@ exports.populateExamRollDatesFromScheduler = async (req, res) => {
     if (!academicyear || !examcode) return res.status(400).json({ success: false, message: "Academic year and exam code are required" });
     if (!courseIds.length) return res.status(400).json({ success: false, message: "Select at least one course" });
 
-    const courses = await ConductExamCourse.find({ _id: { $in: courseIds }, colid, academicyear, examcode }).lean();
-    let updated = 0;
-    const details = [];
-    for (const course of courses) {
-      const schedulerDate = text(course.examdate);
-      const schedulerSlot = text(course.examslot);
-      if (!schedulerDate || !schedulerSlot) {
-        details.push({ coursecode: course.coursecode, course: course.course, updated: 0, skipped: "Scheduler date or slot is blank" });
-        continue;
-      }
-      const result = await ConductExamRoll.updateMany(
-        {
-          colid,
-          academicyear,
-          examcode,
-          regulation: course.regulation,
-          programcode: course.programcode,
-          semester: course.semester,
-          coursecode: course.coursecode
-        },
-        { $set: { examdate: schedulerDate, examslot: schedulerSlot, user: text(req.body.user) } }
-      );
-      const count = result.modifiedCount || result.nModified || 0;
-      updated += count;
-      details.push({ coursecode: course.coursecode, course: course.course, examdate: schedulerDate, examslot: schedulerSlot, updated: count });
-    }
-    res.json({ success: true, updated, courses: courses.length, details });
+    const result = await populateExamRollDatesForCourses({ colid, academicyear, examcode, courseIds, user: req.body.user });
+    res.json({ success: true, ...result });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

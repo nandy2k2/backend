@@ -6,7 +6,7 @@ const courseAssessmentSchema = new mongoose.Schema(
     regulation: { type: String, trim: true, required: true },
     program: { type: String, trim: true, required: true },
     programcode: { type: String, trim: true, required: true },
-    type: { type: String, enum: ["Major", "Minor"], required: true },
+    type: { type: String, enum: ["Major", "Minor", "IDC", "MDC", "AEC", "SEC", "VAC"], required: true },
     subject: { type: String, trim: true },
     semester: { type: String, trim: true },
     course: { type: String, trim: true, required: true },

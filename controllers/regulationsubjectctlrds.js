@@ -13,7 +13,7 @@ const toSeatNumber = (value) => {
   return parsed === undefined ? 0 : parsed;
 };
 
-const allowedTypes = new Set(["Major", "Minor", "AEC", "SEC", "VAC", "IDC"]);
+const allowedTypes = new Set(["Major", "Minor", "IDC", "MDC", "AEC", "SEC", "VAC"]);
 const yesNoValues = new Set(["Yes", "No"]);
 const genderValues = new Set(["Male", "Female", "Other"]);
 
