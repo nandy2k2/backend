@@ -42,6 +42,7 @@ const aiCodingAgentSchedulerController = require("./controllers/aicodingagentctl
 aiCodingAgentSchedulerController.registerScheduler();
 const pendingFeesReminderAgentSchedulerController = require("./controllers/pendingfeesreminderagentctlrds");
 pendingFeesReminderAgentSchedulerController.registerScheduler();
+const notificationController = require("./controllers/notificationctlrds");
 
 const DB=process.env.DATABASE.replace('<PASSWORD>',process.env.DATABASE_PASSWORD);
 const DB1=process.env.DATABASE2;
@@ -232,6 +233,11 @@ const estateManagementController = require('./controllers/estatemanagementctlrds
 const onlineExamController = require('./controllers/onlineexamctlrds');
 const conductExamAppealController = require('./controllers/conductexamappealctlrds');
 app.get('/api/v2/dashboard-widgets', dashboardWidgetController.getWidgets);
+app.get('/api/v2/notifications/options', notificationController.options);
+app.post('/api/v2/notifications/users/search', notificationController.search);
+app.post('/api/v2/notifications/users/settings', notificationController.bulkUpdateSettings);
+app.post('/api/v2/notifications/users/send', notificationController.sendPush);
+app.post('/api/v2/mobile/notifications/update-by-email', notificationController.publicUpdateByEmail);
 app.get('/api/v2/transport-new/options', transportNewController.options);
 app.post('/api/v2/transport-new/students/search', transportNewController.searchStudents);
 app.get('/api/v2/transport-new/verify/:qrid', transportNewController.verifyPass);

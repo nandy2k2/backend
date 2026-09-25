@@ -126,6 +126,14 @@ const userschema = new mongoose.Schema({
     expotoken: {
         type: String
     },
+    expopushtoken: {
+        type: String
+    },
+    notification: {
+        type: String,
+        enum: ['Yes', 'No'],
+        default: 'Yes'
+    },
     category: {
         type: String
     },
