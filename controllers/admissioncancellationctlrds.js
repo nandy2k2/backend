@@ -153,11 +153,17 @@ exports.saveCancellation = async (req, res) => {
     if (!refundmode) return res.status(400).json({ success: false, message: "Refund mode is required" });
 
     const normalizedRefunds = refunds
-      .map((row) => ({ ...row, paid: Number(row.paid || 0), refunded: Math.max(0, Number(row.refunded || 0)) }))
+      .map((row) => ({
+        ...row,
+        paid: Number(row.paid || 0),
+        refunded: Math.max(0, Number(row.refunded || 0)),
+        refundselected: row.refundselected === false || /^false$/i.test(clean(row.refundselected)) ? false : true
+      }))
       .filter((row) => row.paid > 0 || row.refunded > 0);
     const positiveRefunds = normalizedRefunds.filter((row) => row.refunded > 0);
+    const explicitlyNotRefunded = normalizedRefunds.filter((row) => row.refundselected === false && row.paid > 0 && row.refunded <= 0);
     const noRefundMode = !positiveRefunds.length && administrativecharges > 0;
-    const validRefunds = positiveRefunds.length ? positiveRefunds : normalizedRefunds;
+    const validRefunds = positiveRefunds.length ? [...positiveRefunds, ...explicitlyNotRefunded] : normalizedRefunds;
     if (!validRefunds.length || (!positiveRefunds.length && !noRefundMode)) {
       return res.status(400).json({ success: false, message: "Please enter refund amount for at least one fee item or use No Refund" });
     }
@@ -167,18 +173,40 @@ exports.saveCancellation = async (req, res) => {
 
     const grossRefund = validRefunds.reduce((sum, row) => sum + Number(row.refunded || 0), 0);
     const paidBase = validRefunds.reduce((sum, row) => sum + Number(row.paid || 0), 0);
-    const chargeBase = grossRefund > 0 ? grossRefund : paidBase;
-    const totalCharges = grossRefund > 0 ? Math.min(administrativecharges, grossRefund) : Math.min(administrativecharges, paidBase);
+    const excludedPaid = validRefunds.reduce((sum, row) => sum + (row.refundselected === false && Number(row.refunded || 0) <= 0 ? Number(row.paid || 0) : 0), 0);
+    const refundableBase = validRefunds.reduce((sum, row) => sum + (Number(row.refunded || 0) > 0 ? Number(row.refunded || 0) : 0), 0);
+    const totalCharges = Math.min(administrativecharges, paidBase);
+    const excludedCharges = Math.min(totalCharges, excludedPaid);
+    const remainingCharges = Math.max(0, totalCharges - excludedCharges);
+    const excludedRows = validRefunds.filter((row) => row.refundselected === false && Number(row.refunded || 0) <= 0);
+    const refundedRows = validRefunds.filter((row) => Number(row.refunded || 0) > 0);
+    const chargeForRow = (row, index) => {
+      const refunded = Number(row.refunded || 0);
+      if (row.refundselected === false && refunded <= 0) {
+        if (!excludedRows.length || excludedPaid <= 0) return 0;
+        const excludedIndex = excludedRows.findIndex((item) => item === row);
+        const rowCharge = excludedIndex === excludedRows.length - 1
+          ? excludedCharges - excludedRows.slice(0, excludedIndex).reduce((sum, item) => sum + (excludedPaid > 0 ? (Number(item.paid || 0) / excludedPaid) * excludedCharges : 0), 0)
+          : (Number(row.paid || 0) / excludedPaid) * excludedCharges;
+        return rowCharge;
+      }
+      if (refunded > 0 && remainingCharges > 0 && refundableBase > 0) {
+        const refundedIndex = refundedRows.findIndex((item) => item === row);
+        const rowCharge = refundedIndex === refundedRows.length - 1
+          ? remainingCharges - refundedRows.slice(0, refundedIndex).reduce((sum, item) => sum + (Number(item.refunded || 0) / refundableBase) * remainingCharges, 0)
+          : (refunded / refundableBase) * remainingCharges;
+        return rowCharge;
+      }
+      if (!positiveRefunds.length && noRefundMode && paidBase > 0) {
+        return index === validRefunds.length - 1
+          ? totalCharges - validRefunds.slice(0, index).reduce((sum, item) => sum + (Number(item.paid || 0) / paidBase) * totalCharges, 0)
+          : (Number(row.paid || 0) / paidBase) * totalCharges;
+      }
+      return 0;
+    };
     const docs = validRefunds.map((row, index) => {
       const refunded = Number(row.refunded || 0);
-      const rowBase = grossRefund > 0 ? refunded : Number(row.paid || 0);
-      const proportionalCharge = chargeBase > 0 ? (rowBase / chargeBase) * totalCharges : 0;
-      const rowCharge = index === validRefunds.length - 1
-        ? totalCharges - validRefunds.slice(0, index).reduce((sum, item) => {
-          const itemBase = grossRefund > 0 ? Number(item.refunded || 0) : Number(item.paid || 0);
-          return sum + (chargeBase > 0 ? (itemBase / chargeBase) * totalCharges : 0);
-        }, 0)
-        : proportionalCharge;
+      const rowCharge = chargeForRow(row, index);
       return ({
       academicyear: clean(user.academicyear || row.academicyear),
       regulation: clean(user.regulation || row.regulation),

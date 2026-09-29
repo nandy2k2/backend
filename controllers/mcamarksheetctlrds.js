@@ -213,6 +213,33 @@ exports.processGrades = async (req, res) => {
   }
 };
 
+exports.processFinalGrade = async (req, res) => {
+  try {
+    const colid = number(req.body.colid, undefined);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const ids = (Array.isArray(req.body.ids) ? req.body.ids : []).filter((id) => mongoose.Types.ObjectId.isValid(id));
+    const query = ids.length ? { colid, _id: { $in: ids } } : { colid, ...filters(req.body.filters || {}) };
+    const rows = await McaMarksheet.find(query);
+    let updated = 0;
+    for (const row of rows) {
+      const failed = [row.ccegrade, row.seetheorygrade, row.seepracticalgrade].some((grade) => /^f$/i.test(text(grade)));
+      if (failed) {
+        row.overallgrade = "F";
+        row.gradepoint = 0;
+        row.overallgradepoints = 0;
+        row.status = "Fail";
+      } else {
+        row.status = "Pass";
+      }
+      await row.save();
+      updated += 1;
+    }
+    res.json({ success: true, updated });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 exports.marksheet = async (req, res) => {
   try {
     const colid = number(req.query.colid, undefined);
@@ -233,6 +260,7 @@ exports.marksheet = async (req, res) => {
     const creditsEarned = rows.reduce((sum, row) => /^(f|fail|ab)$/i.test(text(row.overallgrade)) ? sum : sum + number(row.credit), 0);
     const gradePointsEarned = rows.reduce((sum, row) => /^(f|fail|ab)$/i.test(text(row.overallgrade)) ? sum : sum + number(row.overallgradepoints, number(row.credit) * number(row.gradepoint)), 0);
     const spi = creditsEarned ? gradePointsEarned / creditsEarned : 0;
+    const hasOverallGradeF = rows.some((row) => /^f$/i.test(text(row.overallgrade)));
     const result = rows.some((row) => /^(f|fail|ab)$/i.test(text(row.overallgrade))) ? "Promoted" : "Pass";
     const selectedClassId = text(req.query.classconfigurationid);
     const selectedClassProgram = text(req.query.classconfigurationprogram);
@@ -259,7 +287,7 @@ exports.marksheet = async (req, res) => {
         creditsOffered,
         creditsEarned,
         gradePointsEarned: Number(gradePointsEarned.toFixed(2)),
-        spi: Number(spi.toFixed(2)),
+        spi: hasOverallGradeF ? "-" : Number(spi.toFixed(2)),
         result,
         classassigned: result === "Promoted" ? "Promoted" : classRule?.classassigned || "",
         classconfigurationid: classRule?._id || "",

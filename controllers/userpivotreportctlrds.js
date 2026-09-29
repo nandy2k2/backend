@@ -1,27 +1,13 @@
 const User = require("../Models/user");
 const Institution = require("../Models/insdetails");
 
-const filterFields = [
-  { field: "academicyear", label: "Academic Year" },
-  { field: "role", label: "Role" },
-  { field: "program", label: "Program" },
-  { field: "programcode", label: "Program Code" },
-  { field: "category", label: "Category" },
-  { field: "gender", label: "Gender" },
-  { field: "Major", label: "Major" },
-  { field: "Minor", label: "Minor" },
-  { field: "AEC", label: "AEC" },
-  { field: "SEC", label: "SEC" },
-  { field: "quota", label: "Quota" },
-  { field: "department", label: "Department" },
-  { field: "state", label: "State" },
-  { field: "city", label: "City" },
-  { field: "district", label: "District" },
-  { field: "section", label: "Section" },
-  { field: "semester", label: "Semester" }
+const hiddenFields = new Set(["password", "authenticatorsecret", "__v"]);
+const preferredOrder = [
+  "academicyear", "admissionyear", "role", "name", "email", "phone", "regno", "rollno", "program", "programcode", "regulation",
+  "semester", "section", "department", "designation", "institution", "category", "gender", "nationality", "state", "city", "district",
+  "pincode", "quota", "isfinalyear", "excluded", "notification", "annualincome", "freeshipcardholder", "Major", "Minor", "AEC", "SEC",
+  "VAC", "IDC", "MDC", "specialization1", "specialization2", "profileapprovalstatus", "status", "lastlogin", "joiningdate", "birthdate"
 ];
-
-const allowedFields = new Set(filterFields.map((item) => item.field));
 
 const toNumber = (value) => {
   if (value === "" || value === null || value === undefined) return undefined;
@@ -30,14 +16,41 @@ const toNumber = (value) => {
 };
 
 const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const labelFor = (field) => filterFields.find((item) => item.field === field)?.label || field;
+const titleCase = (value) => String(value || "")
+  .replace(/([a-z])([A-Z])/g, "$1 $2")
+  .replace(/[_-]+/g, " ")
+  .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const schemaFields = () => {
+  const paths = Object.entries(User.schema.paths)
+    .map(([field, path]) => ({ field, label: titleCase(field), type: path.instance || "String" }))
+    .filter((item) => !hiddenFields.has(item.field) && !item.field.startsWith("_"));
+  return paths.sort((a, b) => {
+    const ai = preferredOrder.indexOf(a.field);
+    const bi = preferredOrder.indexOf(b.field);
+    if (ai !== -1 || bi !== -1) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+    return a.label.localeCompare(b.label);
+  });
+};
+
+const userFields = schemaFields();
+const allowedFields = new Set(userFields.map((item) => item.field));
+const typeFor = (field) => userFields.find((item) => item.field === field)?.type || "String";
+const labelFor = (field) => userFields.find((item) => item.field === field)?.label || titleCase(field);
+const stringifyValue = (value) => {
+  if (value === null || value === undefined || value === "") return "Not specified";
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value);
+};
 
 const buildFilterQuery = (filters = []) => {
   const query = {};
+  const andClauses = [];
   filters.forEach((filter) => {
     const field = String(filter.field || "").trim();
     const operator = String(filter.operator || "equals").trim();
     const value = filter.value;
+    const fieldType = typeFor(field);
 
     if (!allowedFields.has(field)) return;
 
@@ -56,18 +69,33 @@ const buildFilterQuery = (filters = []) => {
     if (!cleanValue) return;
 
     if (operator === "contains") {
-      query[field] = { $regex: escapeRegExp(cleanValue), $options: "i" };
+      if (fieldType === "String") {
+        query[field] = { $regex: escapeRegExp(cleanValue), $options: "i" };
+      } else {
+        andClauses.push({ $expr: { $regexMatch: { input: { $toString: `$${field}` }, regex: escapeRegExp(cleanValue), options: "i" } } });
+      }
+    } else if (fieldType === "Number") {
+      const numericValue = toNumber(cleanValue);
+      if (numericValue !== undefined) query[field] = numericValue;
+    } else if (fieldType === "Date") {
+      const dateValue = new Date(cleanValue);
+      if (!Number.isNaN(dateValue.getTime())) {
+        const nextDate = new Date(dateValue);
+        nextDate.setDate(nextDate.getDate() + 1);
+        query[field] = { $gte: dateValue, $lt: nextDate };
+      }
     } else {
       query[field] = cleanValue;
     }
   });
+  if (andClauses.length) query.$and = andClauses;
   return query;
 };
 
 const pivotByField = (rows, field) => {
   const counts = {};
   rows.forEach((row) => {
-    const value = row[field] || "Not specified";
+    const value = stringifyValue(row[field]);
     counts[value] = (counts[value] || 0) + 1;
   });
 
@@ -87,12 +115,13 @@ const pivotByFields = (rows, fields = []) => {
   const counts = {};
 
   rows.forEach((row) => {
-    const keyValues = activeFields.map((field) => row[field] || "Not specified");
+    const keyValues = activeFields.map((field) => stringifyValue(row[field]));
     const key = keyValues.join("||");
     if (!counts[key]) {
       counts[key] = {
         id: key || "all-users",
         values: Object.fromEntries(activeFields.map((field, index) => [field, keyValues[index]])),
+        value: keyValues.join(" / ") || "All users",
         count: 0
       };
     }
@@ -108,21 +137,21 @@ exports.getUserPivotOptions = async (req, res) => {
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
 
     const baseQuery = { colid };
-    const entries = await Promise.all(filterFields.map(async ({ field, label }) => {
+    const entries = await Promise.all(userFields.map(async ({ field, label }) => {
       const values = await User.distinct(field, baseQuery);
       return [
         field,
         {
           label,
           values: values
-            .map((item) => String(item || "").trim())
-            .filter(Boolean)
-            .sort((a, b) => a.localeCompare(b))
+            .map((item) => stringifyValue(item))
+            .filter((item) => item && item !== "Not specified")
+            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
         }
       ];
     }));
 
-    res.json({ success: true, fields: filterFields, options: Object.fromEntries(entries) });
+    res.json({ success: true, fields: userFields, options: Object.fromEntries(entries) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -145,11 +174,14 @@ exports.generateUserPivotReport = async (req, res) => {
       colid,
       ...buildFilterQuery(filters)
     };
+    const selectFields = [...new Set([
+      ...pivotFields,
+      ...filters.map((item) => item.field).filter((field) => allowedFields.has(field)),
+      "colid"
+    ])].join(" ");
 
     const [rows, institution] = await Promise.all([
-      User.find(query)
-        .select("academicyear role program programcode category gender Major Minor AEC SEC quota department state city district section semester colid")
-        .lean(),
+      User.find(query).select(selectFields).lean(),
       Institution.findOne({ colid }).lean()
     ]);
 
@@ -159,7 +191,7 @@ exports.generateUserPivotReport = async (req, res) => {
     res.json({
       success: true,
       total: rows.length,
-      fields: filterFields,
+      fields: userFields,
       selectedFilters: filters.filter((item) => item.field && (item.operator === "notempty" || item.value)),
       pivotFields,
       pivotRows,
