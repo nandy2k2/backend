@@ -85,7 +85,51 @@ const randomRegno = () => {
   return Array.from({ length: 10 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 };
 
+const escapeRegExp = (value) => clean(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const defaultRegnoPrefix = (payload) => [
+  Number(payload.colid) || 'NA',
+  clean(payload.academicyear) || 'NA',
+  clean(payload.programcode) || 'NA'
+].join('-');
+
+const defaultRegnoQuery = (payload) => ({
+  colid: Number(payload.colid),
+  role: 'Student',
+  academicyear: clean(payload.academicyear) || 'NA',
+  programcode: clean(payload.programcode) || 'NA'
+});
+
+const nextDefaultRegno = async (payload, excludeId = '') => {
+  const prefix = `${defaultRegnoPrefix(payload)}-`;
+  const countQuery = defaultRegnoQuery(payload);
+  if (excludeId) countQuery._id = { $ne: excludeId };
+  const prefixQuery = {
+    ...defaultRegnoQuery(payload),
+    regno: new RegExp(`^${escapeRegExp(prefix)}\\d+$`)
+  };
+  if (excludeId) prefixQuery._id = { $ne: excludeId };
+  const [programCount, prefixRows] = await Promise.all([
+    User.countDocuments(countQuery),
+    User.find(prefixQuery).select('regno').lean()
+  ]);
+  const maxSerial = prefixRows.reduce((max, row) => {
+    const serial = Number(clean(row.regno).slice(prefix.length));
+    return Number.isFinite(serial) ? Math.max(max, serial) : max;
+  }, programCount);
+  let serial = maxSerial + 1;
+  let regno = `${prefix}${serial}`;
+  while (await User.exists({ colid: Number(payload.colid), role: 'Student', regno, ...(excludeId ? { _id: { $ne: excludeId } } : {}) })) {
+    serial += 1;
+    regno = `${prefix}${serial}`;
+  }
+  return regno;
+};
+
 const generateRegnoValue = (payload, mode = 'random') => {
+  if (clean(mode) === 'defaultSerial') {
+    return '';
+  }
   if (clean(mode) === 'academicYearMongo') {
     return `${clean(payload.academicyear) || 'NA'}/${new mongoose.Types.ObjectId().toString()}`;
   }
@@ -93,8 +137,13 @@ const generateRegnoValue = (payload, mode = 'random') => {
 };
 
 const addGeneratedRegno = async (payload, mode = 'random', excludeId = '') => {
-  if (clean(payload.regno)) return payload;
-  const selectedMode = clean(mode) || 'random';
+  const existingRegno = clean(payload.regno);
+  const selectedMode = clean(mode) || 'defaultSerial';
+  if (existingRegno && existingRegno.toUpperCase() !== 'NA') return payload;
+  if (!selectedMode || selectedMode === 'defaultSerial' || existingRegno.toUpperCase() === 'NA') {
+    payload.regno = await nextDefaultRegno(payload, excludeId);
+    return payload;
+  }
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const regno = generateRegnoValue(payload, selectedMode);
     const query = { colid: Number(payload.colid), role: 'Student', regno };
@@ -107,6 +156,19 @@ const addGeneratedRegno = async (payload, mode = 'random', excludeId = '') => {
   }
   payload.regno = generateRegnoValue(payload, selectedMode);
   return payload;
+};
+
+const assertUniqueStudentRegno = async (payload, excludeId = '') => {
+  const regno = clean(payload.regno);
+  if (!regno || regno.toUpperCase() === 'NA') return;
+  const query = { colid: Number(payload.colid), role: 'Student', regno };
+  if (excludeId) query._id = { $ne: excludeId };
+  const duplicate = await User.exists(query);
+  if (duplicate) {
+    const err = new Error(`Duplicate regno "${regno}" is not allowed for this college`);
+    err.statusCode = 400;
+    throw err;
+  }
 };
 
 const scholarYearCode = (academicYear) => {
@@ -178,7 +240,7 @@ const buildPayload = (body = {}) => {
   const customFields = normalizeCustomFields(body);
   return {
     name: clean(body.name) || 'NA',
-    regno: clean(body.autogenerateregno) === 'Yes' ? '' : (clean(body.regno) || 'NA'),
+    regno: clean(body.autogenerateregno) === 'Yes' ? '' : clean(body.regno),
     scholarnumber: clean(body.autogeneratescholarnumber) === 'Yes' ? '' : clean(body.scholarnumber),
     abcid: clean(body.abcid) || 'NA',
     password: clean(body.password) || 'NA',
@@ -404,11 +466,13 @@ exports.createStudent = async (req, res) => {
     if (!payload.colid) return res.status(400).json({ msg: 'colid is required' });
     if (!payload.email) return res.status(400).json({ msg: 'Email is required' });
     await addGeneratedRegno(payload, req.body.regnogenerationmode);
+    await assertUniqueStudentRegno(payload);
     await addDefaultScholarNumber(payload);
     const data = await User.create(payload);
     res.json(serialize(data));
   } catch (err) {
     if (err.code === 11000) return res.status(400).json({ msg: 'Duplicate email is not allowed' });
+    if (err.statusCode) return res.status(err.statusCode).json({ msg: err.message });
     res.status(500).json({ msg: err.message });
   }
 };
@@ -423,6 +487,7 @@ exports.updateStudent = async (req, res) => {
     const duplicate = await User.findOne({ _id: { $ne: req.body.id }, email: payload.email });
     if (duplicate) return res.status(400).json({ msg: 'Duplicate email is not allowed' });
     await addGeneratedRegno(payload, req.body.regnogenerationmode, req.body.id);
+    await assertUniqueStudentRegno(payload, req.body.id);
     await addDefaultScholarNumber(payload, req.body.id);
 
     const data = await User.findOneAndUpdate(
@@ -434,6 +499,7 @@ exports.updateStudent = async (req, res) => {
     res.json(serialize(data));
   } catch (err) {
     if (err.code === 11000) return res.status(400).json({ msg: 'Duplicate email is not allowed' });
+    if (err.statusCode) return res.status(err.statusCode).json({ msg: err.message });
     res.status(500).json({ msg: err.message });
   }
 };
@@ -490,10 +556,14 @@ exports.bulkStudents = async (req, res) => {
         errors.push({ rowNumber, msg: 'Email is required' });
         continue;
       }
-      await addGeneratedRegno(payload, row.regnogenerationmode || req.body.regnogenerationmode);
-      await addDefaultScholarNumber(payload);
 
       try {
+        const existingByEmail = await User.findOne({ email: payload.email }).select('_id regno').lean();
+        const hasManualRegno = clean(payload.regno) && clean(payload.regno).toUpperCase() !== 'NA';
+        if (!hasManualRegno && existingByEmail?.regno) payload.regno = existingByEmail.regno;
+        await addGeneratedRegno(payload, row.regnogenerationmode || req.body.regnogenerationmode, existingByEmail?._id);
+        await assertUniqueStudentRegno(payload, existingByEmail?._id);
+        await addDefaultScholarNumber(payload, existingByEmail?._id);
         await User.findOneAndUpdate(
           { email: payload.email },
           payload,
@@ -508,6 +578,7 @@ exports.bulkStudents = async (req, res) => {
     res.json({ saved, errors });
   } catch (err) {
     if (err.code === 11000) return res.status(400).json({ msg: 'Duplicate email is not allowed' });
+    if (err.statusCode) return res.status(err.statusCode).json({ msg: err.message });
     res.status(500).json({ msg: err.message });
   }
 };

@@ -130,6 +130,12 @@ exports.options = async (req, res) => {
     [...new Set([...filterFields, ...controlFields])].forEach((field) => {
       options[field] = uniqueSorted(allRows.map((row) => row[field]));
     });
+    options.examExamcodes = uniqueSorted(allRows.map((row) => `${text(row.exam)}|||${text(row.examcode)}`))
+      .map((value) => {
+        const [exam, examcode] = value.split("|||");
+        return { exam, examcode };
+      })
+      .filter((row) => row.exam || row.examcode);
     options.admitcard = uniqueSorted(["Yes", "No", ...controls.map((row) => row.admitcard)]);
     options.result = uniqueSorted(["Yes", "No", ...controls.map((row) => row.result)]);
     options.reeval = uniqueSorted(["Yes", "No", ...controls.map((row) => row.reeval)]);
@@ -289,7 +295,13 @@ exports.getStudentAdmitCardOptions = async (req, res) => {
       options: {
         academicyear: uniqueSorted(enabled.map((row) => row.academicyear)),
         exam: uniqueSorted(enabled.map((row) => row.exam)),
-        examcode: uniqueSorted(enabled.map((row) => row.examcode))
+        examcode: uniqueSorted(enabled.map((row) => row.examcode)),
+        examExamcodes: uniqueSorted(enabled.map((row) => `${text(row.exam)}|||${text(row.examcode)}`))
+          .map((value) => {
+            const [exam, examcode] = value.split("|||");
+            return { exam, examcode };
+          })
+          .filter((row) => row.exam || row.examcode)
       }
     });
   } catch (error) {
