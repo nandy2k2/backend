@@ -46,9 +46,16 @@ function queryFrom(source = {}) {
   ["type", "status", "regno", "refno"].forEach((field) => {
     if (text(source[field])) query[field] = text(source[field]);
   });
-  ["student", "feeitem"].forEach((field) => {
+  ["student", "feeitem", "email", "merchantTxnNo", "txnid"].forEach((field) => {
     if (text(source[field])) query[field] = regex(source[field]);
   });
+  const fromdate = text(source.fromdate || source.startdate);
+  const todate = text(source.todate || source.enddate);
+  if (fromdate || todate) {
+    query.initiationdate = {};
+    if (fromdate) query.initiationdate.$gte = new Date(`${fromdate}T00:00:00.000Z`);
+    if (todate) query.initiationdate.$lte = new Date(`${todate}T23:59:59.999Z`);
+  }
   return query;
 }
 
@@ -305,6 +312,54 @@ exports.getIciciPayments = async (req, res) => {
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
     const data = await IciciPayment.find(queryFrom(req.query)).sort({ initiationdate: -1 }).lean();
     res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateIciciPaymentRegno = async (req, res) => {
+  try {
+    const colid = Number(req.body.colid);
+    const id = text(req.body.id || req.body._id);
+    const regno = text(req.body.regno);
+    if (!colid || !id || !regno) return res.status(400).json({ success: false, message: "colid, transaction and regno are required" });
+    const payment = await IciciPayment.findOneAndUpdate(
+      { _id: id, colid },
+      { $set: { regno } },
+      { new: true, runValidators: true }
+    ).lean();
+    if (!payment) return res.status(404).json({ success: false, message: "ICICI payment transaction not found" });
+    res.json({ success: true, data: payment });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getIciciPaymentReceipt = async (req, res) => {
+  try {
+    const colid = Number(req.query.colid);
+    const id = text(req.query.id || req.query._id);
+    const regno = text(req.query.regno);
+    const student = text(req.query.student);
+    const email = text(req.query.email);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!id && !regno && !student && !email) return res.status(400).json({ success: false, message: "Select a student or provide regno/email" });
+    const query = id
+      ? { _id: id, colid, status: "SUCCESS" }
+      : {
+          colid,
+          status: "SUCCESS",
+          ...(regno ? { regno } : {}),
+          ...(student ? { student: regex(student) } : {}),
+          ...(email ? { email: regex(email) } : {})
+        };
+    const data = await IciciPayment.find(query).sort({ paiddate: 1, initiationdate: 1 }).lean();
+    const summary = data.reduce((sum, row) => {
+      sum.amount += amount(row.amount);
+      sum.paidamount += amount(row.paidamount || row.amount);
+      return sum;
+    }, { amount: 0, paidamount: 0 });
+    res.json({ success: true, count: data.length, summary, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

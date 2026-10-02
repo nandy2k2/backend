@@ -439,6 +439,308 @@ const optionalExact = (query, source, field) => {
   if (value) query[field] = exactRegex(value);
 };
 
+const nextStudentRegno = async ({ colid, academicyear, programcode }, used = new Set()) => {
+  const count = await User.countDocuments({
+    colid,
+    role: /^student$/i,
+    academicyear: exactRegex(academicyear),
+    programcode: exactRegex(programcode)
+  });
+  let serial = count + 1;
+  let candidate = `${colid}-${academicyear}-${programcode}-${serial}`;
+  while (used.has(candidate.toLowerCase()) || await User.exists({ colid, regno: candidate })) {
+    serial += 1;
+    candidate = `${colid}-${academicyear}-${programcode}-${serial}`;
+  }
+  used.add(candidate.toLowerCase());
+  return candidate;
+};
+
+exports.duplicateRegnoOptions = async (req, res) => {
+  try {
+    requirePassword(req.query.password);
+    const colid = number(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const [academicyear, program, programcode, semester] = await Promise.all([
+      distinctSorted(User, "academicyear", { colid, role: /^student$/i }),
+      distinctSorted(User, "program", { colid, role: /^student$/i }),
+      distinctSorted(User, "programcode", { colid, role: /^student$/i }),
+      distinctSorted(User, "semester", { colid, role: /^student$/i })
+    ]);
+    res.json({ success: true, options: { academicyear, program, programcode, semester } });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
+exports.listDuplicateRegno = async (req, res) => {
+  try {
+    requirePassword(req.body.password);
+    const colid = number(req.body.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const base = { colid, role: /^student$/i };
+    optionalExact(base, req.body, "academicyear");
+    optionalExact(base, req.body, "program");
+    optionalExact(base, req.body, "programcode");
+    optionalExact(base, req.body, "semester");
+    const groups = await User.aggregate([
+      { $match: { ...base, regno: { $nin: [null, ""] } } },
+      { $group: { _id: "$regno", count: { $sum: 1 }, ids: { $push: "$_id" } } },
+      { $match: { count: { $gt: 1 } } }
+    ]);
+    const ids = groups.flatMap((group) => group.ids || []);
+    const rows = ids.length
+      ? await User.find({ colid, _id: { $in: ids } })
+        .select("academicyear regulation program programcode semester section name regno email password role")
+        .sort({ regno: 1, academicyear: 1, programcode: 1, semester: 1, name: 1 })
+        .lean()
+      : [];
+    const duplicateCounts = new Map(groups.map((group) => [text(group._id).toLowerCase(), group.count]));
+    const data = rows.map((row) => ({
+      id: String(row._id),
+      userId: String(row._id),
+      academicyear: row.academicyear || "",
+      regulation: row.regulation || "",
+      program: row.program || "",
+      programcode: row.programcode || "",
+      semester: row.semester || "",
+      section: row.section || "",
+      student: row.name || "",
+      regno: row.regno || "",
+      email: row.email || "",
+      password: row.password || "",
+      duplicatecount: duplicateCounts.get(text(row.regno).toLowerCase()) || 0
+    }));
+    res.json({ success: true, count: data.length, data });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
+exports.fixDuplicateRegno = async (req, res) => {
+  try {
+    requirePassword(req.body.password);
+    const colid = number(req.body.colid);
+    const ids = (Array.isArray(req.body.ids) ? req.body.ids : []).map(text).filter((id) => mongoose.Types.ObjectId.isValid(id));
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one student" });
+    const users = await User.find({ colid, _id: { $in: ids }, role: /^student$/i })
+      .select("_id name academicyear programcode regno")
+      .sort({ academicyear: 1, programcode: 1, name: 1 })
+      .lean();
+    const used = new Set();
+    const results = [];
+    let updated = 0;
+    let skipped = 0;
+    for (const user of users) {
+      if (!text(user.academicyear) || !text(user.programcode)) {
+        skipped += 1;
+        results.push({ id: String(user._id), student: user.name || "", oldRegno: user.regno || "", status: "Skipped", message: "Academic year or program code missing" });
+        continue;
+      }
+      const newRegno = await nextStudentRegno({ colid, academicyear: text(user.academicyear), programcode: text(user.programcode) }, used);
+      await User.updateOne({ _id: user._id, colid, role: /^student$/i }, { $set: { regno: newRegno } });
+      updated += 1;
+      results.push({ id: String(user._id), student: user.name || "", oldRegno: user.regno || "", newRegno, status: "Updated" });
+    }
+    res.json({ success: true, updated, skipped, results });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
+const emailCriteria = (source = {}) => {
+  const criteria = buildMandatoryCriteria(source, true);
+  return criteria;
+};
+
+const emailUserToLedgerRows = async (criteria) => {
+  const users = await User.find({
+    colid: criteria.colid,
+    role: /^student$/i,
+    academicyear: exactRegex(criteria.academicyear),
+    program: exactRegex(criteria.program),
+    programcode: exactRegex(criteria.programcode),
+    semester: exactRegex(criteria.semester)
+  }).select("_id name email regno academicyear regulation program programcode semester section rollno").sort({ name: 1 }).lean();
+  const rows = [];
+  for (const user of users) {
+    const ledgers = text(user.email)
+      ? await Ledgerstud.find({
+        colid: criteria.colid,
+        academicyear: exactRegex(criteria.academicyear),
+        programcode: exactRegex(criteria.programcode),
+        semester: exactRegex(criteria.semester),
+        user: exactRegex(user.email)
+      }).select("_id student name user regno feegroup feeitem balance status").lean()
+      : [];
+    const ledgerRegnos = uniqueText(ledgers.map((row) => row.regno));
+    const hasMismatch = !ledgers.length || ledgerRegnos.some((regno) => !sameText(regno, user.regno)) || (ledgerRegnos.length === 0 && text(user.regno));
+    rows.push({
+      id: String(user._id),
+      userId: String(user._id),
+      academicyear: user.academicyear || criteria.academicyear,
+      regulation: user.regulation || "",
+      program: user.program || criteria.program,
+      programcode: user.programcode || criteria.programcode,
+      semester: user.semester || criteria.semester,
+      section: user.section || "",
+      studentname: user.name || "",
+      useremail: user.email || "",
+      userRegno: user.regno || "",
+      ledgerRegno: ledgerRegnos.join(", "),
+      ledgerRows: ledgers.length,
+      matching: hasMismatch ? "No" : "Yes",
+      canUpdate: ledgers.length && text(user.regno) && text(user.email) && hasMismatch ? "Yes" : "No"
+    });
+  }
+  return rows;
+};
+
+exports.listUserToLedgerRegnoByEmail = async (req, res) => {
+  try {
+    requirePassword(req.body.password);
+    const criteria = emailCriteria(req.body);
+    const rows = await emailUserToLedgerRows(criteria);
+    const mismatchOnly = String(req.body.mismatchOnly || "").toLowerCase() === "true";
+    const data = mismatchOnly ? rows.filter((row) => row.matching !== "Yes") : rows;
+    res.json({ success: true, count: data.length, data });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateUserToLedgerRegnoByEmail = async (req, res) => {
+  try {
+    requirePassword(req.body.password);
+    const criteria = emailCriteria(req.body);
+    const ids = (Array.isArray(req.body.ids) ? req.body.ids : []).map(text).filter((id) => mongoose.Types.ObjectId.isValid(id));
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one student" });
+    const users = await User.find({ _id: { $in: ids }, colid: criteria.colid, role: /^student$/i }).select("_id name email regno").lean();
+    let updated = 0;
+    let skipped = 0;
+    const results = [];
+    for (const user of users) {
+      if (!text(user.email) || !text(user.regno)) {
+        skipped += 1;
+        results.push({ studentname: user.name || "", status: "Skipped", message: "User email or regno missing" });
+        continue;
+      }
+      const result = await Ledgerstud.updateMany({
+        colid: criteria.colid,
+        academicyear: exactRegex(criteria.academicyear),
+        programcode: exactRegex(criteria.programcode),
+        semester: exactRegex(criteria.semester),
+        user: exactRegex(user.email)
+      }, { $set: { regno: user.regno } });
+      const count = result.modifiedCount || result.nModified || 0;
+      updated += count;
+      if (!count) skipped += 1;
+      results.push({ studentname: user.name, email: user.email, regno: user.regno, status: count ? "Updated" : "Skipped", ledgerRowsUpdated: count });
+    }
+    res.json({ success: true, updated, skipped, results });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
+const emailLedgerToUserRows = async (criteria) => {
+  const ledgers = await Ledgerstud.find({
+    colid: criteria.colid,
+    academicyear: exactRegex(criteria.academicyear),
+    programcode: exactRegex(criteria.programcode),
+    semester: exactRegex(criteria.semester),
+    user: { $nin: [null, ""] }
+  }).select("_id academicyear regulation programcode semester student name regno user feegroup feeitem balance status").sort({ user: 1 }).lean();
+  const grouped = new Map();
+  ledgers.forEach((ledger) => {
+    const email = text(ledger.user).toLowerCase();
+    if (!email) return;
+    if (!grouped.has(email)) grouped.set(email, { email: ledger.user, ledgers: [], ledgerRegnos: new Set(), studentnames: new Set() });
+    const group = grouped.get(email);
+    group.ledgers.push(ledger);
+    if (text(ledger.regno)) group.ledgerRegnos.add(text(ledger.regno));
+    if (text(ledger.student || ledger.name)) group.studentnames.add(text(ledger.student || ledger.name));
+  });
+  const rows = [];
+  for (const [emailKey, group] of grouped.entries()) {
+    const user = await User.findOne({
+      colid: criteria.colid,
+      role: /^student$/i,
+      academicyear: exactRegex(criteria.academicyear),
+      program: exactRegex(criteria.program),
+      programcode: exactRegex(criteria.programcode),
+      semester: exactRegex(criteria.semester),
+      email: exactRegex(group.email)
+    }).select("_id name email regno academicyear regulation program programcode semester section rollno").lean();
+    const ledgerRegnos = Array.from(group.ledgerRegnos);
+    const preferredLedgerRegno = ledgerRegnos[0] || "";
+    const hasMismatch = !user || !sameText(user.regno, preferredLedgerRegno);
+    rows.push({
+      id: emailKey,
+      ledgerKey: emailKey,
+      userId: user?._id ? String(user._id) : "",
+      academicyear: criteria.academicyear,
+      regulation: user?.regulation || group.ledgers[0]?.regulation || "",
+      program: user?.program || criteria.program,
+      programcode: criteria.programcode,
+      semester: criteria.semester,
+      section: user?.section || "",
+      studentname: user?.name || Array.from(group.studentnames).join(", "),
+      useremail: user?.email || group.email,
+      userRegno: user?.regno || "",
+      ledgerRegno: ledgerRegnos.join(", "),
+      selectedLedgerRegno: preferredLedgerRegno,
+      ledgerRows: group.ledgers.length,
+      matching: hasMismatch ? "No" : "Yes",
+      canUpdate: user?._id && preferredLedgerRegno && hasMismatch ? "Yes" : "No"
+    });
+  }
+  return rows;
+};
+
+exports.listLedgerToUserRegnoByEmail = async (req, res) => {
+  try {
+    requirePassword(req.body.password);
+    const criteria = emailCriteria(req.body);
+    const rows = await emailLedgerToUserRows(criteria);
+    const mismatchOnly = String(req.body.mismatchOnly || "").toLowerCase() === "true";
+    const data = mismatchOnly ? rows.filter((row) => row.matching !== "Yes") : rows;
+    res.json({ success: true, count: data.length, data });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
+exports.updateLedgerToUserRegnoByEmail = async (req, res) => {
+  try {
+    requirePassword(req.body.password);
+    const criteria = emailCriteria(req.body);
+    const keys = (Array.isArray(req.body.keys) ? req.body.keys : []).map(text).filter(Boolean);
+    if (!keys.length) return res.status(400).json({ success: false, message: "Select at least one student" });
+    const rows = await emailLedgerToUserRows(criteria);
+    const selected = rows.filter((row) => keys.includes(row.ledgerKey));
+    let updated = 0;
+    let skipped = 0;
+    const results = [];
+    for (const row of selected) {
+      if (!row.userId || !text(row.selectedLedgerRegno)) {
+        skipped += 1;
+        results.push({ studentname: row.studentname, email: row.useremail, status: "Skipped", message: "Matching user or ledger regno missing" });
+        continue;
+      }
+      const result = await User.updateOne({ _id: row.userId, colid: criteria.colid, role: /^student$/i }, { $set: { regno: row.selectedLedgerRegno } });
+      const count = result.modifiedCount || result.nModified || 0;
+      updated += count;
+      if (!count) skipped += 1;
+      results.push({ studentname: row.studentname, email: row.useremail, regno: row.selectedLedgerRegno, status: count ? "Updated" : "Skipped" });
+    }
+    res.json({ success: true, updated, skipped, results });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
 exports.duplicateFeesOptions = async (req, res) => {
   try {
     requirePassword(req.query.password);
