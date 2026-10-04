@@ -17,29 +17,32 @@ const toNumber = (value) => {
 
 const text = (value) => String(value || "").trim();
 
-const cleanPayload = (input = {}) => ({
-  academicyear: text(input.academicyear || input.academicYear),
-  regulation: text(input.regulation),
-  program: text(input.program),
-  programcode: text(input.programcode),
-  type: allowedTypes.has(input.type) ? input.type : "",
-  subject: text(input.subject),
-  semester: text(input.semester),
-  course: text(input.course),
-  coursecode: text(input.coursecode),
-  assessmentgroup: text(input.assessmentgroup || input.assessmentGroup),
-  grouptype: allowedGroupTypes.has(input.grouptype || input.groupType) ? (input.grouptype || input.groupType) : undefined,
-  scoretype: allowedScoreTypes.has(input.scoretype || input.scoreType) ? (input.scoretype || input.scoreType) : undefined,
-  componenttype: allowedComponentTypes.has(input.componenttype || input.componentType || input.Componenttype) ? (input.componenttype || input.componentType || input.Componenttype) : undefined,
-  assessmentcomponent: text(input.assessmentcomponent || input.assessmentComponent),
-  marks: toNumber(input.marks) || 0,
-  passmarks: toNumber(input.passmarks || input.passMarks) || 0,
-  weightage: toNumber(input.weightage) || 0,
-  credits: toNumber(input.credits || input.credit) || 0,
-  colid: toNumber(input.colid),
-  user: text(input.user),
-  status: text(input.status) || "Active"
-});
+const cleanPayload = (input = {}) => {
+  const parsedWeightage = toNumber(input.weightage);
+  return {
+    academicyear: text(input.academicyear || input.academicYear),
+    regulation: text(input.regulation),
+    program: text(input.program),
+    programcode: text(input.programcode),
+    type: allowedTypes.has(input.type) ? input.type : "",
+    subject: text(input.subject),
+    semester: text(input.semester),
+    course: text(input.course),
+    coursecode: text(input.coursecode),
+    assessmentgroup: text(input.assessmentgroup || input.assessmentGroup),
+    grouptype: allowedGroupTypes.has(input.grouptype || input.groupType) ? (input.grouptype || input.groupType) : undefined,
+    scoretype: allowedScoreTypes.has(input.scoretype || input.scoreType) ? (input.scoretype || input.scoreType) : undefined,
+    componenttype: allowedComponentTypes.has(input.componenttype || input.componentType || input.Componenttype) ? (input.componenttype || input.componentType || input.Componenttype) : undefined,
+    assessmentcomponent: text(input.assessmentcomponent || input.assessmentComponent),
+    marks: toNumber(input.marks) || 0,
+    passmarks: toNumber(input.passmarks || input.passMarks) || 0,
+    weightage: parsedWeightage === undefined ? 1 : parsedWeightage,
+    credits: toNumber(input.credits || input.credit) || 0,
+    colid: toNumber(input.colid),
+    user: text(input.user),
+    status: text(input.status) || "Active"
+  };
+};
 
 const validatePayload = (payload) => {
   if (payload.colid === undefined) return "colid is required";
@@ -54,6 +57,7 @@ const validatePayload = (payload) => {
   if (!payload.coursecode) return "Course code is required";
   if (!payload.componenttype) return "Component type is required";
   if (!payload.assessmentcomponent) return "Assessment component is required";
+  if (payload.weightage < 0 || payload.weightage > 1) return "Please enter a valid value between 0 and 1";
   return "";
 };
 
@@ -234,7 +238,7 @@ exports.validateProgramAssessmentComponentWithAi = async (req, res) => {
         assessmentcomponent: row.assessmentcomponent || "",
         marks: row.marks || 0,
         passmarks: row.passmarks || 0,
-        weightage: row.weightage || 0,
+        weightage: row.weightage === undefined || row.weightage === null || row.weightage === "" ? 1 : row.weightage,
         credits: row.credits || 0,
         status: row.status || ""
       });

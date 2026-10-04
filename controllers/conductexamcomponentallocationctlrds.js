@@ -9,6 +9,9 @@ const Institution = require("../Models/insdetails");
 const OnlineExam = require("../Models/onlineexamds");
 const OnlineExamAttempt = require("../Models/onlineexamattemptds");
 const ExamVivaMarks = require("../Models/examinationmodel2vivamarksds");
+const WorkloadAssignment = require("../Models/workloadassignmentds");
+const User = require("../Models/user");
+const ConductExam = require("../Models/conductexamds");
 
 const text = (value) => String(value ?? "").trim();
 const number = (value, fallback = 0) => {
@@ -43,7 +46,7 @@ const institutionFor = async (colid) => {
 
 const courseFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode"];
 const allocationFields = [...courseFields, "examinername", "examineremail", "student", "regno", "examrollno", "examdate", "examslot", "componenttype", "scoretype", "assessmentgroup", "assessmentgrouptype", "assessmentcomponent", "status"];
-const marksFields = ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "semester", "course", "coursecode", "student", "regno", "examrollno", "componenttype", "scoretype", "assessmentgroup", "assessmentgrouptype", "assessmentcomponent", "examinername", "examineremail"];
+const marksFields = ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "semester", "course", "coursecode", "student", "regno", "examrollno", "componenttype", "scoretype", "assessmentgroup", "assessmentgrouptype", "assessmentcomponent", "passstatus", "examinername", "examineremail"];
 
 const buildFilter = (source = {}, fields = []) => {
   const filter = {};
@@ -118,7 +121,9 @@ const marksPayload = (body = {}) => ({
   assessmentgrouptype: text(body.assessmentgrouptype || body.grouptype),
   assessmentcomponent: text(body.assessmentcomponent),
   maxmarks: number(body.maxmarks),
+  rawmarks: number(body.rawmarks ?? body.enteredmarks ?? body.marksentry ?? body.marksobtained),
   marksobtained: number(body.marksobtained),
+  passstatus: text(body.passstatus),
   credits: number(body.credits),
   examinername: text(body.examinername),
   examineremail: text(body.examineremail),
@@ -374,6 +379,7 @@ exports.examinerRows = async (req, res) => {
           ...row,
           examrollno,
           displayid: examrollno || `ID-${String(index + 1).padStart(4, "0")}`,
+          rawmarks: mark?.rawmarks ?? "",
           marksobtained: mark?.marksobtained ?? "",
           submissionstatus: mark?.submissionstatus || "Draft",
           submitteddate: mark?.submitteddate || "",
@@ -619,6 +625,236 @@ exports.bulkMarks = async (req, res) => {
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
       saved += 1;
+    }
+    res.json({ success: true, saved, errors });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.internalMarksOptions = async (req, res) => {
+  try {
+    const colid = numberOrUndefined(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const base = { colid };
+    if (text(req.query.academicyear)) base.academicyear = text(req.query.academicyear);
+    if (text(req.query.semester)) base.semester = text(req.query.semester);
+    const workloadFilter = { ...base, status: /^Active$/i };
+    if (text(req.query.facultyemail)) workloadFilter.facultyemail = new RegExp(`^${escapeRegex(req.query.facultyemail)}$`, "i");
+    const examFilter = { colid };
+    if (text(req.query.academicyear)) examFilter.academicyear = text(req.query.academicyear);
+    const [components, workloads] = await Promise.all([
+      AssessmentComponent.find({ ...base, status: /^Active$/i }).sort({ academicyear: 1, semester: 1, program: 1, course: 1 }).lean(),
+      WorkloadAssignment.find(workloadFilter).sort({ academicyear: 1, semester: 1, program: 1, course: 1 }).lean()
+    ]);
+    const [exams, faculty] = await Promise.all([
+      ConductExam.find(examFilter).select("academicyear examname examcode regulation program programcode semester").sort({ academicyear: -1, examname: 1 }).lean(),
+      User.find({ colid, role: { $not: /^Student$/i } }).select("name email role department designation").sort({ name: 1 }).limit(5000).lean()
+    ]);
+    const workloadKeys = new Set(workloads.map((row) => [
+      row.academicyear,
+      row.regulation,
+      row.programcode,
+      row.semester,
+      row.coursecode
+    ].map(text).join("||")));
+    const courseRows = text(req.query.facultyemail)
+      ? [...workloads, ...components.filter((row) => workloadKeys.has([row.academicyear, row.regulation, row.programcode, row.semester, row.coursecode].map(text).join("||")))]
+      : [...components, ...workloads];
+    const courseMap = new Map();
+    courseRows.forEach((row) => {
+      const key = [row.academicyear, row.regulation, row.programcode, row.semester, row.coursecode].map(text).join("||");
+      if (!courseMap.has(key)) {
+        courseMap.set(key, {
+          academicyear: text(row.academicyear),
+          regulation: text(row.regulation),
+          program: text(row.program),
+          programcode: text(row.programcode),
+          semester: text(row.semester),
+          course: text(row.course),
+          coursecode: text(row.coursecode),
+          type: text(row.type),
+          subject: text(row.subject)
+        });
+      }
+    });
+    const allRows = [...components, ...workloads];
+    res.json({
+      success: true,
+      academicyears: uniq(allRows.map((row) => row.academicyear)),
+      semesters: uniq(allRows.filter((row) => !text(req.query.academicyear) || text(row.academicyear) === text(req.query.academicyear)).map((row) => row.semester)),
+      exams,
+      faculty: faculty.map((row) => ({ facultyname: row.name || row.email, facultyemail: row.email, role: row.role, department: row.department, designation: row.designation })).filter((row) => row.facultyemail),
+      courses: [...courseMap.values()].filter((row) => (!text(req.query.academicyear) || row.academicyear === text(req.query.academicyear)) && (!text(req.query.semester) || row.semester === text(req.query.semester))),
+      componenttypes: ["Theory", "Practical", "Viva"],
+      scoretypes: uniq(components.map((row) => row.scoretype))
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.internalMarksComponents = async (req, res) => {
+  try {
+    const colid = numberOrUndefined(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const filter = buildFilter(req.query, ["academicyear", "regulation", "programcode", "semester", "coursecode", "componenttype", "scoretype", "assessmentcomponent"]);
+    filter.status = /^Active$/i;
+    const rows = await AssessmentComponent.find(filter).sort({ componenttype: 1, scoretype: 1, assessmentgroup: 1, assessmentcomponent: 1 }).lean();
+    res.json({
+      success: true,
+      data: rows,
+      componenttypes: uniq(rows.map((row) => row.componenttype)),
+      scoretypes: uniq(rows.map((row) => row.scoretype)),
+      assessmentcomponents: uniq(rows.map((row) => row.assessmentcomponent))
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.internalMarksStudents = async (req, res) => {
+  try {
+    const colid = numberOrUndefined(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const assessmentid = text(req.query.assessmentid);
+    const assessment = assessmentid && mongoose.Types.ObjectId.isValid(assessmentid)
+      ? await AssessmentComponent.findOne({ _id: assessmentid, colid }).lean()
+      : await AssessmentComponent.findOne(buildFilter(req.query, ["academicyear", "regulation", "programcode", "semester", "coursecode", "componenttype", "scoretype", "assessmentcomponent"])).lean();
+    if (!assessment) return res.status(404).json({ success: false, message: "Assessment component not found" });
+    const studentFilter = {
+      colid,
+      role: /^Student$/i,
+      academicyear: text(assessment.academicyear),
+      programcode: text(assessment.programcode),
+      semester: text(assessment.semester)
+    };
+    if (text(assessment.program)) studentFilter.program = text(assessment.program);
+    if (text(assessment.regulation)) studentFilter.regulation = text(assessment.regulation);
+    const [students, marks] = await Promise.all([
+      User.find(studentFilter).select("name email regno rollno academicyear regulation program programcode semester section Major").sort({ section: 1, rollno: 1, name: 1 }).lean(),
+      ComponentMarks.find({
+        colid,
+        academicyear: text(assessment.academicyear),
+        examcode: text(req.query.examcode),
+        regulation: text(assessment.regulation),
+        programcode: text(assessment.programcode),
+        semester: text(assessment.semester),
+        coursecode: text(assessment.coursecode),
+        componenttype: text(assessment.componenttype),
+        scoretype: text(assessment.scoretype),
+        assessmentgroup: text(assessment.assessmentgroup),
+        assessmentcomponent: text(assessment.assessmentcomponent)
+      }).lean()
+    ]);
+    const marksMap = new Map(marks.map((row) => [text(row.regno), row]));
+    res.json({
+      success: true,
+      assessment,
+      data: students.map((student) => {
+        const mark = marksMap.get(text(student.regno));
+        return {
+          ...student,
+          student: student.name,
+          rawmarks: mark?.rawmarks ?? "",
+          marksobtained: mark?.marksobtained ?? "",
+          passstatus: mark?.passstatus || "",
+          markid: mark?._id || ""
+        };
+      })
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.saveInternalMarks = async (req, res) => {
+  try {
+    const colid = numberOrUndefined(req.body.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const assessmentid = text(req.body.assessmentid);
+    const assessment = assessmentid && mongoose.Types.ObjectId.isValid(assessmentid)
+      ? await AssessmentComponent.findOne({ _id: assessmentid, colid }).lean()
+      : null;
+    if (!assessment) return res.status(404).json({ success: false, message: "Assessment component not found" });
+    if (!text(req.body.examcode)) return res.status(400).json({ success: false, message: "Exam is required" });
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    if (!rows.length) return res.status(400).json({ success: false, message: "No marks received" });
+    const maxmarks = number(assessment.marks);
+    const weightage = number(assessment.weightage);
+    const passmarks = number(assessment.passmarks);
+    const errors = [];
+    const ops = [];
+    rows.forEach((row, index) => {
+      const regno = text(row.regno);
+      const rawMarks = numberOrUndefined(row.rawmarks ?? row.marksentry ?? row.enteredmarks ?? row.marksobtained);
+      if (!regno) {
+        errors.push({ row: index + 1, message: "Reg no missing" });
+        return;
+      }
+      if (rawMarks === undefined) return;
+      if (rawMarks < 0 || rawMarks > maxmarks) {
+        errors.push({ row: index + 1, regno, message: `Marks cannot be more than ${maxmarks}` });
+        return;
+      }
+      const finalMarks = Number((rawMarks * weightage).toFixed(2));
+      const weightedMaxMarks = Number((maxmarks * weightage).toFixed(2));
+      const weightedPassMarks = Number((passmarks * weightage).toFixed(2));
+      const item = {
+        colid,
+        academicyear: text(assessment.academicyear),
+        exam: text(req.body.exam),
+        examcode: text(req.body.examcode),
+        regulation: text(assessment.regulation),
+        program: text(assessment.program),
+        programcode: text(assessment.programcode),
+        semester: text(assessment.semester),
+        course: text(assessment.course),
+        coursecode: text(assessment.coursecode),
+        student: text(row.student || row.name),
+        regno,
+        examrollno: text(row.examrollno),
+        componenttype: text(assessment.componenttype),
+        scoretype: text(assessment.scoretype),
+        assessmentgroup: text(assessment.assessmentgroup),
+        assessmentgrouptype: text(assessment.grouptype),
+        assessmentcomponent: text(assessment.assessmentcomponent),
+        maxmarks: weightedMaxMarks,
+        rawmarks: rawMarks,
+        marksobtained: finalMarks,
+        passstatus: finalMarks < weightedPassMarks ? "FAIL" : "PASS",
+        credits: number(assessment.credits),
+        examinername: text(req.body.examinername || req.body.username || req.body.name),
+        examineremail: text(req.body.examineremail || req.body.user),
+        submissionstatus: text(req.body.submissionstatus || "Draft") === "Submitted" ? "Submitted" : "Draft",
+        submitteddate: text(req.body.submitteddate),
+        submittedby: text(req.body.submittedby),
+        user: text(req.body.user)
+      };
+      ops.push({
+        updateOne: {
+          filter: {
+            colid,
+            academicyear: item.academicyear,
+            examcode: item.examcode,
+            regulation: item.regulation,
+            programcode: item.programcode,
+            semester: item.semester,
+            coursecode: item.coursecode,
+            regno,
+            componenttype: item.componenttype,
+            assessmentgroup: item.assessmentgroup,
+            assessmentcomponent: item.assessmentcomponent
+          },
+          update: { $set: item },
+          upsert: true
+        }
+      });
+    });
+    let saved = 0;
+    if (ops.length) {
+      const result = await ComponentMarks.bulkWrite(ops, { ordered: false });
+      saved = (result.upsertedCount || 0) + (result.modifiedCount || 0) + (result.matchedCount || 0);
     }
     res.json({ success: true, saved, errors });
   } catch (err) {

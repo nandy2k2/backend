@@ -18,7 +18,7 @@ const courseAssessmentSchema = new mongoose.Schema(
     assessmentcomponent: { type: String, trim: true, required: true },
     marks: { type: Number, default: 0 },
     passmarks: { type: Number, default: 0 },
-    weightage: { type: Number, default: 0 },
+    weightage: { type: Number, default: 1, min: 0, max: 1 },
     credits: { type: Number, default: 0 },
     colid: { type: Number, required: true, index: true },
     user: { type: String, trim: true },

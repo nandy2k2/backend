@@ -1030,6 +1030,10 @@ app.get('/api/v2/examination-model2/component-marks', conductExamComponentAlloca
 app.post('/api/v2/examination-model2/component-marks', conductExamComponentAllocationController.saveMark);
 app.post('/api/v2/examination-model2/component-marks-delete', conductExamComponentAllocationController.deleteMark);
 app.post('/api/v2/examination-model2/component-marks-bulk', conductExamComponentAllocationController.bulkMarks);
+app.get('/api/v2/internal-marks-entry/options', conductExamComponentAllocationController.internalMarksOptions);
+app.get('/api/v2/internal-marks-entry/components', conductExamComponentAllocationController.internalMarksComponents);
+app.get('/api/v2/internal-marks-entry/students', conductExamComponentAllocationController.internalMarksStudents);
+app.post('/api/v2/internal-marks-entry/save', conductExamComponentAllocationController.saveInternalMarks);
 app.get('/api/v2/examination-model2/component-online-exams', conductExamComponentAllocationController.onlineExamSources);
 app.get('/api/v2/examination-model2/component-online-exam-marks', conductExamComponentAllocationController.onlineExamAttemptMarks);
 app.post('/api/v2/examination-model2/component-online-exam-transfer', conductExamComponentAllocationController.transferOnlineExamMarks);
