@@ -12,6 +12,7 @@ const ExamVivaMarks = require("../Models/examinationmodel2vivamarksds");
 const WorkloadAssignment = require("../Models/workloadassignmentds");
 const User = require("../Models/user");
 const ConductExam = require("../Models/conductexamds");
+const InternalMarksEntryDates = require("../Models/conductexaminternalmarksentrydatesds");
 
 const text = (value) => String(value ?? "").trim();
 const number = (value, fallback = 0) => {
@@ -33,6 +34,27 @@ const dateInsideWindow = (startdate, enddate, date = todayString()) => {
   if (start && date < start) return false;
   if (end && date > end) return false;
   return true;
+};
+const datePayload = (body = {}) => ({
+  colid: numberOrUndefined(body.colid),
+  academicyear: text(body.academicyear),
+  regulation: text(body.regulation),
+  exam: text(body.exam || body.examname),
+  examcode: text(body.examcode),
+  program: text(body.program),
+  programcode: text(body.programcode),
+  semester: text(body.semester),
+  startdate: text(body.startdate),
+  enddate: text(body.enddate),
+  user: text(body.user)
+});
+const validateDatePayload = (item) => {
+  if (item.colid === undefined) return "colid is required";
+  for (const field of ["academicyear", "regulation", "examcode", "program", "programcode", "semester", "startdate", "enddate"]) {
+    if (!item[field]) return `${field} is required`;
+  }
+  if (item.startdate > item.enddate) return "Start date cannot be after end date";
+  return "";
 };
 const percent = (obtained, total) => number(total) ? Number(((number(obtained) / number(total)) * 100).toFixed(2)) : 0;
 const institutionFor = async (colid) => {
@@ -627,6 +649,88 @@ exports.bulkMarks = async (req, res) => {
       saved += 1;
     }
     res.json({ success: true, saved, errors });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.listInternalMarksEntryDates = async (req, res) => {
+  try {
+    const filter = buildFilter(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "semester"]);
+    if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const data = await InternalMarksEntryDates.find(filter).sort({ academicyear: -1, examcode: 1, program: 1, semester: 1 }).lean();
+    const optionFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "semester"];
+    res.json({ success: true, data, options: Object.fromEntries(optionFields.map((field) => [field, uniq(data.map((row) => row[field]))])) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.saveInternalMarksEntryDate = async (req, res) => {
+  try {
+    const item = datePayload(req.body);
+    const error = validateDatePayload(item);
+    if (error) return res.status(400).json({ success: false, message: error });
+    const data = req.body.id
+      ? await InternalMarksEntryDates.findOneAndUpdate({ _id: req.body.id, colid: item.colid }, item, { new: true, runValidators: true })
+      : await InternalMarksEntryDates.findOneAndUpdate(
+        { colid: item.colid, academicyear: item.academicyear, regulation: item.regulation, examcode: item.examcode, programcode: item.programcode, semester: item.semester },
+        item,
+        { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+      );
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.code === 11000 ? "Date range already exists for this selection" : err.message });
+  }
+};
+
+exports.deleteInternalMarksEntryDate = async (req, res) => {
+  try {
+    await InternalMarksEntryDates.findOneAndDelete({ _id: req.body.id, colid: numberOrUndefined(req.body.colid) });
+    res.json({ success: true, message: "Deleted" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.bulkInternalMarksEntryDates = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body.rows || req.body.items) ? (req.body.rows || req.body.items) : [];
+    const errors = [];
+    let saved = 0;
+    for (let index = 0; index < rows.length; index += 1) {
+      const item = datePayload({ ...rows[index], colid: req.body.colid || rows[index].colid, user: req.body.user || rows[index].user });
+      const error = validateDatePayload(item);
+      if (error) {
+        errors.push({ row: index + 2, message: error });
+        continue;
+      }
+      await InternalMarksEntryDates.findOneAndUpdate(
+        { colid: item.colid, academicyear: item.academicyear, regulation: item.regulation, examcode: item.examcode, programcode: item.programcode, semester: item.semester },
+        item,
+        { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+      );
+      saved += 1;
+    }
+    res.json({ success: true, saved, errors });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.checkInternalMarksEntryDate = async (req, res) => {
+  try {
+    const filter = buildFilter(req.query, ["academicyear", "regulation", "examcode", "programcode", "semester"]);
+    if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    for (const field of ["academicyear", "regulation", "examcode", "programcode", "semester"]) {
+      if (!filter[field]) return res.status(400).json({ success: false, message: `${field} is required` });
+    }
+    const data = await InternalMarksEntryDates.findOne(filter).sort({ _id: -1 }).lean();
+    if (!data) return res.json({ success: true, allowed: false, status: "missing", message: "Marks entry dates are not activated for this selection. Please inform admin to activate dates." });
+    const today = todayString();
+    if (data.startdate && today < data.startdate) return res.json({ success: true, allowed: false, status: "not_started", data, message: `Marks entry is not available. It will open from ${data.startdate}.` });
+    if (data.enddate && today > data.enddate) return res.json({ success: true, allowed: false, status: "closed", data, message: `Marks entry is closed. It was available from ${data.startdate} to ${data.enddate}.` });
+    res.json({ success: true, allowed: true, status: "open", data, message: `Marks entry is open from ${data.startdate} to ${data.enddate}.` });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

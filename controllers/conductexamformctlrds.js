@@ -8,6 +8,7 @@ const ConductExamFormSubmission = require("../Models/conductexamformsubmissionds
 const ConductExam = require("../Models/conductexamds");
 const ConductExamCourse = require("../Models/conductexamcourseds");
 const ConductExamRoll = require("../Models/conductexamrollds");
+const PreExamEligibility = require("../Models/conductexampreexameligibilityds");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
 const NepClassEnrollment = require("../Models/nepclassenrollmentds");
 const ExamModel2Marks = require("../Models/examinationmodel2marksds");
@@ -769,6 +770,7 @@ exports.submitStudentExamForm = async (req, res) => {
     const regno = clean(req.body.regno);
     const formid = clean(req.body.formid);
     const examtype = clean(req.body.examtype) || "Regular";
+    const preapprovedMode = /^yes$/i.test(clean(req.body.preapproved)) || req.body.preapproved === true;
     const selectedCourses = Array.isArray(req.body.courses) ? req.body.courses : [];
     const data = req.body.data && typeof req.body.data === "object" ? req.body.data : {};
     const documents = Array.isArray(req.body.documents) ? req.body.documents : [];
@@ -841,6 +843,18 @@ exports.submitStudentExamForm = async (req, res) => {
     let ledgerCreated = 0;
     let examRollCreated = 0;
     let examFeeLedger = [];
+    const barredRows = await PreExamEligibility.find({
+      colid,
+      academicyear,
+      regulation,
+      examcode,
+      programcode: clean(student.programcode),
+      semester,
+      regno,
+      coursecode: { $in: selectedCourses.map((row) => clean(row.coursecode)).filter(Boolean) },
+      status: { $not: /^Inactive$/i }
+    }).lean();
+    const barredCourseCodes = new Set(barredRows.map((row) => clean(row.coursecode)));
     if (totalfee > 0) {
       const feeid = `${submission._id}-${examtype}-ExamFeeTotal`;
       await Ledgerstud.findOneAndUpdate(
@@ -877,6 +891,11 @@ exports.submitStudentExamForm = async (req, res) => {
     for (const course of selectedCourses) {
       const coursecode = clean(course.coursecode);
       if (!coursecode) continue;
+      if (barredCourseCodes.has(coursecode)) {
+        const barred = barredRows.find((row) => clean(row.coursecode) === coursecode);
+        deficiencies.push(`${clean(course.course) || coursecode}: student is barred from exam form (${clean(barred?.note) || "pre exam eligibility"})`);
+        continue;
+      }
       const examCourse = await ConductExamCourse.findOne({ colid, academicyear, examcode, programcode: student.programcode, semester, coursecode }).lean();
       const atktSubmission = /^ATKT$/i.test(examtype);
       const roll = await ConductExamRoll.findOneAndUpdate(
@@ -900,9 +919,12 @@ exports.submitStudentExamForm = async (req, res) => {
           phone: clean(student.phone),
           section: clean(student.section),
           applied: "Yes",
-          admitcardeligible: "No",
-          attended: atktSubmission ? "Yes" : "No",
-          attendance: atktSubmission ? "Yes" : "",
+          admitcardeligible: preapprovedMode ? "Yes" : "No",
+          attended: preapprovedMode || atktSubmission ? "Yes" : "No",
+          attendance: preapprovedMode || atktSubmission ? "Yes" : "",
+          fees: preapprovedMode ? "Yes" : "",
+          disciplinary: preapprovedMode ? "Yes" : "",
+          atkt: preapprovedMode ? "Yes" : "",
           examdate: clean(examCourse?.examdate || course.examdate),
           examslot: clean(examCourse?.examslot || course.examslot),
           remarks: `${examtype} exam form submitted: ${submission._id}`,
@@ -916,7 +938,7 @@ exports.submitStudentExamForm = async (req, res) => {
       }
       examRollCreated += 1;
     }
-    res.json({ data: submission, ledgerCreated, examRollCreated, deficiencies, examFeeLedger, rawtotalfee, maxFee, totalfee });
+    res.json({ data: submission, ledgerCreated, examRollCreated, barred: barredRows, deficiencies, examFeeLedger, rawtotalfee, maxFee, totalfee });
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to submit exam form" });
   }

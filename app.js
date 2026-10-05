@@ -1034,6 +1034,11 @@ app.get('/api/v2/internal-marks-entry/options', conductExamComponentAllocationCo
 app.get('/api/v2/internal-marks-entry/components', conductExamComponentAllocationController.internalMarksComponents);
 app.get('/api/v2/internal-marks-entry/students', conductExamComponentAllocationController.internalMarksStudents);
 app.post('/api/v2/internal-marks-entry/save', conductExamComponentAllocationController.saveInternalMarks);
+app.get('/api/v2/internal-marks-entry/dates', conductExamComponentAllocationController.listInternalMarksEntryDates);
+app.post('/api/v2/internal-marks-entry/dates', conductExamComponentAllocationController.saveInternalMarksEntryDate);
+app.post('/api/v2/internal-marks-entry/dates-delete', conductExamComponentAllocationController.deleteInternalMarksEntryDate);
+app.post('/api/v2/internal-marks-entry/dates-bulk', conductExamComponentAllocationController.bulkInternalMarksEntryDates);
+app.get('/api/v2/internal-marks-entry/dates-check', conductExamComponentAllocationController.checkInternalMarksEntryDate);
 app.get('/api/v2/examination-model2/component-online-exams', conductExamComponentAllocationController.onlineExamSources);
 app.get('/api/v2/examination-model2/component-online-exam-marks', conductExamComponentAllocationController.onlineExamAttemptMarks);
 app.post('/api/v2/examination-model2/component-online-exam-transfer', conductExamComponentAllocationController.transferOnlineExamMarks);
@@ -5711,6 +5716,7 @@ const conductexamgeneratorctlrds = require("./controllers/conductexamgeneratorct
 const conductexamonscreenctlrds = require("./controllers/conductexamonscreenctlrds");
 const conductexamhallticketctlrds = require("./controllers/conductexamhallticketctlrds");
 const conductexamformctlrds = require("./controllers/conductexamformctlrds");
+const conductexampreexameligibilityctlrds = require("./controllers/conductexampreexameligibilityctlrds");
 const conductexamdoctorctlrds = require("./controllers/conductexamdoctorctlrds");
 const conductexamscanningctlrds = require("./controllers/conductexamscanningctlrds");
 const feedbackadvancedctlrds = require("./controllers/feedbackadvancedctlrds");
@@ -6085,6 +6091,13 @@ app.get("/api/v2/conductexam/student-exam-form-context", conductexamformctlrds.s
 app.get("/api/v2/conductexam/student-exam-form-report-options", conductexamformctlrds.studentExamFormReportOptions);
 app.get("/api/v2/conductexam/student-exam-form-report", conductexamformctlrds.studentExamFormReport);
 app.post("/api/v2/conductexam/student-exam-form-submit", conductexamformctlrds.submitStudentExamForm);
+app.get("/api/v2/conductexam/pre-exam-eligibility-options", conductexampreexameligibilityctlrds.options);
+app.get("/api/v2/conductexam/pre-exam-eligibility-students", conductexampreexameligibilityctlrds.students);
+app.get("/api/v2/conductexam/pre-exam-eligibility-courses", conductexampreexameligibilityctlrds.courses);
+app.get("/api/v2/conductexam/pre-exam-eligibility", conductexampreexameligibilityctlrds.list);
+app.post("/api/v2/conductexam/pre-exam-eligibility", conductexampreexameligibilityctlrds.save);
+app.post("/api/v2/conductexam/pre-exam-eligibility-delete", conductexampreexameligibilityctlrds.remove);
+app.post("/api/v2/conductexam/pre-exam-eligibility-bulk", conductexampreexameligibilityctlrds.bulk);
 app.get("/api/v2/conductexam/exam-dates-options", conductexamdatesctlrds.options);
 app.get("/api/v2/conductexam/exam-dates", conductexamdatesctlrds.list);
 app.post("/api/v2/conductexam/exam-dates", conductexamdatesctlrds.save);
