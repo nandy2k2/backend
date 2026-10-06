@@ -248,20 +248,66 @@ exports.studentMarks = async (req, res) => {
     }
     const attempt = await OnlineExamAttempt.findOne({ colid, examid, regno }).lean();
     if (!attempt) return res.status(404).json({ success: false, message: "No submitted exam response found" });
-    const answers = (attempt.answers || []).map((answer, index) => ({
-      id: String(answer._id || index + 1),
-      sectionname: answer.sectionname,
-      questiontext: answer.questiontext,
-      questionhtml: answer.questionhtml,
-      questiontype: answer.questiontype,
-      selectedoptiontext: answer.selectedoptiontext,
-      answertext: answer.answertext,
-      marksobtained: num(answer.marksobtained),
-      maxmarks: num(answer.maxmarks),
-      grade: answer.grade,
-      comments: answer.comments,
-      aicomments: answer.aicomments,
-      gradingstatus: answer.gradingstatus
+    const mapFromQuestions = yes(req.query.mapFromQuestions);
+    const questionMap = new Map();
+    if (mapFromQuestions) {
+      const exam = await OnlineExam.findOne({ _id: attempt.examid, colid }).select("sections.questions").lean();
+      (exam?.sections || []).forEach((section) => {
+        (section.questions || []).forEach((question) => {
+          const cos = Array.isArray(question.cos) ? question.cos.map(text).filter(Boolean) : [];
+          const bloomlevels = Array.isArray(question.bloomlevels) ? question.bloomlevels.map(text).filter(Boolean) : [];
+          questionMap.set(String(question._id), {
+            conumber: text(question.conumber || cos[0]),
+            co: text(question.co || cos.join(", ")),
+            cos,
+            bloomlevels
+          });
+        });
+      });
+    }
+    const answers = (attempt.answers || []).map((answer, index) => {
+      const mapped = questionMap.get(String(answer.questionid)) || {};
+      const answerCos = Array.isArray(answer.cos) ? answer.cos.map(text).filter(Boolean) : [];
+      const answerBlooms = Array.isArray(answer.bloomlevels) ? answer.bloomlevels.map(text).filter(Boolean) : [];
+      const cos = answerCos.length ? answerCos : (mapped.cos || []);
+      const bloomlevels = answerBlooms.length ? answerBlooms : (mapped.bloomlevels || []);
+      return {
+        id: String(answer._id || index + 1),
+        sectionname: answer.sectionname,
+        questiontext: answer.questiontext,
+        questionhtml: answer.questionhtml,
+        questiontype: answer.questiontype,
+        conumber: text(answer.conumber || mapped.conumber || cos[0]),
+        co: text(answer.co || mapped.co || cos.join(", ")),
+        cos,
+        bloomlevels,
+        selectedoptiontext: answer.selectedoptiontext,
+        answertext: answer.answertext,
+        marksobtained: num(answer.marksobtained),
+        maxmarks: num(answer.maxmarks),
+        grade: answer.grade,
+        comments: answer.comments,
+        aicomments: answer.aicomments,
+        gradingstatus: answer.gradingstatus
+      };
+    });
+    const bloomMap = new Map();
+    answers.forEach((answer) => {
+      const levels = answer.bloomlevels?.length ? answer.bloomlevels : ["Unmapped"];
+      levels.forEach((level) => {
+        const key = text(level) || "Unmapped";
+        const current = bloomMap.get(key) || { bloomlevel: key, questions: 0, score: 0, total: 0, percentage: 0 };
+        current.questions += 1;
+        current.score += num(answer.marksobtained);
+        current.total += num(answer.maxmarks);
+        bloomMap.set(key, current);
+      });
+    });
+    const bloomSummary = [...bloomMap.values()].map((row) => ({
+      ...row,
+      score: Number(num(row.score).toFixed(2)),
+      total: Number(num(row.total).toFixed(2)),
+      percentage: num(row.total) ? Number(((num(row.score) / num(row.total)) * 100).toFixed(2)) : 0
     }));
     res.json({
       success: true,
@@ -282,9 +328,15 @@ exports.studentMarks = async (req, res) => {
         submittedAt: attempt.submittime
       },
       sectionwise: sectionSummary(attempt.answers),
+      bloomwise: bloomSummary,
       questionwise: answers
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
+};
+
+exports.studentMarksFromQuestions = async (req, res) => {
+  req.query.mapFromQuestions = "Yes";
+  return exports.studentMarks(req, res);
 };

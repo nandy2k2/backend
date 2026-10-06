@@ -158,6 +158,10 @@ const initialAnswers = (exam) => (exam.sections || []).flatMap((section) => (sec
   attachments: Array.isArray(q.attachments) ? q.attachments : [],
   contentblocks: contentBlocks(q.contentblocks),
   questiontype: q.questiontype || section.sectiontype,
+  conumber: q.conumber || "",
+  co: q.co || "",
+  cos: Array.isArray(q.cos) ? q.cos : [],
+  bloomlevels: Array.isArray(q.bloomlevels) ? q.bloomlevels : [],
   maxmarks: num(q.marks),
   marksobtained: 0,
   gradingstatus: "Pending"

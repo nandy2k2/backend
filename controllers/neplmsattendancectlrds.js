@@ -5,6 +5,7 @@ const NepLmsOnlineClassJoin = require("../Models/neplmsonlineclassjoinds");
 const User = require("../Models/user");
 const NepLmsClassGroup = require("../Models/neplmsclassgroupds");
 const NepLmsAttendanceOtp = require("../Models/neplmsattendanceotpds");
+const EnrollmentStudent = require("../Models/neplmsenrollmentgroupstudentds");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
 const { emitActivityEvent } = require("./activitymonitoringctlrds");
 const { attendanceModificationHtml, sendAuditEmail } = require("../utils/auditEmailHelper");
@@ -875,6 +876,187 @@ exports.submitStudentOtps = async (req, res) => {
     );
     await completeAttendanceTask({ colid, classid: session.classid, completedBy: email || regno });
     res.json({ success: true, message: "Attendance marked present", data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.createEnrollmentAttendanceOtp = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const classInfo = req.body.classInfo || {};
+    const attendanceType = text(req.body.type) || "Enrollment";
+    const classid = classInfo._id || classInfo.classid;
+    const enrollmentgroupid = classInfo.enrollmentgroupid || classInfo.groupid;
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!classid) return res.status(400).json({ success: false, message: "Class is required" });
+    if (!enrollmentgroupid) return res.status(400).json({ success: false, message: "Enrollment group is required" });
+    const validity = buildOtpValidityWindow(classInfo);
+    if (!validity.validfrom || !validity.validtill) {
+      return res.status(400).json({ success: false, message: "Class date and class time are required to create OTP" });
+    }
+    const now = new Date();
+    if (now < validity.validfrom) {
+      return res.status(400).json({ success: false, message: `OTP can be generated only during the class period. This class starts at ${formatValidity(validity.validfrom)}.` });
+    }
+    if (now > validity.validtill) {
+      return res.status(400).json({ success: false, message: `OTP cannot be generated because the class period ended at ${formatValidity(validity.validtill)}.` });
+    }
+    const validfrom = new Date();
+    const validtill = new Date(validfrom);
+    validtill.setMinutes(validtill.getMinutes() + 1);
+    if (validtill > validity.validtill) validtill.setTime(validity.validtill.getTime());
+    const otp = randomOtp();
+    const localclassdate = classLocalDate(classInfo);
+    const localclasstime = classLocalTime(classInfo);
+    const timezone = classTimezone(classInfo);
+    await NepLmsAttendanceOtp.updateMany({ colid, classid, type: attendanceType, status: "Active" }, { status: "Closed" });
+    const data = await NepLmsAttendanceOtp.create({
+      classid,
+      otps: [otp],
+      requiredotpcount: 1,
+      academicyear: text(classInfo.academicyear),
+      regulation: text(classInfo.regulation),
+      program: text(classInfo.program),
+      programcode: text(classInfo.programcode),
+      semester: text(classInfo.semester),
+      major: text(classInfo.major),
+      faculty: text(classInfo.faculty),
+      facultyemail: text(classInfo.facultyemail),
+      enrollmentgroup: text(classInfo.enrollmentgroup || classInfo.groupname),
+      enrollmentgroupid,
+      timezone,
+      localclassdate,
+      localclasstime,
+      utcclassdate: text(classInfo.classdate),
+      utcclasstime: text(classInfo.classtime),
+      classdate: localclassdate,
+      classtime: localclasstime,
+      durationminutes: number(classInfo.durationminutes) || 0,
+      validfrom,
+      validtill,
+      type: attendanceType,
+      status: "Active",
+      colid,
+      user: text(req.body.user),
+      createdby: text(req.body.user)
+    });
+    res.json({ success: true, data, otps: [otp], requiredotpcount: 1, validfrom, validtill });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getStudentEnrollmentOtpSessions = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    const regno = text(req.query.regno);
+    const email = text(req.query.email || req.query.user);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!regno && !email) return res.status(400).json({ success: false, message: "student regno or email is required" });
+    const student = await User.findOne({
+      colid,
+      role: /^Student$/i,
+      ...(regno ? { regno } : { email: regexText(email) })
+    }).lean();
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+    const membershipQuery = {
+      colid,
+      status: /^Active$/i,
+      $or: [
+        ...(text(student.regno) ? [{ regno: text(student.regno) }] : []),
+        ...(text(student.email) ? [{ studentemail: regexText(student.email) }] : [])
+      ]
+    };
+    const memberships = await EnrollmentStudent.find(membershipQuery).lean();
+    const groupIds = memberships.map((row) => row.groupid).filter(Boolean);
+    await NepLmsAttendanceOtp.updateMany({ colid, status: "Active", validtill: { $lt: new Date() } }, { status: "Expired" });
+    const data = groupIds.length
+      ? await NepLmsAttendanceOtp.find({
+        colid,
+        status: "Active",
+        enrollmentgroupid: { $in: groupIds },
+        type: "Enrollment",
+        validfrom: { $lte: new Date() },
+        validtill: { $gte: new Date() }
+      }).sort({ createdAt: -1 }).select("-otps").lean()
+      : [];
+    res.json({ success: true, student, data });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.submitStudentEnrollmentOtp = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const sessionid = text(req.body.sessionid);
+    const otp = text(req.body.otp || (Array.isArray(req.body.otps) ? req.body.otps[0] : ""));
+    const regno = text(req.body.regno);
+    const email = text(req.body.email || req.body.user);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!sessionid) return res.status(400).json({ success: false, message: "OTP session is required" });
+    if (!/^\d{6}$/.test(otp)) return res.status(400).json({ success: false, message: "Enter one valid 6 digit OTP" });
+    const session = await NepLmsAttendanceOtp.findOne({ _id: sessionid, colid, status: "Active", type: "Enrollment" }).lean();
+    if (!session) return res.status(404).json({ success: false, message: "Active enrollment OTP session not found" });
+    const now = new Date();
+    if (session.validfrom && now < new Date(session.validfrom)) return res.status(400).json({ success: false, message: `OTP is valid only from ${formatValidity(new Date(session.validfrom))}.` });
+    if (session.validtill && now > new Date(session.validtill)) {
+      await NepLmsAttendanceOtp.updateOne({ _id: session._id, colid }, { status: "Expired" });
+      return res.status(400).json({ success: false, message: `OTP expired at ${formatValidity(new Date(session.validtill))}. OTP attendance is valid only for one minute.` });
+    }
+    if (text((session.otps || [])[0]) !== otp) return res.status(400).json({ success: false, message: "OTP value does not match" });
+    const student = await User.findOne({
+      colid,
+      role: /^Student$/i,
+      ...(regno ? { regno } : { email: regexText(email) })
+    }).lean();
+    if (!student) return res.status(404).json({ success: false, message: "Student not found" });
+    const membership = await EnrollmentStudent.findOne({
+      colid,
+      groupid: session.enrollmentgroupid,
+      status: /^Active$/i,
+      $or: [
+        ...(text(student.regno) ? [{ regno: text(student.regno) }] : []),
+        ...(text(student.email) ? [{ studentemail: regexText(student.email) }] : [])
+      ]
+    }).lean();
+    if (!membership) return res.status(400).json({ success: false, message: "This OTP session is not assigned to the student enrollment group" });
+    const classInfo = {
+      _id: session.classid,
+      academicyear: session.academicyear || membership.academicyear,
+      regulation: membership.regulation,
+      program: membership.program,
+      programcode: membership.programcode,
+      semester: membership.semester,
+      section: membership.section,
+      major: membership.major,
+      faculty: session.faculty,
+      facultyemail: session.facultyemail,
+      enrollmentgroup: session.enrollmentgroup || membership.groupname,
+      enrollmentgroupid: session.enrollmentgroupid,
+      timezone: session.timezone,
+      localclassdate: session.localclassdate || session.classdate,
+      localclasstime: session.localclasstime || session.classtime,
+      classdate: session.utcclassdate || session.classdate,
+      classtime: session.utcclasstime || session.classtime
+    };
+    const payload = attendancePayloadFrom({
+      colid,
+      classInfo,
+      item: membership,
+      attendanceType: "Enrollment",
+      attendance: 1,
+      comments: "Enrollment OTP attendance",
+      user: email || regno
+    });
+    const data = await NepLmsAttendance.findOneAndUpdate(
+      { colid, classid: session.classid, studentid: membership.studentid || membership._id, type: payload.type },
+      payload,
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    await completeAttendanceTask({ colid, classid: session.classid, completedBy: email || regno });
+    res.json({ success: true, message: "Enrollment attendance marked present", data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

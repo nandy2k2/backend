@@ -13,6 +13,8 @@ const nepLmsAttendanceOtpSchema = new mongoose.Schema({
   facultyemail: { type: String },
   course: { type: String },
   coursecode: { type: String },
+  enrollmentgroup: { type: String },
+  enrollmentgroupid: { type: mongoose.Schema.Types.ObjectId },
   timezone: { type: String },
   localclassdate: { type: String },
   localclasstime: { type: String },

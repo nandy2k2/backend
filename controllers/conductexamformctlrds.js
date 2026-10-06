@@ -9,6 +9,7 @@ const ConductExam = require("../Models/conductexamds");
 const ConductExamCourse = require("../Models/conductexamcourseds");
 const ConductExamRoll = require("../Models/conductexamrollds");
 const PreExamEligibility = require("../Models/conductexampreexameligibilityds");
+const ExamScholarship = require("../Models/conductexamscholarshipds");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
 const NepClassEnrollment = require("../Models/nepclassenrollmentds");
 const ExamModel2Marks = require("../Models/examinationmodel2marksds");
@@ -811,8 +812,21 @@ exports.submitStudentExamForm = async (req, res) => {
     const semester = clean(req.body.semester) || clean(student.semester);
     const regulation = clean(req.body.regulation) || clean(student.regulation);
     const rawtotalfee = selectedCourses.reduce((sum, row) => sum + num(row.fee), 0);
+    const scholarshipRow = await ExamScholarship.findOne({
+      colid,
+      academicyear,
+      regulation,
+      examcode,
+      programcode: clean(student.programcode),
+      semester,
+      regno,
+      status: { $not: /^Inactive$/i }
+    }).lean();
     const maxFee = await examFeeMaxFor({ colid, academicyear, regulation, programcode: student.programcode, examcode });
-    const totalfee = capExamFee(rawtotalfee, maxFee);
+    const totalfee = scholarshipRow ? 0 : capExamFee(rawtotalfee, maxFee);
+    if (scholarshipRow) {
+      deficiencies.push(`Exam scholarship applied. Exam fee set to zero${clean(scholarshipRow.note) ? ` (${clean(scholarshipRow.note)})` : ""}.`);
+    }
     const submission = await ConductExamFormSubmission.create({
       colid,
       formid,
@@ -938,7 +952,7 @@ exports.submitStudentExamForm = async (req, res) => {
       }
       examRollCreated += 1;
     }
-    res.json({ data: submission, ledgerCreated, examRollCreated, barred: barredRows, deficiencies, examFeeLedger, rawtotalfee, maxFee, totalfee });
+    res.json({ data: submission, ledgerCreated, examRollCreated, barred: barredRows, scholarship: scholarshipRow, scholarshipApplied: !!scholarshipRow, deficiencies, examFeeLedger, rawtotalfee, maxFee, totalfee });
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to submit exam form" });
   }

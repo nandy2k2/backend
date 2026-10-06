@@ -990,8 +990,11 @@ exports.addExamRollStudentsForCourses = async (req, res) => {
 
 exports.deleteExamCourse = async (req, res) => {
   try {
-    await ConductExamCourse.findOneAndDelete({ _id: req.body.id, colid: number(req.body.colid) });
-    res.json({ success: true, message: "Deleted" });
+    const colid = number(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [req.body.id].filter(Boolean);
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one exam course row." });
+    const result = await ConductExamCourse.deleteMany({ _id: { $in: ids }, colid });
+    res.json({ success: true, deleted: result.deletedCount || 0, message: "Deleted" });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

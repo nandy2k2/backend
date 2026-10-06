@@ -285,6 +285,7 @@ app.post('/api/v2/online-exam-publish/bulk-upload', onlineExamPublishController.
 app.post('/api/v2/online-exam-publish/delete', onlineExamPublishController.deleteRows);
 app.get('/api/v2/student-online-exam-marks/options', onlineExamPublishController.studentOptions);
 app.get('/api/v2/student-online-exam-marks', onlineExamPublishController.studentMarks);
+app.get('/api/v2/student-online-exam-marks-from-questions', onlineExamPublishController.studentMarksFromQuestions);
 app.get('/api/v2/online-exam/question-options', onlineExamController.questionOptions);
 app.get('/api/v2/online-exam/exams', onlineExamController.listExams);
 app.post('/api/v2/online-exam/exams', onlineExamController.saveExam);
@@ -5717,6 +5718,7 @@ const conductexamonscreenctlrds = require("./controllers/conductexamonscreenctlr
 const conductexamhallticketctlrds = require("./controllers/conductexamhallticketctlrds");
 const conductexamformctlrds = require("./controllers/conductexamformctlrds");
 const conductexampreexameligibilityctlrds = require("./controllers/conductexampreexameligibilityctlrds");
+const conductexamscholarshipctlrds = require("./controllers/conductexamscholarshipctlrds");
 const conductexamdoctorctlrds = require("./controllers/conductexamdoctorctlrds");
 const conductexamscanningctlrds = require("./controllers/conductexamscanningctlrds");
 const feedbackadvancedctlrds = require("./controllers/feedbackadvancedctlrds");
@@ -6098,6 +6100,12 @@ app.get("/api/v2/conductexam/pre-exam-eligibility", conductexampreexameligibilit
 app.post("/api/v2/conductexam/pre-exam-eligibility", conductexampreexameligibilityctlrds.save);
 app.post("/api/v2/conductexam/pre-exam-eligibility-delete", conductexampreexameligibilityctlrds.remove);
 app.post("/api/v2/conductexam/pre-exam-eligibility-bulk", conductexampreexameligibilityctlrds.bulk);
+app.get("/api/v2/conductexam/exam-scholarship-options", conductexamscholarshipctlrds.options);
+app.get("/api/v2/conductexam/exam-scholarship-students", conductexamscholarshipctlrds.students);
+app.get("/api/v2/conductexam/exam-scholarship", conductexamscholarshipctlrds.list);
+app.post("/api/v2/conductexam/exam-scholarship", conductexamscholarshipctlrds.save);
+app.post("/api/v2/conductexam/exam-scholarship-delete", conductexamscholarshipctlrds.remove);
+app.post("/api/v2/conductexam/exam-scholarship-bulk", conductexamscholarshipctlrds.bulk);
 app.get("/api/v2/conductexam/exam-dates-options", conductexamdatesctlrds.options);
 app.get("/api/v2/conductexam/exam-dates", conductexamdatesctlrds.list);
 app.post("/api/v2/conductexam/exam-dates", conductexamdatesctlrds.save);
@@ -6609,6 +6617,9 @@ app.get("/api/v2/neplms/attendance/online-class-joins", neplmsattendancectlrds.g
 app.post("/api/v2/neplms/attendance/otp/create", neplmsattendancectlrds.createAttendanceOtps);
 app.get("/api/v2/neplms/attendance/otp/student-sessions", neplmsattendancectlrds.getStudentOtpSessions);
 app.post("/api/v2/neplms/attendance/otp/submit", neplmsattendancectlrds.submitStudentOtps);
+app.post("/api/v2/neplms/enrollment-attendance/otp/create", neplmsattendancectlrds.createEnrollmentAttendanceOtp);
+app.get("/api/v2/neplms/enrollment-attendance/otp/student-sessions", neplmsattendancectlrds.getStudentEnrollmentOtpSessions);
+app.post("/api/v2/neplms/enrollment-attendance/otp/submit", neplmsattendancectlrds.submitStudentEnrollmentOtp);
 app.get("/api/v2/neplms/otp-attendance-configuration/options", neplmsOtpAttendanceConfigurationController.options);
 app.get("/api/v2/neplms/otp-attendance-configuration", neplmsOtpAttendanceConfigurationController.list);
 app.post("/api/v2/neplms/otp-attendance-configuration", neplmsOtpAttendanceConfigurationController.save);
