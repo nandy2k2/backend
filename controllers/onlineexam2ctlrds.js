@@ -119,6 +119,188 @@ const shuffledExamForAttempt = (exam = {}) => ({
   sections: (exam.sections || []).map((section) => ({ ...section, questions: shuffleArray(section.questions || []) }))
 });
 
+const buildQuestionMetaMap = (exam = {}) => {
+  const map = {};
+  (exam.sections || []).forEach((section) => {
+    (section.questions || []).forEach((question) => {
+      const meta = {
+        questionid: String(question._id || ""),
+        questiontext: question.questiontext || "",
+        questionhtml: question.questionhtml || "",
+        questiontype: question.questiontype || section.sectiontype || "",
+        sectionid: String(section._id || ""),
+        sectionname: section.sectionname || "",
+        marks: num(question.marks),
+        cos: arr(question.cos || question.co).length ? arr(question.cos || question.co) : arr(question.cos || question.cos),
+        bloomlevels: arr(question.bloomlevels),
+        modules: arr(question.modules),
+        topics: arr(question.topics)
+      };
+      if (meta.questionid) map[meta.questionid] = meta;
+      const textKey = text(question.questiontext || question.questionhtml).toLowerCase();
+      if (textKey) map[`text:${textKey}`] = meta;
+    });
+  });
+  return map;
+};
+
+const enrichAttemptQuestionMapping = (attempt = {}, questionMap = {}) => ({
+  ...attempt,
+  answers: (attempt.answers || []).map((answer) => {
+    const questionKey = String(answer.questionid || "");
+    const textKey = `text:${text(answer.questiontext || answer.questionhtml).toLowerCase()}`;
+    const meta = questionMap[questionKey] || questionMap[textKey] || {};
+    return {
+      ...answer,
+      questionid: questionKey || meta.questionid || "",
+      questionCos: arr(meta.cos),
+      questionBloomlevels: arr(meta.bloomlevels),
+      questionModules: arr(meta.modules),
+      questionTopics: arr(meta.topics),
+      maxmarks: num(answer.maxmarks) || num(meta.marks)
+    };
+  })
+});
+
+const levelFromPercentage = (percentage, levels = []) => {
+  const value = num(percentage);
+  const match = (levels || [])
+    .map((level, index) => ({
+      name: text(level.name || level.level || `Level ${index + 1}`),
+      min: num(level.min, 0),
+      max: num(level.max, 100)
+    }))
+    .find((level) => value >= level.min && value <= level.max);
+  return match?.name || "Not attained";
+};
+
+const calculateAttainment = async (source = {}, dimension = "co") => {
+  const colid = num(source.colid);
+  const academicyear = text(source.academicyear);
+  const threshold = num(source.threshold, 50);
+  const levels = Array.isArray(source.levels) && source.levels.length
+    ? source.levels
+    : [
+      { name: "Level 1", min: 0, max: 39.99 },
+      { name: "Level 2", min: 40, max: 69.99 },
+      { name: "Level 3", min: 70, max: 100 }
+    ];
+  if (!colid) throw new Error("colid is required");
+  if (!academicyear) throw new Error("Select academic year");
+  const examQuery = { colid, academicyear };
+  const addExamFilter = (field) => {
+    const plural = `${field}s`;
+    const values = Array.isArray(source[plural]) ? source[plural] : Array.isArray(source[field]) ? source[field] : [];
+    const clean = values.map(text).filter(Boolean);
+    if (clean.length) {
+      examQuery[field] = { $in: clean.map((value) => new RegExp(`^${esc(value)}$`, "i")) };
+      return;
+    }
+    if (text(source[field])) examQuery[field] = { $regex: `^${esc(source[field])}$`, $options: "i" };
+  };
+  ["program", "programcode", "semester", "course", "coursecode", "examname", "examcode"].forEach((field) => {
+    addExamFilter(field);
+  });
+  if (text(source.examid)) examQuery._id = text(source.examid);
+  const exams = await OnlineExam2.find(examQuery).lean();
+  const examIds = exams.map((exam) => exam._id);
+  const attempts = examIds.length ? await OnlineExam2Attempt.find({
+    colid,
+    examid: { $in: examIds },
+    $or: [{ submittime: { $ne: null } }, { status: { $regex: "Submitted|Graded", $options: "i" } }]
+  }).lean() : [];
+  const examMap = Object.fromEntries(exams.map((exam) => [String(exam._id), exam]));
+  const questionMaps = Object.fromEntries(exams.map((exam) => [String(exam._id), buildQuestionMetaMap(exam)]));
+  const bucket = {};
+  const studentRows = [];
+  attempts.forEach((attempt) => {
+    const exam = examMap[String(attempt.examid)] || {};
+    const enriched = enrichAttemptQuestionMapping(attempt, questionMaps[String(attempt.examid)] || {});
+    const perStudent = {};
+    (enriched.answers || []).forEach((answer) => {
+      const labels = dimension === "bloom" ? arr(answer.questionBloomlevels) : arr(answer.questionCos);
+      const mappedLabels = labels.length ? labels : ["Unmapped"];
+      mappedLabels.forEach((label) => {
+        const outcome = text(label) || "Unmapped";
+        const key = dimension === "co" ? `${text(exam.coursecode || attempt.coursecode)}||${outcome}` : outcome;
+        perStudent[key] = perStudent[key] || { obtained: 0, maxmarks: 0, questions: 0 };
+        perStudent[key].obtained += num(answer.marksobtained);
+        perStudent[key].maxmarks += num(answer.maxmarks);
+        perStudent[key].questions += 1;
+      });
+    });
+    Object.entries(perStudent).forEach(([key, score]) => {
+      if (!score.maxmarks) return;
+      const [, coLabel] = key.includes("||") ? key.split("||") : ["", key];
+      const label = dimension === "co" ? coLabel : key;
+      const percentage = Number(((score.obtained / score.maxmarks) * 100).toFixed(2));
+      bucket[key] = bucket[key] || {
+        outcome: label,
+        program: exam.program || attempt.program || "",
+        programcode: exam.programcode || attempt.programcode || "",
+        semester: exam.semester || attempt.semester || "",
+        course: exam.course || attempt.course || "",
+        coursecode: exam.coursecode || attempt.coursecode || "",
+        students: 0,
+        studentsAboveThreshold: 0,
+        totalPercentage: 0,
+        totalObtained: 0,
+        totalMaxMarks: 0,
+        mappedQuestionScores: 0
+      };
+      bucket[key].students += 1;
+      bucket[key].studentsAboveThreshold += percentage >= threshold ? 1 : 0;
+      bucket[key].totalPercentage += percentage;
+      bucket[key].totalObtained += score.obtained;
+      bucket[key].totalMaxMarks += score.maxmarks;
+      bucket[key].mappedQuestionScores += score.questions;
+      studentRows.push({
+        outcome: label,
+        program: exam.program || attempt.program,
+        programcode: exam.programcode || attempt.programcode,
+        semester: exam.semester || attempt.semester,
+        student: attempt.student,
+        regno: attempt.regno,
+        email: attempt.email,
+        examname: exam.examname || attempt.examname,
+        examcode: exam.examcode || attempt.examcode,
+        course: exam.course || attempt.course,
+        coursecode: exam.coursecode || attempt.coursecode,
+        obtained: Number(score.obtained.toFixed(2)),
+        maxmarks: Number(score.maxmarks.toFixed(2)),
+        percentage,
+        aboveThreshold: percentage >= threshold ? "Yes" : "No"
+      });
+    });
+  });
+  const rows = Object.values(bucket).map((row) => {
+    const averagePercentage = row.students ? Number((row.totalPercentage / row.students).toFixed(2)) : 0;
+    const aboveThresholdPercentage = row.students ? Number(((row.studentsAboveThreshold / row.students) * 100).toFixed(2)) : 0;
+    return {
+      ...row,
+      totalObtained: Number(row.totalObtained.toFixed(2)),
+      totalMaxMarks: Number(row.totalMaxMarks.toFixed(2)),
+      averagePercentage,
+      aboveThresholdPercentage,
+      threshold,
+      attainmentLevel: levelFromPercentage(aboveThresholdPercentage, levels)
+    };
+  }).sort((a, b) => `${a.coursecode || ""}${a.outcome}`.localeCompare(`${b.coursecode || ""}${b.outcome}`));
+  return {
+    rows,
+    studentRows,
+    levels,
+    threshold,
+    summary: {
+      exams: exams.length,
+      attempts: attempts.length,
+      outcomes: rows.length,
+      averagePercentage: rows.length ? Number((rows.reduce((sum, row) => sum + row.averagePercentage, 0) / rows.length).toFixed(2)) : 0,
+      level3: rows.filter((row) => row.attainmentLevel === "Level 3").length
+    }
+  };
+};
+
 const examWithAttemptQuestionOrder = (exam = {}, attempt = {}) => {
   const orderBySection = {};
   (attempt.answers || []).forEach((answer, index) => {
@@ -769,6 +951,24 @@ ${JSON.stringify(descriptiveAnswers.map((answer) => ({ _id: answer._id, question
     const raw = /^ollama$/i.test(text(req.body.provider)) ? await callOllama(req.body.colid, prompt, req.body.ollamaConfigId) : await callGemini(req.body.colid, prompt, req.body.geminiModel || "gemini-2.5-flash");
     const parsed = parseJsonFromText(raw);
     res.json({ success: true, data: Array.isArray(parsed) ? parsed : parsed.evaluations || [], raw });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.coAttainment = async (req, res) => {
+  try {
+    const result = await calculateAttainment(req.body || {}, "co");
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.bloomAttainment = async (req, res) => {
+  try {
+    const result = await calculateAttainment(req.body || {}, "bloom");
+    res.json({ success: true, ...result });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

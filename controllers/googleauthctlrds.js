@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../Models/user');
 const GoogleRegistrationLink = require('../Models/googleregistrationlinkds');
 const authenticator = require('./authenticatorctlrds');
+const billingSubscription = require('./billingmodulectlrds');
 
 const clean = (value) => String(value ?? '').trim();
 const normEmail = (value) => clean(value).toLowerCase();
@@ -34,7 +35,7 @@ const tokenForUser = (user) => jwt.sign(
   { expiresIn: process.env.JWT_EXPIRES_IN || '30d' }
 );
 
-const loginResponse = (user) => ({
+const loginResponse = (user, subscriptionActive = true) => ({
   status: 'Success',
   colid: user.colid,
   name: user.name,
@@ -52,6 +53,7 @@ const loginResponse = (user) => ({
   designation: user.designation,
   statuslog: user.status,
   token: tokenForUser(user),
+  subscriptiondeactivated: subscriptionActive ? 'No' : 'Yes',
   twofa: authenticator.statusForUser(user)
 });
 
@@ -71,7 +73,11 @@ exports.login = async (req, res) => {
       user.googleemail = googleemail;
       await user.save();
     }
-    res.json(loginResponse(user));
+    const subscriptionActive = await billingSubscription.isSubscriptionActive(user.colid);
+    if (!subscriptionActive && clean(user.role).toLowerCase() !== 'all') {
+      return res.status(403).json({ status: 'Subscription inactive', message: 'This account has been deactivated. Please contact administrator.' });
+    }
+    res.json(loginResponse(user, subscriptionActive));
   } catch (err) {
     res.status(401).json({ status: 'Error', message: err.message });
   }

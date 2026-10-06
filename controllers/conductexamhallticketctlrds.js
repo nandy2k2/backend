@@ -2,6 +2,7 @@ const ConductExamRoll = require("../Models/conductexamrollds");
 const StudentViewControl = require("../Models/conductexamstudentviewcontrolds");
 const Institution = require("../Models/insdetails");
 const User = require("../Models/user");
+const UserSignature = require("../Models/usersignatureds");
 const BlockchainLedger = require("../Models/blockchainledgerds");
 const { appendBlock } = require("./blockchainledgerctlrds");
 
@@ -93,6 +94,14 @@ const loadHallTicketPayload = async ({ colid, academicyear, examcode, regno, req
     Institution.findOne({ colid }).lean(),
     User.findOne({ colid, regno: first.regno }).lean()
   ]);
+  const studentEmail = text(student?.email || first.email);
+  const signature = studentEmail
+    ? await UserSignature.findOne({
+      colid,
+      useremail: { $regex: `^${studentEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" },
+      status: { $ne: "Inactive" }
+    }).sort({ updatedAt: -1, createdAt: -1 }).lean()
+    : null;
   return {
     institution,
     student: student || {
@@ -105,6 +114,7 @@ const loadHallTicketPayload = async ({ colid, academicyear, examcode, regno, req
       semester: first.semester,
       section: first.section
     },
+    studentSignature: signature || null,
     exam: {
       academicyear: first.academicyear,
       exam: first.exam,
@@ -233,6 +243,23 @@ exports.verifyHallTicketBlockchain = async (req, res) => {
     res.json({ success: true, verified: !!blocks.length, data: blocks });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.verifyHallTicket = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const payload = await loadHallTicketPayload({
+      colid,
+      academicyear: req.query.academicyear,
+      examcode: req.query.examcode,
+      regno: req.query.regno
+    });
+    if (payload.error) return res.status(400).json({ success: false, verified: false, message: payload.error });
+    res.json({ success: true, verified: true, data: payload });
+  } catch (error) {
+    res.status(500).json({ success: false, verified: false, message: error.message });
   }
 };
 

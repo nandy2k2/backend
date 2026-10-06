@@ -117,6 +117,7 @@ exports.getworkload= async (req,res) => {
 exports.loginapi= async (req,res) => {
     try{
         const authenticator = require('./authenticatorctlrds');
+        const billingSubscription = require('./billingmodulectlrds');
 
         const email=req.query.email;
         const password=req.query.password;
@@ -129,6 +130,14 @@ exports.loginapi= async (req,res) => {
 
         if (user.password !== password) {
             return res.status(200).json({ message: "Incorrect password", status: "Incorrect password" });
+        }
+
+        const subscriptionActive = await billingSubscription.isSubscriptionActive(user.colid);
+        if (!subscriptionActive && String(user.role || '').trim().toLowerCase() !== 'all') {
+            return res.status(200).json({
+                status: "Subscription inactive",
+                message: "This account has been deactivated. Please contact administrator."
+            });
         }
 
         // const { colid, name, email: userEmail, regno, role, user: username } = user;
@@ -154,6 +163,7 @@ exports.loginapi= async (req,res) => {
             token:token,
             googleemail:user.googleemail,
             designation:user.designation,
+            subscriptiondeactivated: subscriptionActive ? "No" : "Yes",
             twofa: authenticator.statusForUser(user)
         });
         
