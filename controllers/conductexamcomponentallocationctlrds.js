@@ -13,6 +13,9 @@ const WorkloadAssignment = require("../Models/workloadassignmentds");
 const User = require("../Models/user");
 const ConductExam = require("../Models/conductexamds");
 const InternalMarksEntryDates = require("../Models/conductexaminternalmarksentrydatesds");
+const InternalMarksApprovalWorkflow = require("../Models/internalmarksapprovalworkflowds");
+const InternalMarksApprovalRequest = require("../Models/internalmarksapprovalrequestds");
+const AcademicNewTask = require("../Models/academicnewtaskds");
 
 const text = (value) => String(value ?? "").trim();
 const number = (value, fallback = 0) => {
@@ -68,7 +71,7 @@ const institutionFor = async (colid) => {
 
 const courseFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode"];
 const allocationFields = [...courseFields, "examinername", "examineremail", "student", "regno", "examrollno", "examdate", "examslot", "componenttype", "scoretype", "assessmentgroup", "assessmentgrouptype", "assessmentcomponent", "status"];
-const marksFields = ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "semester", "course", "coursecode", "student", "regno", "examrollno", "componenttype", "scoretype", "assessmentgroup", "assessmentgrouptype", "assessmentcomponent", "passstatus", "examinername", "examineremail"];
+const marksFields = ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "semester", "course", "coursecode", "student", "regno", "examrollno", "componenttype", "scoretype", "assessmentgroup", "assessmentgrouptype", "assessmentcomponent", "attendance", "passstatus", "submissionstatus", "approvalstatus", "examinername", "examineremail"];
 
 const buildFilter = (source = {}, fields = []) => {
   const filter = {};
@@ -145,6 +148,7 @@ const marksPayload = (body = {}) => ({
   maxmarks: number(body.maxmarks),
   rawmarks: number(body.rawmarks ?? body.enteredmarks ?? body.marksentry ?? body.marksobtained),
   marksobtained: number(body.marksobtained),
+  attendance: /^absent$/i.test(text(body.attendance)) ? "Absent" : "Present",
   passstatus: text(body.passstatus),
   credits: number(body.credits),
   examinername: text(body.examinername),
@@ -173,6 +177,73 @@ const validateMarks = (item) => {
 };
 
 const markKey = (row) => [row.colid, row.academicyear, row.examcode, row.regulation, row.programcode, row.coursecode, row.regno, row.componenttype, row.assessmentgroup, row.assessmentcomponent].map(text).join("||");
+const approvalTargetFields = ["academicyear", "regulation", "programcode", "semester", "coursecode", "componenttype", "assessmentcomponent"];
+const lower = (value) => text(value).toLowerCase();
+const workflowPayload = (body = {}) => ({
+  colid: numberOrUndefined(body.colid),
+  academicyear: text(body.academicyear),
+  regulation: text(body.regulation),
+  program: text(body.program),
+  programcode: text(body.programcode),
+  semester: text(body.semester),
+  course: text(body.course),
+  coursecode: text(body.coursecode),
+  componenttype: text(body.componenttype),
+  assessmentcomponent: text(body.assessmentcomponent),
+  level: number(body.level, 1),
+  approvername: text(body.approvername || body.name),
+  approveremail: text(body.approveremail || body.email),
+  active: text(body.active) === "No" ? "No" : "Yes",
+  remarks: text(body.remarks),
+  user: text(body.user)
+});
+const workflowMatches = (row, target) => approvalTargetFields.every((field) => !text(row[field]) || lower(row[field]) === lower(target[field]));
+const findWorkflowRows = async (colid, target) => {
+  const rows = await InternalMarksApprovalWorkflow.find({ colid, active: "Yes" }).sort({ level: 1, approvername: 1 }).lean();
+  return rows.filter((row) => workflowMatches(row, target) && text(row.approveremail));
+};
+const taskForInternalMarksApproval = async (request, approver) => {
+  if (!request || !approver?.approveremail) return;
+  await AcademicNewTask.findOneAndUpdate(
+    {
+      colid: request.colid,
+      referenceModel: "internalmarksapprovalrequestds",
+      referenceId: String(request._id),
+      referenceLevel: String(approver.level)
+    },
+    {
+      colid: request.colid,
+      academicyear: request.academicyear,
+      faculty: approver.approvername || approver.approveremail,
+      facultyemail: approver.approveremail,
+      task: `Approve internal marks: ${request.coursecode || request.course} ${request.assessmentcomponent || ""}`.trim(),
+      category: "Internal marks approval",
+      criticality: "High",
+      pagelink: "/internal-marks-approval",
+      startdate: todayString(),
+      duedate: todayString(),
+      status: "New",
+      comments: `Request ${request.requestno} is pending at level ${approver.level}.`,
+      referenceModel: "internalmarksapprovalrequestds",
+      referenceId: String(request._id),
+      referenceLevel: String(approver.level),
+      user: request.submittedby || request.user || ""
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+};
+const completeInternalMarksApprovalTask = async (request, level, comments = "") => {
+  if (!request) return;
+  await AcademicNewTask.updateMany(
+    {
+      colid: request.colid,
+      referenceModel: "internalmarksapprovalrequestds",
+      referenceId: String(request._id),
+      referenceLevel: String(level)
+    },
+    { $set: { status: "Completed", comments: comments || `Request ${request.requestno} action completed.` } }
+  );
+};
 
 exports.options = async (req, res) => {
   try {
@@ -862,6 +933,7 @@ exports.internalMarksStudents = async (req, res) => {
           student: student.name,
           rawmarks: mark?.rawmarks ?? "",
           marksobtained: mark?.marksobtained ?? "",
+          attendance: mark?.attendance || "Present",
           passstatus: mark?.passstatus || "",
           markid: mark?._id || ""
         };
@@ -885,13 +957,14 @@ exports.saveInternalMarks = async (req, res) => {
     const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
     if (!rows.length) return res.status(400).json({ success: false, message: "No marks received" });
     const maxmarks = number(assessment.marks);
-    const weightage = number(assessment.weightage);
+    const weightage = number(assessment.weightage, 1);
     const passmarks = number(assessment.passmarks);
     const errors = [];
     const ops = [];
     rows.forEach((row, index) => {
       const regno = text(row.regno);
-      const rawMarks = numberOrUndefined(row.rawmarks ?? row.marksentry ?? row.enteredmarks ?? row.marksobtained);
+      const attendance = /^absent$/i.test(text(row.attendance)) ? "Absent" : "Present";
+      const rawMarks = attendance === "Absent" ? 0 : numberOrUndefined(row.rawmarks ?? row.marksentry ?? row.enteredmarks ?? row.marksobtained);
       if (!regno) {
         errors.push({ row: index + 1, message: "Reg no missing" });
         return;
@@ -926,6 +999,7 @@ exports.saveInternalMarks = async (req, res) => {
         maxmarks: weightedMaxMarks,
         rawmarks: rawMarks,
         marksobtained: finalMarks,
+        attendance,
         passstatus: finalMarks < weightedPassMarks ? "FAIL" : "PASS",
         credits: number(assessment.credits),
         examinername: text(req.body.examinername || req.body.username || req.body.name),
@@ -961,6 +1035,289 @@ exports.saveInternalMarks = async (req, res) => {
       saved = (result.upsertedCount || 0) + (result.modifiedCount || 0) + (result.matchedCount || 0);
     }
     res.json({ success: true, saved, errors });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.internalMarksApprovalOptions = async (req, res) => {
+  try {
+    const colid = numberOrUndefined(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const [marks, components, users] = await Promise.all([
+      ComponentMarks.find({ colid }).select("academicyear exam examcode regulation program programcode semester course coursecode componenttype assessmentcomponent approvalstatus").sort({ academicyear: -1 }).limit(10000).lean(),
+      AssessmentComponent.find({ colid }).select("academicyear regulation program programcode semester course coursecode componenttype assessmentcomponent").sort({ academicyear: -1 }).limit(10000).lean(),
+      User.find({ colid, role: { $not: /^Student$/i } }).select("name email role department designation").sort({ name: 1 }).limit(5000).lean()
+    ]);
+    const rows = [...marks, ...components];
+    res.json({
+      success: true,
+      users: users.map((row) => ({ name: row.name || row.email, email: row.email, role: row.role, department: row.department, designation: row.designation })).filter((row) => row.email),
+      components,
+      filters: Object.fromEntries(["academicyear", "examcode", "regulation", "program", "programcode", "semester", "course", "coursecode", "componenttype", "assessmentcomponent", "approvalstatus"].map((field) => [field, uniq(rows.map((row) => row[field]))]))
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.listInternalMarksApprovalWorkflow = async (req, res) => {
+  try {
+    const filter = buildFilter(req.query, approvalTargetFields);
+    if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (text(req.query.active)) filter.active = text(req.query.active);
+    const data = await InternalMarksApprovalWorkflow.find(filter).sort({ academicyear: -1, program: 1, semester: 1, course: 1, level: 1 }).lean();
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.saveInternalMarksApprovalWorkflow = async (req, res) => {
+  try {
+    const item = workflowPayload(req.body);
+    if (item.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!item.approveremail) return res.status(400).json({ success: false, message: "Approver email is required" });
+    if (item.level < 1) return res.status(400).json({ success: false, message: "Level must be 1 or higher" });
+    const data = req.body.id
+      ? await InternalMarksApprovalWorkflow.findOneAndUpdate({ _id: req.body.id, colid: item.colid }, item, { new: true, runValidators: true })
+      : await InternalMarksApprovalWorkflow.findOneAndUpdate(
+        {
+          colid: item.colid,
+          academicyear: item.academicyear,
+          regulation: item.regulation,
+          programcode: item.programcode,
+          semester: item.semester,
+          coursecode: item.coursecode,
+          componenttype: item.componenttype,
+          assessmentcomponent: item.assessmentcomponent,
+          level: item.level,
+          approveremail: item.approveremail
+        },
+        item,
+        { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+      );
+    res.json({ success: true, data });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.code === 11000 ? "This approver level already exists" : err.message });
+  }
+};
+
+exports.deleteInternalMarksApprovalWorkflow = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [req.body.id].filter(Boolean);
+    await InternalMarksApprovalWorkflow.deleteMany({ _id: { $in: ids }, colid: numberOrUndefined(req.body.colid) });
+    res.json({ success: true, message: "Deleted" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.bulkInternalMarksApprovalWorkflow = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body.rows || req.body.items) ? (req.body.rows || req.body.items) : [];
+    const errors = [];
+    let saved = 0;
+    for (let index = 0; index < rows.length; index += 1) {
+      const item = workflowPayload({ ...rows[index], colid: req.body.colid || rows[index].colid, user: req.body.user || rows[index].user });
+      if (item.colid === undefined || !item.approveremail || item.level < 1) {
+        errors.push({ row: index + 2, message: "colid, level and approver email are required" });
+        continue;
+      }
+      await InternalMarksApprovalWorkflow.findOneAndUpdate(
+        {
+          colid: item.colid,
+          academicyear: item.academicyear,
+          regulation: item.regulation,
+          programcode: item.programcode,
+          semester: item.semester,
+          coursecode: item.coursecode,
+          componenttype: item.componenttype,
+          assessmentcomponent: item.assessmentcomponent,
+          level: item.level,
+          approveremail: item.approveremail
+        },
+        item,
+        { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+      );
+      saved += 1;
+    }
+    res.json({ success: true, saved, errors });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.submitInternalMarksForApproval = async (req, res) => {
+  try {
+    const colid = numberOrUndefined(req.body.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const assessmentid = text(req.body.assessmentid);
+    const assessment = assessmentid && mongoose.Types.ObjectId.isValid(assessmentid)
+      ? await AssessmentComponent.findOne({ _id: assessmentid, colid }).lean()
+      : null;
+    if (!assessment) return res.status(404).json({ success: false, message: "Assessment component not found" });
+    const examcode = text(req.body.examcode);
+    if (!examcode) return res.status(400).json({ success: false, message: "Exam is required" });
+    const target = {
+      academicyear: text(assessment.academicyear),
+      exam: text(req.body.exam),
+      examcode,
+      regulation: text(assessment.regulation),
+      program: text(assessment.program),
+      programcode: text(assessment.programcode),
+      semester: text(assessment.semester),
+      course: text(assessment.course),
+      coursecode: text(assessment.coursecode),
+      componenttype: text(assessment.componenttype),
+      scoretype: text(assessment.scoretype),
+      assessmentgroup: text(assessment.assessmentgroup),
+      assessmentcomponent: text(assessment.assessmentcomponent)
+    };
+    const marks = await ComponentMarks.find({
+      colid,
+      academicyear: target.academicyear,
+      examcode: target.examcode,
+      regulation: target.regulation,
+      programcode: target.programcode,
+      semester: target.semester,
+      coursecode: target.coursecode,
+      componenttype: target.componenttype,
+      scoretype: target.scoretype,
+      assessmentgroup: target.assessmentgroup,
+      assessmentcomponent: target.assessmentcomponent
+    }).lean();
+    if (!marks.length) return res.status(400).json({ success: false, message: "No saved marks found for this selection" });
+    const alreadyApproved = marks.some((row) => text(row.approvalstatus) === "Approved");
+    if (alreadyApproved) return res.status(400).json({ success: false, message: "Approved marks cannot be resubmitted" });
+    const alreadyPending = marks.some((row) => text(row.approvalstatus) === "Pending" && text(row.approvalrequestid));
+    if (alreadyPending) return res.status(400).json({ success: false, message: "These marks are already pending for approval" });
+    const workflow = await findWorkflowRows(colid, target);
+    if (!workflow.length) return res.status(400).json({ success: false, message: "No active approval workflow found for this internal marks selection" });
+    const first = workflow[0];
+    const submitteddate = todayString();
+    const request = await InternalMarksApprovalRequest.create({
+      colid,
+      requestno: `IM-${colid}-${Date.now()}`,
+      ...target,
+      marksids: marks.map((row) => String(row._id)),
+      markscount: marks.length,
+      currentlevel: first.level,
+      currentapprovername: first.approvername,
+      currentapproveremail: first.approveremail,
+      approvalstatus: "Pending",
+      submittedby: text(req.body.user),
+      submittedbyname: text(req.body.username || req.body.name),
+      submitteddate,
+      history: [{ action: "Submitted", level: 0, user: text(req.body.user), name: text(req.body.username || req.body.name), date: submitteddate, comments: text(req.body.comments) }]
+    });
+    await ComponentMarks.updateMany(
+      { _id: { $in: request.marksids }, colid },
+      {
+        $set: {
+          submissionstatus: "Submitted",
+          submitteddate,
+          submittedby: text(req.body.user),
+          approvalstatus: "Pending",
+          approvalrequestid: String(request._id),
+          approvallevel: first.level
+        },
+        $push: { approvalhistory: { action: "Submitted", level: 0, user: text(req.body.user), date: submitteddate, requestno: request.requestno } }
+      }
+    );
+    await taskForInternalMarksApproval(request, first);
+    res.json({ success: true, data: request, requestno: request.requestno, markscount: marks.length, currentapproveremail: first.approveremail });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.listInternalMarksApprovalRequests = async (req, res) => {
+  try {
+    const filter = buildFilter(req.query, ["academicyear", "examcode", "regulation", "programcode", "semester", "coursecode", "componenttype", "assessmentcomponent", "approvalstatus"]);
+    if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (text(req.query.mode) === "pending") {
+      filter.approvalstatus = "Pending";
+      if (text(req.query.user)) filter.currentapproveremail = new RegExp(`^${escapeRegex(req.query.user)}$`, "i");
+    }
+    const requests = await InternalMarksApprovalRequest.find(filter).sort({ createdAt: -1 }).lean();
+    const ids = requests.flatMap((row) => row.marksids || []);
+    const marks = ids.length ? await ComponentMarks.find({ _id: { $in: ids }, colid: filter.colid }).sort({ student: 1, regno: 1 }).lean() : [];
+    const marksByRequest = new Map();
+    marks.forEach((mark) => {
+      const key = text(mark.approvalrequestid);
+      if (!marksByRequest.has(key)) marksByRequest.set(key, []);
+      marksByRequest.get(key).push(mark);
+    });
+    res.json({ success: true, data: requests.map((row) => ({ ...row, marks: marksByRequest.get(String(row._id)) || [] })) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.decideInternalMarksApproval = async (req, res) => {
+  try {
+    const colid = numberOrUndefined(req.body.colid);
+    const id = text(req.body.id);
+    const action = /^reject/i.test(text(req.body.action)) ? "Rejected" : "Approved";
+    if (colid === undefined || !id) return res.status(400).json({ success: false, message: "colid and request id are required" });
+    const request = await InternalMarksApprovalRequest.findOne({ _id: id, colid });
+    if (!request) return res.status(404).json({ success: false, message: "Approval request not found" });
+    if (request.approvalstatus !== "Pending") return res.status(400).json({ success: false, message: `Request is already ${request.approvalstatus}` });
+    const role = lower(req.body.role);
+    const actingUser = text(req.body.user);
+    const privileged = ["all", "admin", "coe"].includes(role);
+    if (!privileged && lower(request.currentapproveremail) !== lower(actingUser)) {
+      return res.status(403).json({ success: false, message: "This request is not pending for the logged in user" });
+    }
+    const date = todayString();
+    const historyItem = { action, level: request.currentlevel, user: actingUser, name: text(req.body.username || req.body.name), date, comments: text(req.body.comments) };
+    await completeInternalMarksApprovalTask(request, request.currentlevel, `${action}: ${text(req.body.comments)}`);
+    if (action === "Rejected") {
+      request.approvalstatus = "Rejected";
+      request.comments = text(req.body.comments);
+      request.history.push(historyItem);
+      await request.save();
+      await ComponentMarks.updateMany(
+        { _id: { $in: request.marksids || [] }, colid },
+        {
+          $set: { approvalstatus: "Rejected", approvallevel: request.currentlevel },
+          $push: { approvalhistory: historyItem }
+        }
+      );
+      return res.json({ success: true, data: request, message: "Internal marks rejected" });
+    }
+    const target = request.toObject ? request.toObject() : request;
+    const workflow = await findWorkflowRows(colid, target);
+    const currentIndex = workflow.findIndex((row) => number(row.level) === number(request.currentlevel) && lower(row.approveremail) === lower(request.currentapproveremail));
+    const next = workflow[currentIndex + 1] || workflow.find((row) => number(row.level) > number(request.currentlevel));
+    request.history.push(historyItem);
+    if (next) {
+      request.currentlevel = next.level;
+      request.currentapprovername = next.approvername;
+      request.currentapproveremail = next.approveremail;
+      request.comments = text(req.body.comments);
+      await request.save();
+      await ComponentMarks.updateMany(
+        { _id: { $in: request.marksids || [] }, colid },
+        { $set: { approvalstatus: "Pending", approvallevel: next.level }, $push: { approvalhistory: historyItem } }
+      );
+      await taskForInternalMarksApproval(request, next);
+      return res.json({ success: true, data: request, message: `Approved and forwarded to level ${next.level}` });
+    }
+    request.approvalstatus = "Approved";
+    request.approvedby = actingUser;
+    request.approveddate = date;
+    request.comments = text(req.body.comments);
+    await request.save();
+    await ComponentMarks.updateMany(
+      { _id: { $in: request.marksids || [] }, colid },
+      {
+        $set: { approvalstatus: "Approved", approvedby: actingUser, approveddate: date, approvallevel: request.currentlevel },
+        $push: { approvalhistory: historyItem }
+      }
+    );
+    res.json({ success: true, data: request, message: "Internal marks finally approved" });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

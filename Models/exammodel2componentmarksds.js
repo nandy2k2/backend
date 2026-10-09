@@ -22,13 +22,20 @@ const examModel2ComponentMarksSchema = new mongoose.Schema({
   maxmarks: { type: Number, default: 0 },
   rawmarks: { type: Number, default: 0 },
   marksobtained: { type: Number, default: 0 },
+  attendance: { type: String, enum: ["Present", "Absent", ""], trim: true, default: "Present" },
   passstatus: { type: String, enum: ["PASS", "FAIL", ""], trim: true, default: "" },
   credits: { type: Number, default: 0 },
   examinername: { type: String, trim: true, default: "" },
   examineremail: { type: String, trim: true, default: "" },
   submissionstatus: { type: String, enum: ["Draft", "Submitted"], trim: true, default: "Draft" },
+  approvalstatus: { type: String, enum: ["Draft", "Pending", "Approved", "Rejected", ""], trim: true, default: "Draft" },
+  approvalrequestid: { type: String, trim: true, default: "" },
+  approvallevel: { type: Number, default: 0 },
   submitteddate: { type: String, trim: true, default: "" },
   submittedby: { type: String, trim: true, default: "" },
+  approveddate: { type: String, trim: true, default: "" },
+  approvedby: { type: String, trim: true, default: "" },
+  approvalhistory: { type: Array, default: [] },
   user: { type: String, trim: true, default: "" }
 }, { timestamps: true });
 

@@ -12,6 +12,7 @@ const ProgramwiseMarksheetConfiguration = require("../Models/programwisemarkshee
 const Institution = require("../Models/insdetails");
 const BlockchainLedger = require("../Models/blockchainledgerds");
 const ComponentMarks = require("../Models/exammodel2componentmarksds");
+const ScoreTypeMarks = require("../Models/exammodel2scoretypemarksds");
 const ComponentAllocation = require("../Models/conductexamcomponentallocationds");
 const GradeConfiguration = require("../Models/gradeconfigurationds");
 const PassMarksConfiguration = require("../Models/passmarksconfigurationds");
@@ -78,6 +79,13 @@ const gradingTemplateFields = ["academicyear", "templatedescription", "status"];
 const gradingTemplateDetailFields = ["academicyear", "templatename", "templateid", "frommarks", "tomarks", "gradepoint", "grade"];
 const classConfigurationFields = ["academicyear", "program", "programcode", "fromsgpa", "tosgpa", "classassigned"];
 const passMarksFields = ["academicyear", "regulation", "program", "programcode", "course", "coursecode", "component", "maxmarks", "passmarks", "passpercentage", "status"];
+const scoreTypeMarksFields = [
+  "academicyear", "regulation", "program", "programcode", "semester", "student", "regno", "email",
+  "course", "coursecode", "credit", "type", "internalmax", "internalobtained", "internalpercentage",
+  "internalgrade", "internalstatus", "externalmax", "externalobtained", "externalpercentage",
+  "externalgrade", "externalstatus", "totalmax", "totalobtained", "totalpercentage", "totalgrade",
+  "totalstatus", "gpa"
+];
 
 const buildFilter = (source = {}) => {
   const filter = { colid: number(source.colid) };
@@ -239,7 +247,7 @@ exports.options = async (req, res) => {
       ExamVivaMarks.find({ colid }).select(vivaMarkFields.join(" ")).lean(),
       MPrograms.find({ colid }).select("year program programcode totalcredits").lean(),
       RegulationCourseMap.find({ colid }).select("academicyear regulation program programcode semester course coursecode credit").lean(),
-      ConductExam.find({ colid }).select("academicyear examname exam examcode").lean()
+      ConductExam.find({ colid }).select("academicyear regulation examname exam examcode program programcode semester").lean()
     ]);
     const examCourseRows = await ConductExamCourse.find({ colid }).select("academicyear regulation program programcode semester course coursecode exam examcode examdate").lean().catch(() => []);
     const combined = [...marks, ...vivaMarks, ...courses, ...examCourseRows];
@@ -258,6 +266,7 @@ exports.options = async (req, res) => {
         statuses: ["Pass", "Fail"],
         types: ["Regular", "Supplementary"]
       },
+      exams,
       programs,
       courses: [...courses, ...examCourseRows]
     });
@@ -577,6 +586,340 @@ exports.vivaBulk = async (req, res) => {
       }
     }
     res.json({ success: true, saved, errors });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const normalizeScoreTypeStatus = (value) => {
+  const lowered = text(value).toLowerCase();
+  if (lowered === "pass") return "Pass";
+  if (lowered === "fail") return "Fail";
+  return "";
+};
+
+const scoreTypePayloadFrom = (body = {}) => {
+  const internalmax = number(body.internalmax);
+  const internalobtained = number(body.internalobtained);
+  const externalmax = number(body.externalmax);
+  const externalobtained = number(body.externalobtained);
+  const totalmax = body.totalmax === "" || body.totalmax === undefined ? internalmax + externalmax : number(body.totalmax);
+  const totalobtained = body.totalobtained === "" || body.totalobtained === undefined ? internalobtained + externalobtained : number(body.totalobtained);
+  return {
+    colid: number(body.colid),
+    academicyear: text(body.academicyear),
+    regulation: text(body.regulation),
+    program: text(body.program),
+    programcode: text(body.programcode),
+    semester: text(body.semester),
+    student: text(body.student),
+    regno: text(body.regno),
+    email: text(body.email),
+    course: text(body.course),
+    coursecode: text(body.coursecode),
+    credit: number(body.credit),
+    type: text(body.type),
+    internalmax,
+    internalobtained,
+    internalpercentage: body.internalpercentage === "" || body.internalpercentage === undefined ? percent(internalobtained, internalmax) : number(body.internalpercentage),
+    internalgrade: text(body.internalgrade),
+    internalstatus: normalizeScoreTypeStatus(body.internalstatus),
+    externalmax,
+    externalobtained,
+    externalpercentage: body.externalpercentage === "" || body.externalpercentage === undefined ? percent(externalobtained, externalmax) : number(body.externalpercentage),
+    externalgrade: text(body.externalgrade),
+    externalstatus: normalizeScoreTypeStatus(body.externalstatus),
+    totalmax,
+    totalobtained,
+    totalpercentage: body.totalpercentage === "" || body.totalpercentage === undefined ? percent(totalobtained, totalmax) : number(body.totalpercentage),
+    totalgrade: text(body.totalgrade),
+    totalstatus: normalizeScoreTypeStatus(body.totalstatus),
+    gpa: number(body.gpa),
+    user: text(body.user)
+  };
+};
+
+const buildScoreTypeMarksFilter = (source = {}) => {
+  const filter = { colid: number(source.colid) };
+  scoreTypeMarksFields.forEach((field) => {
+    if ([
+      "credit", "internalmax", "internalobtained", "internalpercentage", "externalmax", "externalobtained",
+      "externalpercentage", "totalmax", "totalobtained", "totalpercentage", "gpa"
+    ].includes(field)) return;
+    if (text(source[field])) filter[field] = text(source[field]);
+  });
+  if (text(source.studentsearch)) {
+    const regex = new RegExp(escapeRegex(source.studentsearch), "i");
+    filter.$or = [{ student: regex }, { regno: regex }, { email: regex }];
+  }
+  return filter;
+};
+
+exports.scoreTypeMarksList = async (req, res) => {
+  try {
+    const filter = buildScoreTypeMarksFilter(req.query);
+    if (!filter.colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const data = await ScoreTypeMarks.find(filter).sort({ academicyear: -1, programcode: 1, semester: 1, regno: 1, coursecode: 1, type: 1 }).lean();
+    res.json({
+      success: true,
+      data,
+      options: Object.fromEntries(scoreTypeMarksFields.filter((field) => ![
+        "credit", "internalmax", "internalobtained", "internalpercentage", "externalmax", "externalobtained",
+        "externalpercentage", "totalmax", "totalobtained", "totalpercentage", "gpa"
+      ].includes(field)).map((field) => [field, uniqueSorted(data.map((row) => row[field]))]))
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.scoreTypeMarksSave = async (req, res) => {
+  try {
+    const payload = scoreTypePayloadFrom(req.body);
+    if (!payload.colid || !payload.academicyear || !payload.programcode || !payload.semester || !payload.coursecode || !payload.regno || !payload.type) {
+      return res.status(400).json({ success: false, message: "Academic year, program code, semester, course code, student regno and type are required" });
+    }
+    const id = req.body.id || req.body._id;
+    const data = id
+      ? await ScoreTypeMarks.findOneAndUpdate({ _id: id, colid: payload.colid }, payload, { new: true, runValidators: true })
+      : await ScoreTypeMarks.findOneAndUpdate(
+        {
+          colid: payload.colid,
+          academicyear: payload.academicyear,
+          regulation: payload.regulation,
+          programcode: payload.programcode,
+          semester: payload.semester,
+          coursecode: payload.coursecode,
+          regno: payload.regno,
+          type: payload.type
+        },
+        payload,
+        { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+      );
+    res.json({ success: true, data });
+  } catch (error) {
+    if (error.code === 11000) return res.status(400).json({ success: false, message: "Duplicate score type marks entry for this student, course and type" });
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.scoreTypeMarksDelete = async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (ids.length) {
+      const result = await ScoreTypeMarks.deleteMany({ _id: { $in: ids }, colid: number(req.body.colid) });
+      if (!result.deletedCount) return res.status(404).json({ success: false, message: "No score type marks entries found" });
+      return res.json({ success: true, deleted: result.deletedCount });
+    }
+    const data = await ScoreTypeMarks.findOneAndDelete({ _id: req.body.id || req.body._id, colid: number(req.body.colid) });
+    if (!data) return res.status(404).json({ success: false, message: "Score type marks entry not found" });
+    res.json({ success: true, message: "Deleted" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.scoreTypeMarksBulk = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    let saved = 0;
+    const errors = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      const payload = scoreTypePayloadFrom({ ...rows[index], colid, user: req.body.user || rows[index].user });
+      if (!payload.academicyear || !payload.programcode || !payload.semester || !payload.coursecode || !payload.regno || !payload.type) {
+        errors.push({ row: index + 2, message: "Required fields missing" });
+        continue;
+      }
+      try {
+        await ScoreTypeMarks.findOneAndUpdate(
+          {
+            colid,
+            academicyear: payload.academicyear,
+            regulation: payload.regulation,
+            programcode: payload.programcode,
+            semester: payload.semester,
+            coursecode: payload.coursecode,
+            regno: payload.regno,
+            type: payload.type
+          },
+          payload,
+          { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+        );
+        saved += 1;
+      } catch (error) {
+        errors.push({ row: index + 2, message: error.message });
+      }
+    }
+    res.json({ success: true, saved, errors });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.processScoreTypeTransfer = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const filter = { colid };
+    ["academicyear", "exam", "examcode", "regulation", "program", "programcode", "course", "coursecode", "scoretype", "student", "regno"].forEach((field) => {
+      if (text(req.body[field])) filter[field] = text(req.body[field]);
+    });
+    const ids = toArray(req.body.ids);
+    if (ids.length) filter._id = { $in: ids };
+    const selectedRegnos = toArray(req.body.regnos);
+    if (selectedRegnos.length) filter.regno = { $in: selectedRegnos };
+
+    const componentRows = await ComponentMarks.find(filter).lean();
+    if (!componentRows.length) return res.status(404).json({ success: false, message: "No component marks found for selected filters" });
+
+    const users = await User.find({ colid, regno: { $in: uniqueSorted(componentRows.map((row) => row.regno)) } }).select("name regno email").lean();
+    const userMap = new Map(users.map((row) => [text(row.regno), row]));
+    const requestedSemester = text(req.body.semester);
+    const grouped = new Map();
+
+    componentRows.forEach((row) => {
+      if (requestedSemester && text(row.semester) !== requestedSemester) return;
+      const type = text(row.componenttype) || "Theory";
+      const key = [row.colid, row.academicyear, row.regulation, row.programcode, row.semester, row.coursecode, row.regno, type].map(text).join("||");
+      if (!grouped.has(key)) {
+        const user = userMap.get(text(row.regno)) || {};
+        grouped.set(key, {
+          base: {
+            colid,
+            academicyear: text(row.academicyear),
+            regulation: text(row.regulation),
+            program: text(row.program),
+            programcode: text(row.programcode),
+            semester: text(row.semester),
+            student: text(row.student || user.name),
+            regno: text(row.regno),
+            email: text(row.email || user.email),
+            course: text(row.course),
+            coursecode: text(row.coursecode),
+            credit: number(row.credits || row.credit),
+            type,
+            user: text(req.body.user)
+          },
+          Internal: { max: 0, obtained: 0, statuses: [] },
+          External: { max: 0, obtained: 0, statuses: [] }
+        });
+      }
+      const group = grouped.get(key);
+      const bucketName = /^external$/i.test(text(row.scoretype)) ? "External" : "Internal";
+      group[bucketName].max += number(row.maxmarks);
+      group[bucketName].obtained += number(row.marksobtained);
+      if (text(row.passstatus)) group[bucketName].statuses.push(text(row.passstatus).toUpperCase());
+      if (number(row.credits) > number(group.base.credit)) group.base.credit = number(row.credits);
+    });
+
+    let transferred = 0;
+    const preview = [];
+    const errors = [];
+    for (const group of grouped.values()) {
+      try {
+        const internalstatus = group.Internal.max ? (group.Internal.statuses.includes("FAIL") ? "Fail" : "Pass") : "";
+        const externalstatus = group.External.max ? (group.External.statuses.includes("FAIL") ? "Fail" : "Pass") : "";
+        const totalmax = group.Internal.max + group.External.max;
+        const totalobtained = group.Internal.obtained + group.External.obtained;
+        const totalstatus = totalmax ? ([internalstatus, externalstatus].includes("Fail") ? "Fail" : "Pass") : "";
+        const payload = scoreTypePayloadFrom({
+          ...group.base,
+          internalmax: group.Internal.max,
+          internalobtained: group.Internal.obtained,
+          internalpercentage: percent(group.Internal.obtained, group.Internal.max),
+          internalstatus,
+          externalmax: group.External.max,
+          externalobtained: group.External.obtained,
+          externalpercentage: percent(group.External.obtained, group.External.max),
+          externalstatus,
+          totalmax,
+          totalobtained,
+          totalpercentage: percent(totalobtained, totalmax),
+          totalstatus
+        });
+        if (!payload.semester) throw new Error(`Semester not found for ${payload.regno} ${payload.coursecode}`);
+        await ScoreTypeMarks.findOneAndUpdate(
+          {
+            colid,
+            academicyear: payload.academicyear,
+            regulation: payload.regulation,
+            programcode: payload.programcode,
+            semester: payload.semester,
+            coursecode: payload.coursecode,
+            regno: payload.regno,
+            type: payload.type
+          },
+          payload,
+          { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
+        );
+        transferred += 1;
+        preview.push(payload);
+      } catch (error) {
+        errors.push({ key: group.base?.regno || "", message: error.message });
+      }
+    }
+    res.json({ success: true, transferred, checked: componentRows.length, errors, data: preview.slice(0, 500) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.processScoreTypeMarksGrade = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const templateid = text(req.body.templateid);
+    const target = text(req.body.target).toLowerCase();
+    if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!templateid) return res.status(400).json({ success: false, message: "Select grading template" });
+    if (!["internal", "external", "total"].includes(target)) return res.status(400).json({ success: false, message: "Select internal, external or total" });
+
+    const rules = await GradingTemplateDetail.find({ colid, templateid }).sort({ frommarks: -1 }).lean();
+    if (!rules.length) return res.status(404).json({ success: false, message: "No grading template details found for selected template" });
+
+    const filter = { colid };
+    const ids = toArray(req.body.ids);
+    if (ids.length) {
+      filter._id = { $in: ids };
+    } else {
+      scoreTypeMarksFields.forEach((field) => {
+        if ([
+          "credit", "internalmax", "internalobtained", "internalpercentage", "externalmax", "externalobtained",
+          "externalpercentage", "totalmax", "totalobtained", "totalpercentage", "gpa"
+        ].includes(field)) return;
+        if (text(req.body[field])) filter[field] = text(req.body[field]);
+      });
+    }
+
+    const marksRows = await ScoreTypeMarks.find(filter).lean();
+    if (!marksRows.length) return res.status(404).json({ success: false, message: "No score type marks found for selected filters" });
+
+    const updates = [];
+    const errors = [];
+    for (const row of marksRows) {
+      try {
+        const percentage = number(row[`${target}percentage`]);
+        const rule = rules.find((item) => percentage >= number(item.frommarks) && percentage <= number(item.tomarks));
+        if (!rule) {
+          errors.push({ key: row._id, message: `No grade range found for ${percentage}%` });
+          continue;
+        }
+        const grade = text(rule.grade);
+        const status = /^f$/i.test(grade) || /^fail$/i.test(grade) ? "Fail" : "Pass";
+        const setPayload = {
+          [`${target}grade`]: grade,
+          [`${target}status`]: status,
+          user: text(req.body.user)
+        };
+        if (target === "total") setPayload.gpa = number(rule.gradepoint);
+        await ScoreTypeMarks.updateOne({ _id: row._id, colid }, { $set: setPayload }, { runValidators: true });
+        updates.push({ ...row, ...setPayload });
+      } catch (error) {
+        errors.push({ key: row._id, message: error.message });
+      }
+    }
+    res.json({ success: true, updated: updates.length, errors, data: updates.slice(0, 500) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

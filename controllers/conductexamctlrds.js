@@ -24,6 +24,14 @@ const number = (value) => {
   return Number.isNaN(parsed) ? undefined : parsed;
 };
 const uniq = (values) => [...new Set(values.map((item) => text(item)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+const shortBarcodeAlphabet = "0123456789";
+const makeShortBarcode = (length = 5) => {
+  let code = "";
+  for (let i = 0; i < length; i += 1) {
+    code += shortBarcodeAlphabet[Math.floor(Math.random() * shortBarcodeAlphabet.length)];
+  }
+  return code;
+};
 const dateKey = (value) => {
   if (!value) return "";
   const parsed = new Date(value);
@@ -270,9 +278,11 @@ const examCoursePayload = (body = {}) => ({
   regulation: text(body.regulation),
   exam: text(body.exam || body.examname),
   examcode: text(body.examcode),
+  batch: text(body.batch),
   program: text(body.program),
   programcode: text(body.programcode),
   type: text(body.type),
+  papertype: ["Theory", "Practical", "Viva"].includes(text(body.papertype || body.paperType || body["Paper Type"])) ? text(body.papertype || body.paperType || body["Paper Type"]) : "",
   subject: text(body.subject),
   semester: text(body.semester),
   course: text(body.course),
@@ -317,6 +327,8 @@ const rollPayload = (body = {}) => ({
   examslot: text(body.examslot),
   campus: text(body.campus),
   building: text(body.building),
+  blockno: text(body.blockno || body.blockNo || body["Block No"]),
+  shortbarcode: text(body.shortbarcode || body.shortBarcode || body["Short Barcode"]).toUpperCase() || undefined,
   examroom: text(body.examroom),
   seatno: text(body.seatno),
   examseatno: text(body.examseatno),
@@ -409,7 +421,7 @@ const validateCoordinator = (payload) => {
   return "";
 };
 
-const rollListFilterFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "student", "regno", "email", "phone", "section", "examsection", "applied", "admitcardeligible", "attended", "attendance", "fees", "disciplinary", "atkt", "examdate", "examslot", "campus", "building", "examroom", "seatno", "examseatno"];
+const rollListFilterFields = ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "student", "regno", "email", "phone", "section", "examsection", "applied", "admitcardeligible", "attended", "attendance", "fees", "disciplinary", "atkt", "examdate", "examslot", "campus", "building", "blockno", "shortbarcode", "examroom", "seatno", "examseatno"];
 const defaultRollListComponents = ["Section-A", "Section-B", "Pr"];
 
 const normalizeExamSection = (value) => {
@@ -1813,6 +1825,61 @@ exports.deleteExamRollsBulk = async (req, res) => {
     const result = await ConductExamRoll.deleteMany({ colid, _id: { $in: ids } });
     res.json({ success: true, deleted: result.deletedCount || 0, message: "Deleted" });
   } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.generateShortBarcodes = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    const overwrite = req.body.overwrite !== false;
+    const barcodeLength = Number(req.body.length) === 8 ? 8 : 5;
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one exam roll entry" });
+
+    const rows = await ConductExamRoll.find({ colid, _id: { $in: ids } }).select("_id shortbarcode").lean();
+    if (!rows.length) return res.status(404).json({ success: false, message: "No matching exam roll rows found" });
+
+    const existingRows = await ConductExamRoll.find({
+      colid,
+      shortbarcode: { $exists: true, $nin: ["", null] }
+    }).select("shortbarcode").lean();
+    const used = new Set(existingRows.map((row) => text(row.shortbarcode).toUpperCase()).filter(Boolean));
+    const ops = [];
+    const assigned = [];
+
+    for (const row of rows) {
+      const current = text(row.shortbarcode).toUpperCase();
+      if (current && !overwrite) {
+        assigned.push({ id: String(row._id), shortbarcode: current });
+        continue;
+      }
+      if (current) used.delete(current);
+      let code = "";
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const candidate = makeShortBarcode(barcodeLength);
+        if (!used.has(candidate)) {
+          code = candidate;
+          used.add(candidate);
+          break;
+        }
+      }
+      if (!code) throw new Error("Unable to generate unique short barcode. Please try again.");
+      ops.push({
+        updateOne: {
+          filter: { _id: row._id, colid },
+          update: { $set: { shortbarcode: code, user: text(req.body.user) } }
+        }
+      });
+      assigned.push({ id: String(row._id), shortbarcode: code });
+    }
+
+    if (ops.length) await ConductExamRoll.bulkWrite(ops, { ordered: false });
+    const data = await ConductExamRoll.find({ colid, _id: { $in: ids } }).sort({ program: 1, semester: 1, course: 1, regno: 1 }).lean();
+    res.json({ success: true, updated: ops.length, assigned, data });
+  } catch (err) {
+    if (err.code === 11000) return res.status(400).json({ success: false, message: "Short barcode collision detected. Please try again." });
     res.status(500).json({ success: false, message: err.message });
   }
 };

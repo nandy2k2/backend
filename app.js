@@ -1048,6 +1048,14 @@ app.post('/api/v2/internal-marks-entry/dates', conductExamComponentAllocationCon
 app.post('/api/v2/internal-marks-entry/dates-delete', conductExamComponentAllocationController.deleteInternalMarksEntryDate);
 app.post('/api/v2/internal-marks-entry/dates-bulk', conductExamComponentAllocationController.bulkInternalMarksEntryDates);
 app.get('/api/v2/internal-marks-entry/dates-check', conductExamComponentAllocationController.checkInternalMarksEntryDate);
+app.get('/api/v2/internal-marks-approval/options', conductExamComponentAllocationController.internalMarksApprovalOptions);
+app.get('/api/v2/internal-marks-approval/workflow', conductExamComponentAllocationController.listInternalMarksApprovalWorkflow);
+app.post('/api/v2/internal-marks-approval/workflow', conductExamComponentAllocationController.saveInternalMarksApprovalWorkflow);
+app.post('/api/v2/internal-marks-approval/workflow-delete', conductExamComponentAllocationController.deleteInternalMarksApprovalWorkflow);
+app.post('/api/v2/internal-marks-approval/workflow-bulk', conductExamComponentAllocationController.bulkInternalMarksApprovalWorkflow);
+app.post('/api/v2/internal-marks-approval/submit', conductExamComponentAllocationController.submitInternalMarksForApproval);
+app.get('/api/v2/internal-marks-approval/requests', conductExamComponentAllocationController.listInternalMarksApprovalRequests);
+app.post('/api/v2/internal-marks-approval/decision', conductExamComponentAllocationController.decideInternalMarksApproval);
 app.get('/api/v2/examination-model2/component-online-exams', conductExamComponentAllocationController.onlineExamSources);
 app.get('/api/v2/examination-model2/component-online-exam-marks', conductExamComponentAllocationController.onlineExamAttemptMarks);
 app.post('/api/v2/examination-model2/component-online-exam-transfer', conductExamComponentAllocationController.transferOnlineExamMarks);
@@ -1061,7 +1069,13 @@ app.get('/api/v2/examination-model2/viva-marks', examinationModel2Controller.viv
 app.post('/api/v2/examination-model2/viva-marks', examinationModel2Controller.vivaSave);
 app.post('/api/v2/examination-model2/viva-marks-delete', examinationModel2Controller.vivaDelete);
 app.post('/api/v2/examination-model2/viva-marks-bulk', examinationModel2Controller.vivaBulk);
+app.get('/api/v2/examination-model2/scoretype-marks', examinationModel2Controller.scoreTypeMarksList);
+app.post('/api/v2/examination-model2/scoretype-marks', examinationModel2Controller.scoreTypeMarksSave);
+app.post('/api/v2/examination-model2/scoretype-marks-delete', examinationModel2Controller.scoreTypeMarksDelete);
+app.post('/api/v2/examination-model2/scoretype-marks-bulk', examinationModel2Controller.scoreTypeMarksBulk);
+app.post('/api/v2/examination-model2/scoretype-marks-process-grade', examinationModel2Controller.processScoreTypeMarksGrade);
 app.post('/api/v2/examination-model2/interim-marks-transfer', examinationModel2Controller.processInterimMarksTransfer);
+app.post('/api/v2/examination-model2/scoretype-transfer', examinationModel2Controller.processScoreTypeTransfer);
 app.post('/api/v2/examination-model2/interim-component-scoretype-update', examinationModel2Controller.updateInterimComponentScoreType);
 app.get('/api/v2/examination-model2/passmarks-configurations', examinationModel2Controller.passMarksConfigurations);
 app.post('/api/v2/examination-model2/passmarks-configurations', examinationModel2Controller.savePassMarksConfiguration);
@@ -6204,6 +6218,7 @@ app.post("/api/v2/conductexam/examrolls-generate", conductexamctlrds.generateExa
 app.post("/api/v2/conductexam/examrolls", conductexamctlrds.saveExamRoll);
 app.post("/api/v2/conductexam/examrolls-delete", conductexamctlrds.deleteExamRoll);
 app.post("/api/v2/conductexam/examrolls-bulk-delete", conductexamctlrds.deleteExamRollsBulk);
+app.post("/api/v2/conductexam/examrolls-shortbarcodes", conductexamctlrds.generateShortBarcodes);
 app.post("/api/v2/conductexam/examrolls-bulk", conductexamctlrds.bulkExamRolls);
 app.get("/api/v2/conductexam/examroll-rules/options", exameligibilityctlrds.getExamrollRuleOptions);
 app.get("/api/v2/conductexam/examroll-rules/rows", exameligibilityctlrds.getExamrollRuleRows);

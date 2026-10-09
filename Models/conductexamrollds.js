@@ -6,9 +6,11 @@ const conductExamRollSchema = new mongoose.Schema({
   regulation: { type: String, required: true, trim: true },
   exam: { type: String, required: true, trim: true },
   examcode: { type: String, required: true, trim: true },
+  batch: { type: String, trim: true },
   program: { type: String, trim: true },
   programcode: { type: String, required: true, trim: true },
   type: { type: String, enum: ["Major", "Minor", "IDC", "MDC", "AEC", "SEC", "VAC"], required: true },
+  papertype: { type: String, enum: ["Theory", "Practical", "Viva", ""], default: "" },
   subject: { type: String, trim: true },
   semester: { type: String, required: true, trim: true },
   course: { type: String, required: true, trim: true },
@@ -32,6 +34,8 @@ const conductExamRollSchema = new mongoose.Schema({
   examslot: { type: String, trim: true },
   campus: { type: String, trim: true },
   building: { type: String, trim: true },
+  blockno: { type: String, trim: true },
+  shortbarcode: { type: String, trim: true, uppercase: true },
   examroom: { type: String, trim: true },
   seatno: { type: String, trim: true },
   examseatno: { type: String, trim: true },
@@ -54,5 +58,9 @@ conductExamRollSchema.index({
   coursecode: 1,
   regno: 1
 }, { unique: true });
+conductExamRollSchema.index(
+  { colid: 1, shortbarcode: 1 },
+  { unique: true, partialFilterExpression: { shortbarcode: { $type: "string", $gt: "" } } }
+);
 
 module.exports = mongoose.model("conductexamrollds", conductExamRollSchema);
