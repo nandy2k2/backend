@@ -424,6 +424,21 @@ const atktMarksQuery = ({ colid, academicyear, regulation, program, programcode,
   return query;
 };
 
+const findAtktFailedMarks = async (params) => {
+  const query = atktMarksQuery(params);
+  const [vivaRows, markRows] = await Promise.all([
+    ExamVivaMarks.find(query).lean(),
+    ExamModel2Marks.find(query).lean()
+  ]);
+  const seen = new Set();
+  return [...vivaRows, ...markRows].filter((row) => {
+    const key = [row.regno, row.semester, row.coursecode].map(clean).join("||");
+    if (!clean(row.coursecode) || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 const atktModeFrom = (source = {}) => /^ATKT$/i.test(clean(source.mode || source.examtype));
 
 exports.studentContext = async (req, res) => {
@@ -447,7 +462,7 @@ exports.studentContext = async (req, res) => {
       status: { $ne: "Inactive" }
     }).sort({ formname: 1 }).lean();
 
-    const semester = clean(req.query.semester) || clean(student.semester);
+    const semester = clean(req.query.semester) || clean(exam?.semester) || clean(student.semester);
     const regulation = clean(req.query.regulation) || clean(student.regulation);
     const baseCourseQuery = {
       colid,
@@ -471,15 +486,10 @@ exports.studentContext = async (req, res) => {
       status: /^Approved$/i
     }).lean();
     const failed = atktMode
-      ? await ExamVivaMarks.find(atktMarksQuery({
+      ? await findAtktFailedMarks({
         colid,
-        academicyear,
-        regulation,
-        program: student.program,
-        programcode: student.programcode,
-        semester,
         regno
-      })).lean()
+      })
       : await ExamModel2Marks.find({
         colid,
         academicyear,
@@ -489,10 +499,17 @@ exports.studentContext = async (req, res) => {
         status: "Fail"
       }).lean();
     const fees = await feeMapFor({ colid, academicyear, examcode, programcode: student.programcode, semester });
+    const atktFeeRows = atktMode ? await ConductExamFee.find({ colid, academicyear, examcode, status: { $ne: "Inactive" } }).lean() : [];
+    const atktFeeMap = new Map();
+    atktFeeRows.forEach((row) => {
+      atktFeeMap.set([row.programcode, row.semester, row.coursecode].map(clean).join("||").toLowerCase(), row);
+      atktFeeMap.set(clean(row.coursecode).toLowerCase(), row);
+    });
     const enrich = (row, feeField, fallbackExamType) => {
-      const feeRow = fees[clean(row.coursecode).toLowerCase()] || {};
+      const atktFeeKey = [row.programcode, row.semester, row.coursecode].map(clean).join("||").toLowerCase();
+      const feeRow = atktMode ? (atktFeeMap.get(atktFeeKey) || atktFeeMap.get(clean(row.coursecode).toLowerCase()) || {}) : (fees[clean(row.coursecode).toLowerCase()] || {});
       return {
-        academicyear,
+        academicyear: atktMode ? clean(row.academicyear) || academicyear : academicyear,
         regulation: clean(row.regulation) || regulation,
         program: clean(row.program) || clean(student.program),
         programcode: clean(row.programcode) || clean(student.programcode),
@@ -515,8 +532,18 @@ exports.studentContext = async (req, res) => {
       .filter((row, index, arr) => row.coursecode && arr.findIndex((item) => item.coursecode === row.coursecode) === index)
       .sort((a, b) => sortText(a.coursecode, b.coursecode));
     const maxFee = await examFeeMaxFor({ colid, academicyear, regulation, programcode: student.programcode, examcode });
-    const examFeeLedger = await examFeeLedgerForStudent({ colid, academicyear, regno, programcode: student.programcode, semester });
-    res.json({ data: { student, exam, forms, regularCourses, supplementaryCourses, atktCourses: atktMode ? supplementaryCourses : [], examFeeLedger, maxFee } });
+    const examFeeLedger = await examFeeLedgerForStudent({ colid, academicyear, regno, programcode: atktMode ? "" : student.programcode, semester: atktMode ? "" : semester });
+    const atktDiagnostics = atktMode ? {
+      source: "exammodel2vivamarksds and examinationmodel2marksds",
+      matchedAcademicYear: academicyear,
+      matchedRegulation: "Any",
+      matchedProgramCode: "Any",
+      matchedSemester: "Any",
+      matchedRegno: regno,
+      failedRows: failed.length,
+      courses: supplementaryCourses.length
+    } : null;
+    res.json({ data: { student, exam, forms, regularCourses, supplementaryCourses, atktCourses: atktMode ? supplementaryCourses : [], examFeeLedger, maxFee, atktDiagnostics } });
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to load student exam form context" });
   }
@@ -857,50 +884,92 @@ exports.submitStudentExamForm = async (req, res) => {
     let ledgerCreated = 0;
     let examRollCreated = 0;
     let examFeeLedger = [];
+    const atktSubmission = /^ATKT$/i.test(examtype);
     const barredRows = await PreExamEligibility.find({
       colid,
       academicyear,
-      regulation,
       examcode,
-      programcode: clean(student.programcode),
-      semester,
       regno,
       coursecode: { $in: selectedCourses.map((row) => clean(row.coursecode)).filter(Boolean) },
       status: { $not: /^Inactive$/i }
     }).lean();
     const barredCourseCodes = new Set(barredRows.map((row) => clean(row.coursecode)));
     if (totalfee > 0) {
-      const feeid = `${submission._id}-${examtype}-ExamFeeTotal`;
-      await Ledgerstud.findOneAndUpdate(
-        { colid, feeid, regno },
-        {
-          name: clean(student.name),
-          user: clean(student.email),
-          regno,
-          student: clean(student.name),
-          feegroup: "Exam Fee",
-          feeitem: "Exam Fee",
-          feeid,
-          feecategory: "Exam Fee",
-          feetype: examtype,
-          academicyear,
-          regulation,
-          program: clean(student.program),
-          programcode: clean(student.programcode),
-          semester,
-          amount: totalfee,
-          paid: 0,
-          concession: 0,
-          balance: totalfee,
-          duedate: new Date(),
-          classdate: new Date(),
-          status: "Active",
-          colid
-        },
-        { upsert: true, runValidators: true, setDefaultsOnInsert: true }
-      );
-      ledgerCreated = 1;
-      examFeeLedger = await examFeeLedgerForStudent({ colid, academicyear, regno, programcode: student.programcode, semester });
+      if (atktSubmission) {
+        let remainingFee = totalfee;
+        for (const course of selectedCourses) {
+          if (remainingFee <= 0) break;
+          const coursecode = clean(course.coursecode);
+          if (!coursecode || barredCourseCodes.has(coursecode)) continue;
+          const courseFee = Math.min(num(course.fee), remainingFee);
+          if (courseFee <= 0) continue;
+          const feeid = `${submission._id}-${examtype}-${coursecode}`;
+          await Ledgerstud.findOneAndUpdate(
+            { colid, feeid, regno },
+            {
+              name: clean(student.name),
+              user: clean(student.email),
+              regno,
+              student: clean(student.name),
+              feegroup: "Exam Fee",
+              feeitem: `${clean(course.course) || coursecode} (${coursecode})`,
+              feeid,
+              feecategory: "Exam Fee",
+              feetype: examtype,
+              academicyear,
+              regulation: clean(course.regulation) || regulation,
+              program: clean(course.program) || clean(student.program),
+              programcode: clean(course.programcode) || clean(student.programcode),
+              semester: clean(course.semester) || semester,
+              course: clean(course.course),
+              coursecode,
+              amount: courseFee,
+              paid: 0,
+              concession: 0,
+              balance: courseFee,
+              duedate: new Date(),
+              classdate: new Date(),
+              status: "Active",
+              colid
+            },
+            { upsert: true, runValidators: true, setDefaultsOnInsert: true }
+          );
+          remainingFee -= courseFee;
+          ledgerCreated += 1;
+        }
+      } else {
+        const feeid = `${submission._id}-${examtype}-ExamFeeTotal`;
+        await Ledgerstud.findOneAndUpdate(
+          { colid, feeid, regno },
+          {
+            name: clean(student.name),
+            user: clean(student.email),
+            regno,
+            student: clean(student.name),
+            feegroup: "Exam Fee",
+            feeitem: "Exam Fee",
+            feeid,
+            feecategory: "Exam Fee",
+            feetype: examtype,
+            academicyear,
+            regulation,
+            program: clean(student.program),
+            programcode: clean(student.programcode),
+            semester,
+            amount: totalfee,
+            paid: 0,
+            concession: 0,
+            balance: totalfee,
+            duedate: new Date(),
+            classdate: new Date(),
+            status: "Active",
+            colid
+          },
+          { upsert: true, runValidators: true, setDefaultsOnInsert: true }
+        );
+        ledgerCreated = 1;
+      }
+      examFeeLedger = await examFeeLedgerForStudent({ colid, academicyear, regno, programcode: atktSubmission ? "" : student.programcode, semester: atktSubmission ? "" : semester });
     }
     for (const course of selectedCourses) {
       const coursecode = clean(course.coursecode);
@@ -910,21 +979,24 @@ exports.submitStudentExamForm = async (req, res) => {
         deficiencies.push(`${clean(course.course) || coursecode}: student is barred from exam form (${clean(barred?.note) || "pre exam eligibility"})`);
         continue;
       }
-      const examCourse = await ConductExamCourse.findOne({ colid, academicyear, examcode, programcode: student.programcode, semester, coursecode }).lean();
-      const atktSubmission = /^ATKT$/i.test(examtype);
+      const courseProgram = clean(course.program) || clean(student.program);
+      const courseProgramCode = clean(course.programcode) || clean(student.programcode);
+      const courseSemester = clean(course.semester) || semester;
+      const courseRegulation = clean(course.regulation) || regulation;
+      const examCourse = await ConductExamCourse.findOne({ colid, academicyear, examcode, programcode: courseProgramCode, semester: courseSemester, coursecode }).lean();
       const roll = await ConductExamRoll.findOneAndUpdate(
-        { colid, academicyear, regulation: clean(course.regulation) || clean(student.regulation), examcode, programcode: clean(student.programcode), semester, coursecode, regno },
+        { colid, academicyear, regulation: courseRegulation, examcode, programcode: courseProgramCode, semester: courseSemester, coursecode, regno },
         {
           colid,
           academicyear,
-          regulation: clean(course.regulation) || clean(student.regulation),
+          regulation: courseRegulation,
           exam,
           examcode,
-          program: clean(course.program) || clean(student.program),
-          programcode: clean(student.programcode),
+          program: courseProgram,
+          programcode: courseProgramCode,
           type: ["Major", "Minor"].includes(clean(course.type)) ? clean(course.type) : "Major",
           subject: clean(course.subject),
-          semester,
+          semester: courseSemester,
           course: clean(course.course),
           coursecode,
           student: clean(student.name),
