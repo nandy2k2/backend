@@ -392,7 +392,18 @@ const buildFilter = (source = {}, fields = []) => {
   const colid = number(source.colid);
   if (colid !== undefined) filter.colid = colid;
   fields.forEach((field) => {
-    if (source[field]) filter[field] = source[field];
+    const rawValue = source[field] ?? source[`${field}[]`];
+    if (Array.isArray(rawValue)) {
+      const values = rawValue.map(text).filter(Boolean);
+      if (values.length) filter[field] = { $in: values };
+      return;
+    }
+    if (typeof rawValue === "string" && rawValue.includes(",")) {
+      const values = rawValue.split(",").map(text).filter(Boolean);
+      if (values.length) filter[field] = { $in: values };
+      return;
+    }
+    if (rawValue) filter[field] = rawValue;
   });
   return filter;
 };
@@ -1436,7 +1447,7 @@ exports.getCourseMapOptions = async (req, res) => {
 
 exports.getExamRolls = async (req, res) => {
   try {
-    const filter = buildFilter(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "type", "subject", "semester", "course", "coursecode", "student", "regno", "email", "phone", "section", "examsection", "applied", "admitcardeligible", "attended", "attendance", "fees", "disciplinary", "noofbacklogs", "atkt", "remarks", "examdate", "examslot", "campus", "building", "examroom", "seatno", "examseatno"]);
+    const filter = buildFilter(req.query, ["academicyear", "regulation", "exam", "examcode", "batch", "program", "programcode", "type", "papertype", "subject", "semester", "course", "coursecode", "student", "regno", "email", "phone", "section", "examsection", "applied", "admitcardeligible", "attended", "attendance", "fees", "disciplinary", "noofbacklogs", "atkt", "remarks", "examdate", "examslot", "campus", "building", "blockno", "shortbarcode", "examroom", "seatno", "examseatno"]);
     if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const data = await ConductExamRoll.find(filter).sort({ program: 1, semester: 1, course: 1, regno: 1 }).lean();
     res.json({ success: true, data: data.map((row) => ({ ...row, examseatno: row.examseatno || String(row._id) })) });
@@ -1726,32 +1737,42 @@ exports.generateExamRolls = async (req, res) => {
       regulation: text(req.body.regulation),
       exam: text(req.body.exam),
       examcode: text(req.body.examcode),
-      program: text(req.body.program),
-      programcode: text(req.body.programcode),
-      type: text(req.body.type),
-      subject: text(req.body.subject),
-      semester: text(req.body.semester),
       user: text(req.body.user)
     };
-    if (base.colid === undefined || !base.academicyear || !base.regulation || !base.exam || !base.examcode || !base.programcode || !base.type || !base.semester) {
-      return res.status(400).json({ success: false, message: "Exam, regulation, program, type and semester are required" });
+    if (base.colid === undefined || !base.academicyear || !base.regulation || !base.exam || !base.examcode) {
+      return res.status(400).json({ success: false, message: "Exam and regulation are required" });
     }
-    const studentFilter = {
-      colid: base.colid,
-      academicyear: base.academicyear,
-      programcode: base.programcode,
-      semester: base.semester,
-      role: /^student$/i
-    };
-    if (base.type === "Major") studentFilter.Major = base.subject;
-    if (base.type === "Minor") studentFilter.Minor = base.subject;
-    const students = await User.find(studentFilter).select("name regno email phone section program programcode").lean();
     let saved = 0;
+    let studentCount = 0;
     const errors = [];
     for (const course of selectedCourses) {
+      const courseScope = {
+        program: text(course.program || req.body.program),
+        programcode: text(course.programcode || req.body.programcode),
+        type: text(course.type || req.body.type),
+        subject: text(course.subject || req.body.subject),
+        semester: text(course.semester || req.body.semester),
+        regulation: text(course.regulation || base.regulation)
+      };
+      if (!courseScope.programcode || !courseScope.type || !courseScope.semester || !text(course.coursecode)) {
+        errors.push({ coursecode: course.coursecode, message: "Program, type, semester and course code are required for selected course" });
+        continue;
+      }
+      const studentFilter = {
+        colid: base.colid,
+        academicyear: base.academicyear,
+        programcode: courseScope.programcode,
+        semester: courseScope.semester,
+        role: /^student$/i
+      };
+      if (courseScope.type === "Major") studentFilter.Major = courseScope.subject;
+      if (courseScope.type === "Minor") studentFilter.Minor = courseScope.subject;
+      const students = await User.find(studentFilter).select("name regno email phone section program programcode").lean();
+      studentCount += students.length;
       for (const student of students) {
         const payload = rollPayload({
           ...base,
+          ...courseScope,
           course: course.course,
           coursecode: course.coursecode,
           examdate: course.examdate,
@@ -1761,7 +1782,7 @@ exports.generateExamRolls = async (req, res) => {
           email: student.email,
           phone: student.phone,
           section: student.section,
-          program: base.program || student.program,
+          program: courseScope.program || student.program,
           applied: "Yes",
           admitcardeligible: "Yes",
           attended: "No"
@@ -1782,7 +1803,7 @@ exports.generateExamRolls = async (req, res) => {
         saved += 1;
       }
     }
-    res.json({ success: true, saved, studentCount: students.length, errors });
+    res.json({ success: true, saved, studentCount, errors });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
