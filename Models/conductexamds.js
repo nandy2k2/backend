@@ -14,6 +14,7 @@ const conductExamSchema = new mongoose.Schema({
   semester: { type: String, trim: true },
   session: { type: String, enum: ["Odd", "Even"], required: true },
   type: { type: String, enum: ["Regular", "Supplementary"], required: true },
+  formactive: { type: String, enum: ["Yes", "No"], default: "No", trim: true },
   user: { type: String, trim: true }
 }, { timestamps: true });
 

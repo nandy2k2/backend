@@ -269,6 +269,7 @@ const examPayload = (body = {}) => ({
   semester: text(body.semester),
   session: text(body.session),
   type: text(body.type),
+  formactive: text(body.formactive) || "No",
   user: text(body.user)
 });
 
@@ -357,6 +358,7 @@ const validateExam = (p) => {
   if (!p.examcode) return "Exam code is required";
   if (!["Odd", "Even"].includes(p.session)) return "Session is required";
   if (!["Regular", "Supplementary"].includes(p.type)) return "Exam type is required";
+  if (!["Yes", "No"].includes(p.formactive)) return "Form active must be Yes or No";
   return "";
 };
 
@@ -515,7 +517,7 @@ const pickSeatCandidate = (pool, previousCourse) => {
 
 exports.getExams = async (req, res) => {
   try {
-    const filter = buildFilter(req.query, ["academicyear", "examname", "examcode", "program", "programcode", "faculty", "institution", "department", "semester", "session", "type"]);
+    const filter = buildFilter(req.query, ["academicyear", "examname", "examcode", "program", "programcode", "faculty", "institution", "department", "semester", "session", "type", "formactive"]);
     if (filter.colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const data = await ConductExam.find(filter).sort({ academicyear: -1, examname: 1 }).lean();
     res.json({ success: true, data });
