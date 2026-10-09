@@ -7,6 +7,12 @@ const billingSubscription = require('./billingmodulectlrds');
 
 const clean = (value) => String(value ?? '').trim();
 const normEmail = (value) => clean(value).toLowerCase();
+const dateAfterDays = (days) => new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+const isPastLoginDate = (value) => {
+  if (!value) return false;
+  const date = new Date(value);
+  return !Number.isNaN(date.getTime()) && date.getTime() < Date.now();
+};
 
 const verifyGoogleCredential = (credential) => new Promise((resolve, reject) => {
   const token = encodeURIComponent(clean(credential));
@@ -35,7 +41,7 @@ const tokenForUser = (user) => jwt.sign(
   { expiresIn: process.env.JWT_EXPIRES_IN || '30d' }
 );
 
-const loginResponse = (user, subscriptionActive = true) => ({
+const loginResponse = (user, subscriptionActive = true, loginExpired = false) => ({
   status: 'Success',
   colid: user.colid,
   name: user.name,
@@ -53,7 +59,9 @@ const loginResponse = (user, subscriptionActive = true) => ({
   designation: user.designation,
   statuslog: user.status,
   token: tokenForUser(user),
-  subscriptiondeactivated: subscriptionActive ? 'No' : 'Yes',
+  subscriptiondeactivated: subscriptionActive && !loginExpired ? 'No' : 'Yes',
+  loginexpired: loginExpired ? 'Yes' : 'No',
+  enforceLastLoginExpiry: true,
   twofa: authenticator.statusForUser(user)
 });
 
@@ -73,11 +81,16 @@ exports.login = async (req, res) => {
       user.googleemail = googleemail;
       await user.save();
     }
+    const loginExpired = isPastLoginDate(user.lastlogin);
+    const isAllRole = clean(user.role).toLowerCase() === 'all';
+    if (loginExpired && !isAllRole) {
+      return res.status(403).json({ status: 'Login expired', message: 'Login is expired. Please contact administrator.' });
+    }
     const subscriptionActive = await billingSubscription.isSubscriptionActive(user.colid);
-    if (!subscriptionActive && clean(user.role).toLowerCase() !== 'all') {
+    if (!subscriptionActive && !isAllRole) {
       return res.status(403).json({ status: 'Subscription inactive', message: 'This account has been deactivated. Please contact administrator.' });
     }
-    res.json(loginResponse(user, subscriptionActive));
+    res.json(loginResponse(user, subscriptionActive, loginExpired));
   } catch (err) {
     res.status(401).json({ status: 'Error', message: err.message });
   }
@@ -187,7 +200,7 @@ exports.registerWithGoogle = async (req, res) => {
         colid: Number(decoded.colid),
         authenticator: /^student$/i.test(clean(decoded.role)) ? 'No' : 'Yes',
         status: 1,
-        lastlogin: new Date(Date.now() + (365 * 24 * 60 * 60 * 1000))
+        lastlogin: dateAfterDays(3)
       });
     } else {
       user.googleemail = googleemail;

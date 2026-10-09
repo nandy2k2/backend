@@ -20,7 +20,8 @@ const BillingInvoiceSchema = new mongoose.Schema({
   paidaccount: String,
   refno: String,
   paymode: String,
-  remarks: String
+  remarks: String,
+  metadata: mongoose.Schema.Types.Mixed
 }, { timestamps: true });
 
 BillingInvoiceSchema.index({ colid: 1, status: 1, fromdate: -1 });

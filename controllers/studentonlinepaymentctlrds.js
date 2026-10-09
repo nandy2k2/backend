@@ -3,6 +3,7 @@ const MasterGateway = require("../Models/mastergatewayds");
 const StudentOnlinePayment = require("../Models/studentonlinepaymentds");
 const IciciPayment = require("../Models/icicipaymentds");
 const User = require("../Models/user");
+const CashfreeConfig = require("../Models/cashfreeconfigds");
 
 function text(value) {
   return String(value || "").trim();
@@ -113,7 +114,20 @@ exports.createStudentPaymentSession = async (req, res) => {
       return res.status(400).json({ success: false, message: "colid, regno, gateway and selected fee items are required" });
     }
 
-    const gateway = await MasterGateway.findOne({ _id: gatewayid, colid, status: "Active" }).lean();
+    let gateway = null;
+    if (gatewayid === "cashfree-client") {
+      const cashfreeConfig = await CashfreeConfig.findOne({ colid, configscope: "Client", isactive: true }).sort({ updatedAt: -1, createdAt: -1 }).lean();
+      if (cashfreeConfig) {
+        gateway = {
+          _id: "cashfree-client",
+          gatewayname: "Cashfree",
+          type: "Internal",
+          cashfreeconfigid: String(cashfreeConfig._id)
+        };
+      }
+    } else {
+      gateway = await MasterGateway.findOne({ _id: gatewayid, colid, status: "Active" }).lean();
+    }
     if (!gateway) return res.status(404).json({ success: false, message: "Active payment gateway not found" });
 
     const [ledgerRows, studentuser] = await Promise.all([

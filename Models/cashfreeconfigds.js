@@ -4,6 +4,7 @@ const cashfreeConfigSchema = new mongoose.Schema({
   colid: { type: Number, required: true, index: true },
   name: { type: String, trim: true, default: "" },
   user: { type: String, trim: true, default: "" },
+  configscope: { type: String, enum: ["Admin", "Client"], default: "Admin", index: true },
   appid: { type: String, required: true, trim: true },
   secretkey: { type: String, required: true, trim: true },
   environment: { type: String, enum: ["sandbox", "production"], default: "sandbox" },
@@ -14,6 +15,6 @@ const cashfreeConfigSchema = new mongoose.Schema({
   notes: { type: String, trim: true, default: "" }
 }, { timestamps: true });
 
-cashfreeConfigSchema.index({ colid: 1, isactive: 1 });
+cashfreeConfigSchema.index({ colid: 1, configscope: 1, isactive: 1 });
 
 module.exports = mongoose.models.cashfreeconfigds || mongoose.model("cashfreeconfigds", cashfreeConfigSchema);

@@ -23,6 +23,12 @@ const Assignsubmit=require('./../Models/assignsubmit');
 const Libbooks=require('./../Models/libbooks');
 const Libassign=require('./../Models/libassign');
 const Seminar=require('./../Models/seminar');
+
+const isPastLoginDate = (value) => {
+    if (!value) return false;
+    const date = new Date(value);
+    return !Number.isNaN(date.getTime()) && date.getTime() < Date.now();
+};
 const Projects=require('./../Models/projects');
 const Publication=require('./../Models/publications');
 const Patents=require('./../Models/patents');
@@ -132,8 +138,17 @@ exports.loginapi= async (req,res) => {
             return res.status(200).json({ message: "Incorrect password", status: "Incorrect password" });
         }
 
+        const loginExpired = isPastLoginDate(user.lastlogin);
+        const isAllRole = String(user.role || '').trim().toLowerCase() === 'all';
+        if (loginExpired && !isAllRole) {
+            return res.status(200).json({
+                status: "Login expired",
+                message: "Login is expired. Please contact administrator."
+            });
+        }
+
         const subscriptionActive = await billingSubscription.isSubscriptionActive(user.colid);
-        if (!subscriptionActive && String(user.role || '').trim().toLowerCase() !== 'all') {
+        if (!subscriptionActive && !isAllRole) {
             return res.status(200).json({
                 status: "Subscription inactive",
                 message: "This account has been deactivated. Please contact administrator."
@@ -163,7 +178,9 @@ exports.loginapi= async (req,res) => {
             token:token,
             googleemail:user.googleemail,
             designation:user.designation,
-            subscriptiondeactivated: subscriptionActive ? "No" : "Yes",
+            subscriptiondeactivated: subscriptionActive && !loginExpired ? "No" : "Yes",
+            loginexpired: loginExpired ? "Yes" : "No",
+            enforceLastLoginExpiry: true,
             twofa: authenticator.statusForUser(user)
         });
         

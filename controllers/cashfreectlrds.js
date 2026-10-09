@@ -1,5 +1,10 @@
 const CashfreeConfig = require("../Models/cashfreeconfigds");
 const CashfreePaymentLog = require("../Models/cashfreepaymentlogds");
+const IciciPayment = require("../Models/icicipaymentds");
+const BillingInvoice = require("../Models/billinginvoiceds");
+const BillingSubscription = require("../Models/billingsubscriptionds");
+const studentOnlinePaymentController = require("./studentonlinepaymentctlrds");
+const billingModuleController = require("./billingmodulectlrds");
 
 const text = (value) => String(value ?? "").trim();
 const num = (value) => {
@@ -11,6 +16,8 @@ const bool = (value) => {
   return ["yes", "true", "active", "1"].includes(text(value).toLowerCase());
 };
 const esc = (value) => text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const configScope = (value) => /^client$/i.test(text(value)) ? "Client" : "Admin";
+const successStatus = (value) => /^(paid|success|successful)$/i.test(text(value));
 
 const cashfreeBaseUrl = (environment) => /^prod|production$/i.test(environment)
   ? "https://api.cashfree.com/pg"
@@ -20,6 +27,7 @@ const configPayload = (body = {}) => ({
   colid: num(body.colid),
   name: text(body.name),
   user: text(body.user),
+  configscope: configScope(body.configscope || body.scope),
   appid: text(body.appid || body.appId || body.clientid),
   secretkey: text(body.secretkey || body.secretKey || body.clientsecret),
   environment: /^prod|production$/i.test(body.environment) ? "production" : "sandbox",
@@ -33,15 +41,115 @@ const configPayload = (body = {}) => ({
 const queryFrom = (source = {}) => {
   const query = { colid: num(source.colid) };
   if (text(source.environment)) query.environment = /^prod|production$/i.test(source.environment) ? "production" : "sandbox";
+  if (text(source.configscope || source.scope)) {
+    const scope = configScope(source.configscope || source.scope);
+    if (scope === "Admin") query.$or = [{ configscope: "Admin" }, { configscope: { $exists: false } }, { configscope: "" }];
+    else query.configscope = scope;
+  }
   if (text(source.isactive)) query.isactive = bool(source.isactive);
   if (text(source.appid)) query.appid = { $regex: esc(source.appid), $options: "i" };
   if (text(source.name)) query.name = { $regex: esc(source.name), $options: "i" };
   return query;
 };
 
-const activeConfig = async (colid, id = "") => {
-  const query = id ? { _id: id, colid: num(colid) } : { colid: num(colid), isactive: true };
+const activeConfig = async (colid, id = "", scope = "Admin") => {
+  const normalizedScope = configScope(scope);
+  const query = id
+    ? { _id: id, colid: num(colid) }
+    : normalizedScope === "Admin"
+      ? { colid: num(colid), isactive: true, $or: [{ configscope: "Admin" }, { configscope: { $exists: false } }, { configscope: "" }] }
+      : { colid: num(colid), configscope: normalizedScope, isactive: true };
   return CashfreeConfig.findOne(query).sort({ updatedAt: -1, createdAt: -1 }).lean();
+};
+
+const studentPaymentFields = (body = {}, fallback = {}) => {
+  const studentonlinepaymentid = text(body.studentonlinepaymentid || body.onlinepaymentid || body.sourceid || fallback.studentonlinepaymentid);
+  return {
+    source: text(body.source || fallback.source),
+    sourceid: text(body.sourceid || studentonlinepaymentid || fallback.sourceid),
+    studentonlinepaymentid,
+    regno: text(body.regno || fallback.regno),
+    student: text(body.student || body.name || fallback.student || fallback.customername),
+    feeitem: text(body.feeitem || body.paymentfor || fallback.feeitem || fallback.description),
+    type: text(body.type || fallback.type) || "Student",
+    frontendcallbackurl: text(body.frontendcallbackurl || fallback.frontendcallbackurl)
+  };
+};
+
+const upsertIciciMirror = async ({ colid, orderid, amount, config, body = {}, status = "INITIATED", paidamount = 0, paiddate = null, gatewayresponse = {} }) => {
+  const fields = studentPaymentFields(body);
+  if (fields.source !== "StudentFeesOnline" && !fields.studentonlinepaymentid) return null;
+  const refno = text(orderid);
+  if (!refno || !fields.regno) return null;
+  return IciciPayment.findOneAndUpdate(
+    { colid: num(colid), refno },
+    {
+      name: text(body.name),
+      user: text(body.user),
+      colid: num(colid),
+      student: fields.student || fields.regno,
+      regno: fields.regno,
+      feeitem: fields.feeitem || "Student online payment",
+      amount: num(amount),
+      type: fields.type,
+      paymentfor: fields.feeitem || "Student online payment",
+      source: fields.source || "StudentFeesOnline",
+      sourceid: fields.sourceid,
+      studentonlinepaymentid: fields.studentonlinepaymentid,
+      gatewayconfigid: String(config?._id || body.configid || ""),
+      initiationdate: new Date(),
+      paiddate,
+      paidamount,
+      refno,
+      merchantTxnNo: refno,
+      txnid: text(gatewayresponse?.cf_order_id || gatewayresponse?.order_id || ""),
+      description: text(body.description) || "Cashfree student fee payment",
+      email: text(body.customeremail || body.email),
+      phone: text(body.customerphone || body.phone),
+      status,
+      frontendcallbackurl: fields.frontendcallbackurl,
+      gatewayresponse: {
+        provider: "Cashfree",
+        configscope: configScope(body.configscope || body.scope),
+        gatewayResponse: gatewayresponse
+      }
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+};
+
+const activateBillingForPaidInvoice = async (log = {}, verifyResponse = {}) => {
+  if (text(log.source) !== "BillingInvoice" || !text(log.sourceid)) return null;
+  const colid = num(log.colid);
+  const paidamount = num(verifyResponse.order_amount || log.amount);
+  const paiddate = new Date();
+  const invoice = await BillingInvoice.findOneAndUpdate(
+    { _id: text(log.sourceid), colid },
+    {
+      status: "Paid",
+      paidamount,
+      paiddate,
+      paymode: "Cashfree",
+      refno: text(log.orderid),
+      remarks: text(log.description) || "Paid through Cashfree"
+    },
+    { new: true }
+  );
+  if (invoice) {
+    await BillingSubscription.findOneAndUpdate(
+      { colid },
+      {
+        colid,
+        active: "Yes",
+        reason: `Activated after Cashfree payment ${text(log.orderid)}`,
+        user: text(log.user),
+        username: text(log.name)
+      },
+      { upsert: true, new: true }
+    );
+    await billingModuleController.extendUserLastLoginForInvoice(invoice);
+  }
+  return invoice;
 };
 
 const cashfreeFetch = async (config, path, options = {}) => {
@@ -106,12 +214,13 @@ exports.createOrder = async (req, res) => {
     const amount = num(req.body.amount);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
     if (amount <= 0) return res.status(400).json({ success: false, message: "Enter a valid amount" });
-    const config = await activeConfig(colid, text(req.body.configid));
+    const scope = configScope(req.body.configscope || req.body.scope);
+    const config = await activeConfig(colid, text(req.body.configid), scope);
     if (!config) return res.status(404).json({ success: false, message: "Active Cashfree configuration not found" });
 
     const orderid = text(req.body.orderid) || `CF-${colid}-${Date.now()}`;
     const frontendReturnUrl = text(req.body.returnurl || req.body.frontendreturnurl);
-    const returnUrl = text(config.returnurl) || frontendReturnUrl || `${text(req.protocol)}://${text(req.get("host"))}/billing-cashfree-pay?order_id={order_id}`;
+    const returnUrl = frontendReturnUrl || text(config.returnurl) || `${text(req.protocol)}://${text(req.get("host"))}/billing-cashfree-pay?order_id={order_id}`;
     const notifyUrl = text(config.notifyurl);
     const customername = text(req.body.customername || req.body.name || req.body.username || req.body.user) || "Customer";
     const customeremail = text(req.body.customeremail || req.body.email || req.body.user) || `customer-${orderid}@example.com`;
@@ -152,6 +261,10 @@ exports.createOrder = async (req, res) => {
         customerphone,
         description: text(req.body.description) || "Billing payment",
         configid: String(config._id),
+        configscope: scope,
+        ...studentPaymentFields(req.body, { customername, description: text(req.body.description) || "Billing payment" }),
+        source: text(req.body.source),
+        sourceid: text(req.body.sourceid),
         environment: config.environment,
         paymentlink: text(gatewayResponse.payment_link),
         requestpayload: payload,
@@ -161,6 +274,15 @@ exports.createOrder = async (req, res) => {
       },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
+    await upsertIciciMirror({
+      colid,
+      orderid,
+      amount,
+      config,
+      body: req.body,
+      status: "INITIATED",
+      gatewayresponse: gatewayResponse
+    });
     res.json({ success: true, data: row, cashfree: gatewayResponse, mode: config.environment === "production" ? "production" : "sandbox" });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message, details: error.response || undefined });
@@ -174,11 +296,11 @@ exports.verifyOrder = async (req, res) => {
     if (!colid || !orderid) return res.status(400).json({ success: false, message: "colid and order id are required" });
     const log = await CashfreePaymentLog.findOne({ colid, orderid }).lean();
     if (!log) return res.status(404).json({ success: false, message: "Cashfree payment log not found" });
-    const config = await activeConfig(colid, log.configid);
+    const config = await activeConfig(colid, log.configid, log.configscope || "Admin");
     if (!config) return res.status(404).json({ success: false, message: "Cashfree configuration not found" });
     const verifyResponse = await cashfreeFetch(config, `/orders/${encodeURIComponent(orderid)}`, { method: "GET" });
     const status = text(verifyResponse.order_status || verifyResponse.status || log.status);
-    const paid = /^paid$/i.test(status);
+    const paid = successStatus(status);
     const data = await CashfreePaymentLog.findOneAndUpdate(
       { colid, orderid },
       {
@@ -191,6 +313,35 @@ exports.verifyOrder = async (req, res) => {
       },
       { new: true }
     );
+    const mirror = await upsertIciciMirror({
+      colid,
+      orderid,
+      amount: num(verifyResponse.order_amount || log.amount),
+      config,
+      body: {
+        ...log,
+        configscope: log.configscope || "Admin",
+        name: log.name,
+        user: log.user,
+        customeremail: log.customeremail,
+        customerphone: log.customerphone,
+        source: log.source,
+        sourceid: log.sourceid,
+        studentonlinepaymentid: log.studentonlinepaymentid,
+        regno: log.regno,
+        student: log.customername,
+        feeitem: log.feeitem,
+        description: log.description
+      },
+      status: paid ? "SUCCESS" : status || "PENDING",
+      paidamount: paid ? num(verifyResponse.order_amount || log.amount) : 0,
+      paiddate: paid ? new Date() : null,
+      gatewayresponse: verifyResponse
+    });
+    if (mirror && paid) {
+      await studentOnlinePaymentController.settleSuccessfulStudentOnlinePayment(mirror.toObject ? mirror.toObject() : mirror, verifyResponse);
+    }
+    if (paid) await activateBillingForPaidInvoice(data, verifyResponse);
     res.json({ success: true, data, cashfree: verifyResponse });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message, details: error.response || undefined });
@@ -205,9 +356,27 @@ exports.callback = async (req, res) => {
     const update = { callbackresponse: body };
     if (text(body.order_status || body.data?.order?.order_status)) {
       update.status = text(body.order_status || body.data?.order?.order_status);
-      update.paymentstatus = /^paid$/i.test(update.status) ? "Paid" : update.status;
+      update.paymentstatus = successStatus(update.status) ? "Paid" : update.status;
     }
-    if (orderid && colid) await CashfreePaymentLog.findOneAndUpdate({ colid, orderid }, update, { new: true });
+    if (orderid && colid) {
+      const log = await CashfreePaymentLog.findOneAndUpdate({ colid, orderid }, update, { new: true }).lean();
+      if (log && successStatus(update.status)) {
+        const config = await activeConfig(colid, log.configid, log.configscope || "Admin");
+        const mirror = await upsertIciciMirror({
+          colid,
+          orderid,
+          amount: log.amount,
+          config,
+          body: log,
+          status: "SUCCESS",
+          paidamount: log.amount,
+          paiddate: new Date(),
+          gatewayresponse: body
+        });
+        if (mirror) await studentOnlinePaymentController.settleSuccessfulStudentOnlinePayment(mirror.toObject ? mirror.toObject() : mirror, body);
+        await activateBillingForPaidInvoice(log, body);
+      }
+    }
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

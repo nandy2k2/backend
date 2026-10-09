@@ -78,8 +78,22 @@ function buildHandler(config) {
 }
 
 async function findIciciConfigForPayment(colid, body = {}) {
+  const candidates = await findIciciConfigCandidatesForPayment(colid, body);
+  return candidates[0] || null;
+}
+
+async function findIciciConfigCandidatesForPayment(colid, body = {}) {
   const program = text(body.program);
   const programcode = text(body.programcode);
+  const candidates = [];
+  const seen = new Set();
+  const addCandidate = (row) => {
+    if (!row) return;
+    const key = String(row._id || "");
+    if (key && seen.has(key)) return;
+    if (key) seen.add(key);
+    candidates.push(row);
+  };
   if (program && programcode) {
     const exactProgramAndCodeConfig = await IciciGateway.findOne({
       colid,
@@ -87,7 +101,7 @@ async function findIciciConfigForPayment(colid, body = {}) {
       program: exactRegex(program),
       programcode: exactRegex(programcode)
     }).sort({ updatedAt: -1 }).lean();
-    if (exactProgramAndCodeConfig) return exactProgramAndCodeConfig;
+    addCandidate(exactProgramAndCodeConfig);
   }
   if (programcode) {
     const programCodeConfig = await IciciGateway.findOne({
@@ -96,7 +110,7 @@ async function findIciciConfigForPayment(colid, body = {}) {
       programcode: exactRegex(programcode),
       ...(program ? { $or: [{ program: "" }, { program: { $exists: false } }, { program: null }] } : {})
     }).sort({ updatedAt: -1 }).lean();
-    if (programCodeConfig) return programCodeConfig;
+    addCandidate(programCodeConfig);
   }
   if (program) {
     const programConfig = await IciciGateway.findOne({
@@ -105,7 +119,7 @@ async function findIciciConfigForPayment(colid, body = {}) {
       program: exactRegex(program),
       $or: [{ programcode: "" }, { programcode: { $exists: false } }, { programcode: null }]
     }).sort({ updatedAt: -1 }).lean();
-    if (programConfig) return programConfig;
+    addCandidate(programConfig);
   }
   const defaultConfig = await IciciGateway.findOne({
     colid,
@@ -115,7 +129,8 @@ async function findIciciConfigForPayment(colid, body = {}) {
       { $or: [{ program: "" }, { program: { $exists: false } }, { program: null }] }
     ]
   }).sort({ updatedAt: -1 }).lean();
-  return defaultConfig;
+  addCandidate(defaultConfig);
+  return candidates;
 }
 
 function normalizeStatus(params = {}) {
@@ -167,10 +182,10 @@ exports.initiateIciciPayment = async (req, res) => {
       return res.status(400).json({ success: false, message: "Student, regno, fee item and amount are required" });
     }
 
-    const config = await findIciciConfigForPayment(colid, req.body);
-    if (!config) return res.status(404).json({ success: false, message: "Active ICICI configuration not found" });
+    const configs = await findIciciConfigCandidatesForPayment(colid, req.body);
+    if (!configs.length) return res.status(404).json({ success: false, message: "Active ICICI configuration not found" });
+    const initialConfig = configs[0];
 
-    const handler = buildHandler(config);
     const refno = `ICI_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     const merchantTxnNo = `ICI${Date.now()}${Math.floor(Math.random() * 1000)}`.slice(0, 20);
     const email = validEmail(req.body.email);
@@ -191,9 +206,9 @@ exports.initiateIciciPayment = async (req, res) => {
       source: text(req.body.source),
       sourceid: text(req.body.sourceid),
       studentonlinepaymentid: text(req.body.studentonlinepaymentid),
-      gatewayconfigid: String(config._id || ""),
-      gatewayprogram: text(config.program),
-      gatewayprogramcode: text(config.programcode),
+      gatewayconfigid: String(initialConfig._id || ""),
+      gatewayprogram: text(initialConfig.program),
+      gatewayprogramcode: text(initialConfig.programcode),
       refno,
       merchantTxnNo,
       txnid: merchantTxnNo,
@@ -204,29 +219,64 @@ exports.initiateIciciPayment = async (req, res) => {
       frontendcallbackurl: text(req.body.frontendcallbackurl || req.body.returnurl)
     });
 
-    const result = await handler.initiateSale({
-      merchantTxnNo,
-      amount: paidAmount,
-      returnURL: backendCallbackUrl,
-      customerEmailID: email,
-      customerMobileNo: phone,
-      customerName: text(req.body.student),
-      addlParam1: refno,
-      addlParam2: text(req.body.regno)
-    });
+    const attempts = [];
+    let config = initialConfig;
+    let result = null;
+    let paymenturl = "";
+    for (const candidateConfig of configs) {
+      config = candidateConfig;
+      const handler = buildHandler(config);
+      try {
+        result = await handler.initiateSale({
+          merchantTxnNo,
+          amount: paidAmount,
+          returnURL: backendCallbackUrl,
+          customerEmailID: email,
+          customerMobileNo: phone,
+          customerName: text(req.body.student),
+          addlParam1: refno,
+          addlParam2: text(req.body.regno)
+        });
+        paymenturl = handler.getAuthRedirectUrl(result.response);
+        attempts.push({
+          selectedGatewayConfigId: String(config._id || ""),
+          selectedMerchantId: text(config.merchantid),
+          selectedProgram: text(config.program),
+          selectedProgramCode: text(config.programcode),
+          saleurl: text(config.saleurl),
+          success: Boolean(paymenturl),
+          initiateRequest: result.request,
+          initiateResponse: result.response
+        });
+        if (paymenturl) break;
+      } catch (attemptError) {
+        attempts.push({
+          selectedGatewayConfigId: String(config._id || ""),
+          selectedMerchantId: text(config.merchantid),
+          selectedProgram: text(config.program),
+          selectedProgramCode: text(config.programcode),
+          saleurl: text(config.saleurl),
+          success: false,
+          error: attemptError.message
+        });
+      }
+    }
 
-    const paymenturl = handler.getAuthRedirectUrl(result.response);
     if (!paymenturl) {
       const configScope = text(config.programcode)
         ? `program code ${text(config.programcode)}`
         : text(config.program)
           ? `program ${text(config.program)}`
           : "default ICICI configuration";
-      payment.gatewayresponse = { initiateRequest: result.request, initiateResponse: result.response, selectedGatewayConfigId: String(config._id || ""), selectedMerchantId: text(config.merchantid) };
+      payment.gatewayresponse = { initiateAttempts: attempts, selectedGatewayConfigId: String(config._id || ""), selectedMerchantId: text(config.merchantid) };
       await payment.save();
-      throw new Error(`ICICI gateway did not return redirect URL for ${configScope} using merchant ${text(config.merchantid)}. ${text(result.response?.respDescription || result.response?.message || result.response?.statusDesc)}`);
+      const lastError = attempts.map((attempt) => attempt.error || attempt.initiateResponse?.respDescription || attempt.initiateResponse?.message || attempt.initiateResponse?.statusDesc).filter(Boolean).pop();
+      throw new Error(`ICICI gateway did not return redirect URL for ${configScope} using merchant ${text(config.merchantid)}. ${text(lastError)}`);
     }
-    payment.gatewayresponse = { initiateRequest: result.request, initiateResponse: result.response, selectedGatewayConfigId: String(config._id || ""), selectedMerchantId: text(config.merchantid) };
+    payment.gatewayconfigid = String(config._id || "");
+    payment.gatewayprogram = text(config.program);
+    payment.gatewayprogramcode = text(config.programcode);
+    payment.gatewayresponse = { initiateRequest: result.request, initiateResponse: result.response, initiateAttempts: attempts, selectedGatewayConfigId: String(config._id || ""), selectedMerchantId: text(config.merchantid) };
     await payment.save();
 
     if (paymentType === "Admission" && text(req.body.applicationid)) {
