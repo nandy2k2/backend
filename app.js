@@ -7182,6 +7182,7 @@ const easebuzzpaymentprocessctlrds = require("./controllers/easebuzzpaymentproce
 const mastergatewayctlrds = require("./controllers/mastergatewayctlrds");
 const icicigatewayconfigctlrds = require("./controllers/icicigatewayconfigctlrds");
 const icicipaymentprocessctlrds = require("./controllers/icicipaymentprocessctlrds");
+const cashfreectlrds = require("./controllers/cashfreectlrds");
 const studentonlinepaymentctlrds = require("./controllers/studentonlinepaymentctlrds");
 const parentportalctlrds = require("./controllers/parentportalctlrds");
 const repairmaintenancectlrds = require("./controllers/repairmaintenancectlrds");
@@ -7441,6 +7442,16 @@ app.get("/api/v2/icicigatewayconfig", icicigatewayconfigctlrds.getIciciGatewayCo
 app.post("/api/v2/icicigatewayconfig", icicigatewayconfigctlrds.createIciciGatewayConfig);
 app.post("/api/v2/icicigatewayconfig/update", icicigatewayconfigctlrds.updateIciciGatewayConfig);
 app.post("/api/v2/icicigatewayconfig/delete", icicigatewayconfigctlrds.deleteIciciGatewayConfig);
+app.get("/api/v2/cashfree/config", cashfreectlrds.listConfigs);
+app.post("/api/v2/cashfree/config", cashfreectlrds.saveConfig);
+app.post("/api/v2/cashfree/config/delete", cashfreectlrds.deleteConfig);
+app.post("/api/v2/cashfree/order", cashfreectlrds.createOrder);
+app.get("/api/v2/cashfree/verify", cashfreectlrds.verifyOrder);
+app.post("/api/v2/cashfree/verify", cashfreectlrds.verifyOrder);
+app.get("/api/v2/cashfree/logs", cashfreectlrds.listLogs);
+app.post("/api/v2/cashfree/logs", cashfreectlrds.listLogs);
+app.post("/api/v2/cashfree/callback", cashfreectlrds.callback);
+app.get("/api/v2/cashfree/callback", cashfreectlrds.callback);
 app.get("/api/v2/easebuzzpayment", easebuzzpaymentprocessctlrds.getEasebuzzPayments);
 app.post("/api/v2/easebuzzpayment/initiate", easebuzzpaymentprocessctlrds.initiateEasebuzzPayment);
 app.post("/api/v2/easebuzzpayment/callback", easebuzzpaymentprocessctlrds.handleEasebuzzPaymentCallback);
