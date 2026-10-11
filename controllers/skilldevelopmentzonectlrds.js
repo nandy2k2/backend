@@ -482,6 +482,7 @@ exports.activatePaidAccess = async (req, res) => {
 exports.listProjects = async (req, res) => {
   try {
     const query = { ...commonFilter(req.query, ["projecttitle", "status"]), ...categoryFilter(req.query) };
+    if (text(req.query.id)) query._id = text(req.query.id);
     const rows = await SkillZoneProject.find(query).sort({ createdAt: -1 }).limit(2000).lean();
     res.json({ success: true, data: rows });
   } catch (error) {
@@ -784,7 +785,7 @@ exports.submitProject = async (req, res) => {
         status: "Submitted"
       };
     });
-    const data = await SkillZoneProjectSubmission.create({
+    const payload = {
       projectid: project._id,
       category: project.category,
       projecttitle: project.projecttitle,
@@ -794,7 +795,16 @@ exports.submitProject = async (req, res) => {
       status: "Submitted",
       responses,
       colid: num(req.body.colid)
-    });
+    };
+    const identity = emailOf(req.body) ? { email: emailOf(req.body) } : { regno: text(req.body.regno) };
+    const existing = await SkillZoneProjectSubmission.findOne({
+      projectid: project._id,
+      ...identity,
+      status: { $ne: "Accepted" }
+    }).sort({ updatedAt: -1 });
+    const data = existing
+      ? await SkillZoneProjectSubmission.findByIdAndUpdate(existing._id, payload, { new: true, runValidators: true })
+      : await SkillZoneProjectSubmission.create(payload);
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -842,11 +852,26 @@ File link: ${text(response.filelink)}`;
 
 exports.reviewProject = async (req, res) => {
   try {
-    const data = await SkillZoneProjectSubmission.findByIdAndUpdate(req.body.id, {
-      status: text(req.body.status) || "Accepted",
-      reviewercomments: text(req.body.reviewercomments),
-      redoinstructions: text(req.body.redoinstructions)
-    }, { new: true });
+    const submission = await SkillZoneProjectSubmission.findById(req.body.id);
+    if (!submission) return res.status(404).json({ success: false, message: "Submission not found" });
+    const incomingResponses = Array.isArray(req.body.responses) ? req.body.responses : [];
+    if (incomingResponses.length) {
+      submission.responses = (submission.responses || []).map((response) => {
+        const next = incomingResponses.find((item) => String(item._id || item.stepid) === String(response._id) || String(item.stepid) === String(response.stepid));
+        if (!next) return response;
+        response.usercomments = text(next.usercomments);
+        if (next.marksobtained !== undefined) response.marksobtained = num(next.marksobtained);
+        response.status = text(next.status || response.status);
+        return response;
+      });
+      submission.totalmarks = (submission.responses || []).reduce((sum, item) => sum + num(item.maxmarks), 0);
+      submission.marksobtained = (submission.responses || []).reduce((sum, item) => sum + num(item.marksobtained), 0);
+      submission.percentage = submission.totalmarks ? Number(((submission.marksobtained / submission.totalmarks) * 100).toFixed(2)) : 0;
+    }
+    submission.status = text(req.body.status) || "Accepted";
+    submission.reviewercomments = text(req.body.reviewercomments);
+    submission.redoinstructions = text(req.body.redoinstructions);
+    const data = await submission.save();
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -856,6 +881,7 @@ exports.reviewProject = async (req, res) => {
 exports.listProjectSubmissions = async (req, res) => {
   try {
     const query = commonFilter(req.query, ["category", "projecttitle", "email", "regno", "status"]);
+    if (text(req.query.projectid)) query.projectid = text(req.query.projectid);
     const rows = await SkillZoneProjectSubmission.find(query).sort({ createdAt: -1 }).limit(3000).lean();
     res.json({ success: true, data: rows });
   } catch (error) {
