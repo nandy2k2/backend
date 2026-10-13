@@ -5,6 +5,7 @@ const BillingInvoice = require("../Models/billinginvoiceds");
 const BillingSubscription = require("../Models/billingsubscriptionds");
 const studentOnlinePaymentController = require("./studentonlinepaymentctlrds");
 const billingModuleController = require("./billingmodulectlrds");
+const whatsappCreditController = require("./whatsappcreditctlrds");
 
 const text = (value) => String(value ?? "").trim();
 const num = (value) => {
@@ -18,6 +19,7 @@ const bool = (value) => {
 const esc = (value) => text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const configScope = (value) => /^client$/i.test(text(value)) ? "Client" : "Admin";
 const successStatus = (value) => /^(paid|success|successful)$/i.test(text(value));
+const isKharabilluCoupon = (value) => text(value).toLowerCase() === "kharabillu";
 
 const cashfreeBaseUrl = (environment) => /^prod|production$/i.test(environment)
   ? "https://api.cashfree.com/pg"
@@ -152,6 +154,19 @@ const activateBillingForPaidInvoice = async (log = {}, verifyResponse = {}) => {
   return invoice;
 };
 
+const activateWhatsappCreditsForPaidOrder = async (log = {}, verifyResponse = {}) => {
+  if (text(log.source) !== "WhatsappCredits") return null;
+  return whatsappCreditController.creditPaidPurchase({
+    colid: log.colid,
+    sourceid: log.sourceid,
+    orderid: log.orderid,
+    paidamount: num(verifyResponse.order_amount || log.amount),
+    user: log.user,
+    name: log.name,
+    cashfreeorderid: text(verifyResponse.cf_order_id || log.cashfreeorderid)
+  });
+};
+
 const cashfreeFetch = async (config, path, options = {}) => {
   const response = await fetch(`${cashfreeBaseUrl(config.environment)}${path}`, {
     ...options,
@@ -211,7 +226,8 @@ exports.deleteConfig = async (req, res) => {
 exports.createOrder = async (req, res) => {
   try {
     const colid = num(req.body.colid);
-    const amount = num(req.body.amount);
+    const originalAmount = num(req.body.amount);
+    const amount = isKharabilluCoupon(req.body.couponcode || req.body.couponCode) ? 1 : originalAmount;
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
     if (amount <= 0) return res.status(400).json({ success: false, message: "Enter a valid amount" });
     const scope = configScope(req.body.configscope || req.body.scope);
@@ -253,6 +269,9 @@ exports.createOrder = async (req, res) => {
         cashfreeorderid: text(gatewayResponse.cf_order_id),
         paymentsessionid: text(gatewayResponse.payment_session_id),
         amount,
+        originalamount: originalAmount,
+        discountamount: Math.max(0, Number((originalAmount - amount).toFixed(2))),
+        couponcode: isKharabilluCoupon(req.body.couponcode || req.body.couponCode) ? "KHARABILLU" : text(req.body.couponcode || req.body.couponCode),
         currency: "INR",
         status: text(gatewayResponse.order_status) || "CREATED",
         paymentstatus: "Initiated",
@@ -342,6 +361,7 @@ exports.verifyOrder = async (req, res) => {
       await studentOnlinePaymentController.settleSuccessfulStudentOnlinePayment(mirror.toObject ? mirror.toObject() : mirror, verifyResponse);
     }
     if (paid) await activateBillingForPaidInvoice(data, verifyResponse);
+    if (paid) await activateWhatsappCreditsForPaidOrder(data, verifyResponse);
     res.json({ success: true, data, cashfree: verifyResponse });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message, details: error.response || undefined });
@@ -375,6 +395,7 @@ exports.callback = async (req, res) => {
         });
         if (mirror) await studentOnlinePaymentController.settleSuccessfulStudentOnlinePayment(mirror.toObject ? mirror.toObject() : mirror, body);
         await activateBillingForPaidInvoice(log, body);
+        await activateWhatsappCreditsForPaidOrder(log, body);
       }
     }
     res.json({ success: true });

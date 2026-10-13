@@ -5,6 +5,8 @@ const Coupon = require('../Models/couponds');
 const { HDFCPaymentHandler, HDFCAPIException } = require('../utils/hdfcpaymenthandler');
 const crypto = require('crypto');
 const Ledgerstud = require('../Models/ledgerstud');
+const text = (value) => String(value ?? '').trim();
+const isKharabilluCoupon = (value) => text(value).toLowerCase() === 'kharabillu';
 
 // Create HDFC payment order
 exports.createhdfcpaymentorderdsdatabyds = async (req, res) => {
@@ -106,7 +108,10 @@ exports.createhdfcpaymentorderdsdatabyds = async (req, res) => {
     let couponid = null;
     let couponapplied = false;
 
-    if (couponCode) {
+    if (isKharabilluCoupon(couponCode)) {
+      discount = Math.max(0, parsedamount + platformcharges - 1);
+      couponapplied = true;
+    } else if (couponCode) {
       try {
         const coupon = await Coupon.findOne({
           couponCode: couponCode.toUpperCase(),
