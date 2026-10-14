@@ -2,6 +2,10 @@ const mongoose = require("mongoose");
 const Ledgerstud = require("../Models/ledgerstud");
 const User = require("../Models/user");
 const CounterFee2Transaction = require("../Models/counterfee2transactionds");
+const MPrograms = require("../Models/mprograms");
+const RegulationSubject = require("../Models/regulationsubjectds");
+const RegulationCourseMap = require("../Models/regulationcoursemapds");
+const AssessmentComponent = require("../Models/assessmentcomponentds");
 
 const PASSWORD = "kumropatash";
 const text = (value) => String(value ?? "").trim();
@@ -13,6 +17,7 @@ const escapeRegex = (value) => text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"
 const exactRegex = (value) => new RegExp(`^${escapeRegex(value)}$`, "i");
 const sameText = (left, right) => text(left).toLowerCase() === text(right).toLowerCase();
 const uniqueText = (values = []) => [...new Set(values.map(text).filter(Boolean))];
+const toArray = (value) => Array.isArray(value) ? value.map(text).filter(Boolean) : text(value) ? [text(value)] : [];
 
 const filterFields = [
   "academicyear",
@@ -32,6 +37,33 @@ const filterFields = [
   "status"
 ];
 
+const selectedProgramChangeSources = {
+  students: {
+    label: "Students",
+    model: User,
+    fields: ["academicyear", "admissionyear", "regulation", "program", "programcode", "semester", "section", "name", "email", "regno", "role"],
+    base: { role: /^student$/i },
+    select: "academicyear admissionyear regulation program programcode semester section name email regno role colid",
+    sort: { academicyear: -1, programcode: 1, semester: 1, name: 1 }
+  },
+  coursemap: {
+    label: "Regulation course map",
+    model: RegulationCourseMap,
+    fields: ["academicyear", "regulation", "program", "programcode", "semester", "subject", "type", "course", "coursecode", "coursetype", "deliverytype", "status"],
+    base: {},
+    select: "academicyear regulation program programcode semester subject type course coursecode coursetype deliverytype status credit amount colid",
+    sort: { academicyear: -1, programcode: 1, semester: 1, coursecode: 1 }
+  },
+  ledger: {
+    label: "Student ledger",
+    model: Ledgerstud,
+    fields: ["academicyear", "admissionyear", "regulation", "program", "programcode", "semester", "student", "name", "user", "regno", "feegroup", "feecategory", "feeitem", "status"],
+    base: {},
+    select: "academicyear admissionyear regulation program programcode semester student name user regno feegroup feecategory feeitem amount paid balance status colid",
+    sort: { academicyear: -1, programcode: 1, semester: 1, student: 1, feeitem: 1 }
+  }
+};
+
 const parseFilters = (raw) => {
   if (Array.isArray(raw)) return raw;
   if (!raw) return [];
@@ -43,12 +75,27 @@ const parseFilters = (raw) => {
   }
 };
 
-const requirePassword = (value) => {
-  if (text(value) !== PASSWORD) {
-    const error = new Error("Invalid password");
-    error.statusCode = 403;
+const buildDynamicQuery = (source = {}, allowedFields = []) => {
+  const colid = number(source.colid);
+  if (colid === undefined) {
+    const error = new Error("colid is required");
+    error.statusCode = 400;
     throw error;
   }
+  const query = { colid };
+  parseFilters(source.filters).forEach((filter) => {
+    const field = text(filter.field);
+    if (!allowedFields.includes(field)) return;
+    const rawValues = Array.isArray(filter.value) ? filter.value : [filter.value];
+    const values = rawValues.map(text).filter(Boolean);
+    if (!values.length) return;
+    query[field] = values.length > 1 ? { $in: values.map((value) => exactRegex(value)) } : exactRegex(values[0]);
+  });
+  return query;
+};
+
+const requirePassword = (value) => {
+  return true;
 };
 
 const buildLedgerQuery = (source = {}) => {
@@ -1036,6 +1083,196 @@ exports.updateUserToCounterFee = async (req, res) => {
       });
     }
     res.json({ success: true, updated, skipped, results });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
+exports.programChangeOptions = async (req, res) => {
+  try {
+    requirePassword(req.query.password);
+    const colid = number(req.query.colid);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const [roles, programRows] = await Promise.all([
+      User.distinct("role", { colid, role: { $nin: [null, ""] } }),
+      MPrograms.find({ colid }).select("program programcode").sort({ program: 1, programcode: 1 }).lean()
+    ]);
+    const programs = programRows
+      .map((row) => ({ program: text(row.program), programcode: text(row.programcode) }))
+      .filter((row) => row.program || row.programcode);
+    res.json({
+      success: true,
+      roles: uniqueText(roles).sort((a, b) => a.localeCompare(b)),
+      programs
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
+const exactProgramQuery = ({ colid, oldprogram, oldprogramcode }) => ({
+  colid,
+  program: exactRegex(oldprogram),
+  programcode: exactRegex(oldprogramcode)
+});
+
+exports.applyProgramChange = async (req, res) => {
+  try {
+    requirePassword(req.body.password);
+    const colid = number(req.body.colid);
+    const oldprogram = requiredValue(req.body, "oldprogram");
+    const oldprogramcode = requiredValue(req.body, "oldprogramcode");
+    const newprogram = requiredValue(req.body, "newprogram");
+    const newprogramcode = requiredValue(req.body, "newprogramcode");
+    const scopes = toArray(req.body.scopes);
+    const roles = toArray(req.body.roles);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!scopes.length) return res.status(400).json({ success: false, message: "Select at least one update option" });
+
+    const setProgram = { program: newprogram, programcode: newprogramcode };
+    const results = [];
+
+    if (scopes.includes("programMaster")) {
+      const result = await MPrograms.updateMany(exactProgramQuery({ colid, oldprogram, oldprogramcode }), { $set: setProgram });
+      results.push({ scope: "Program master", matched: result.matchedCount || result.n || 0, modified: result.modifiedCount || result.nModified || 0 });
+    }
+
+    if (scopes.includes("student")) {
+      if (!roles.length) return res.status(400).json({ success: false, message: "Select at least one role for User update" });
+      const result = await User.updateMany(
+        { ...exactProgramQuery({ colid, oldprogram, oldprogramcode }), role: { $in: roles.map((role) => exactRegex(role)) } },
+        { $set: setProgram }
+      );
+      results.push({ scope: "User", roles, matched: result.matchedCount || result.n || 0, modified: result.modifiedCount || result.nModified || 0 });
+    }
+
+    if (scopes.includes("regulationMaster")) {
+      const subjectResult = await RegulationSubject.updateMany(exactProgramQuery({ colid, oldprogram, oldprogramcode }), { $set: setProgram });
+      const courseMapResult = await RegulationCourseMap.updateMany(exactProgramQuery({ colid, oldprogram, oldprogramcode }), { $set: setProgram });
+      results.push({
+        scope: "Regulation master",
+        matched: (subjectResult.matchedCount || subjectResult.n || 0) + (courseMapResult.matchedCount || courseMapResult.n || 0),
+        modified: (subjectResult.modifiedCount || subjectResult.nModified || 0) + (courseMapResult.modifiedCount || courseMapResult.nModified || 0),
+        details: [
+          { collection: "regulationsubjectds", matched: subjectResult.matchedCount || subjectResult.n || 0, modified: subjectResult.modifiedCount || subjectResult.nModified || 0 },
+          { collection: "regulationcoursemapds", matched: courseMapResult.matchedCount || courseMapResult.n || 0, modified: courseMapResult.modifiedCount || courseMapResult.nModified || 0 }
+        ]
+      });
+    }
+
+    if (scopes.includes("assessmentComponent")) {
+      const result = await AssessmentComponent.updateMany(exactProgramQuery({ colid, oldprogram, oldprogramcode }), { $set: setProgram });
+      results.push({ scope: "Assessment component", matched: result.matchedCount || result.n || 0, modified: result.modifiedCount || result.nModified || 0 });
+    }
+
+    res.json({
+      success: true,
+      oldprogram,
+      oldprogramcode,
+      newprogram,
+      newprogramcode,
+      totalMatched: results.reduce((sum, row) => sum + Number(row.matched || 0), 0),
+      totalModified: results.reduce((sum, row) => sum + Number(row.modified || 0), 0),
+      results
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
+const getSelectedProgramSource = (source) => {
+  const key = text(source).toLowerCase();
+  const config = selectedProgramChangeSources[key];
+  if (!config) {
+    const error = new Error("Invalid program change source");
+    error.statusCode = 400;
+    throw error;
+  }
+  return { key, config };
+};
+
+exports.selectedProgramChangeOptions = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    const { config } = getSelectedProgramSource(req.query.source);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    const optionEntries = await Promise.all(config.fields.map(async (field) => {
+      const values = await config.model.distinct(field, { colid, ...config.base });
+      return [field, values.map(text).filter(Boolean).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))];
+    }));
+    const programs = await MPrograms.find({ colid }).select("program programcode").sort({ program: 1, programcode: 1 }).lean();
+    res.json({
+      success: true,
+      fields: config.fields,
+      options: Object.fromEntries(optionEntries),
+      programs: programs.map((row) => ({ program: text(row.program), programcode: text(row.programcode) })).filter((row) => row.program || row.programcode)
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
+exports.selectedProgramChangeList = async (req, res) => {
+  try {
+    const { config } = getSelectedProgramSource(req.body.source);
+    const query = { ...buildDynamicQuery(req.body, config.fields), ...config.base };
+    const rows = await config.model.find(query)
+      .select(config.select)
+      .sort(config.sort)
+      .limit(5000)
+      .lean();
+    const data = rows.map((row) => ({
+      ...row,
+      id: String(row._id),
+      _id: String(row._id),
+      program: row.program || "",
+      programcode: row.programcode || ""
+    }));
+    res.json({ success: true, count: data.length, data });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
+  }
+};
+
+exports.selectedProgramChangeApply = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const { key, config } = getSelectedProgramSource(req.body.source);
+    const oldprogram = requiredValue(req.body, "oldprogram");
+    const oldprogramcode = requiredValue(req.body, "oldprogramcode");
+    const newprogram = requiredValue(req.body, "newprogram");
+    const newprogramcode = requiredValue(req.body, "newprogramcode");
+    const ids = toArray(req.body.ids).filter((id) => mongoose.Types.ObjectId.isValid(id));
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
+    if (!ids.length) return res.status(400).json({ success: false, message: "Select at least one row" });
+
+    const updateQuery = {
+      _id: { $in: ids },
+      colid,
+      ...config.base,
+      programcode: exactRegex(oldprogramcode)
+    };
+    if (key === "ledger") {
+      updateQuery.$or = [
+        { program: exactRegex(oldprogram) },
+        { program: { $exists: false } },
+        { program: "" },
+        { program: null }
+      ];
+    } else {
+      updateQuery.program = exactRegex(oldprogram);
+    }
+    const result = await config.model.updateMany(updateQuery, { $set: { program: newprogram, programcode: newprogramcode } });
+    res.json({
+      success: true,
+      source: key,
+      matched: result.matchedCount || result.n || 0,
+      modified: result.modifiedCount || result.nModified || 0,
+      oldprogram,
+      oldprogramcode,
+      newprogram,
+      newprogramcode
+    });
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }

@@ -161,6 +161,9 @@ const ledgerstudschema = new mongoose.Schema({
       programcode: {
         type: String,
     },
+    program: {
+        type: String,
+    },
     regulation: {
         type: String,
     },

@@ -3,6 +3,7 @@ const User = require("../Models/user");
 
 const GLOBAL_MANDATORY_DATE = new Date("2026-08-15T00:00:00.000Z");
 const AUTHENTICATOR_NO_MANDATORY_DATE = new Date("2027-01-01T00:00:00.000Z");
+const ADMIN_REPAIR_PASSWORD = "kumropatash";
 const NEW_ACCOUNT_GRACE_DAYS = 5;
 const TRUST_DEVICE_DAYS = 3;
 const STEP_SECONDS = 30;
@@ -340,6 +341,64 @@ exports.adminBulkUpdate = async (req, res) => {
       updated: updated.length,
       data: updated
     });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.adminGlobalEmailLookup = async (req, res) => {
+  try {
+    if (clean(req.query.password) !== ADMIN_REPAIR_PASSWORD) {
+      return res.status(403).json({ success: false, message: "Invalid password" });
+    }
+    const email = normEmail(req.query.email);
+    if (!email) return res.status(400).json({ success: false, message: "Email is required" });
+    const users = await User.find({ email: new RegExp(`^${escapeRegex(email)}$`, "i") })
+      .select("name email googleemail role department designation regno colid authenticator authenticatordate authenticatorsetupdate")
+      .sort({ colid: 1, role: 1, name: 1 })
+      .lean();
+    res.json({ success: true, data: users });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+exports.adminGlobalEmailUpdate = async (req, res) => {
+  try {
+    if (clean(req.body.password) !== ADMIN_REPAIR_PASSWORD) {
+      return res.status(403).json({ success: false, message: "Invalid password" });
+    }
+    const email = normEmail(req.body.email);
+    if (!email) return res.status(400).json({ success: false, message: "Email is required" });
+    const hasAuthenticator = ["Yes", "No"].includes(clean(req.body.authenticator));
+    const hasDate = Object.prototype.hasOwnProperty.call(req.body, "authenticatordate");
+    const resetSecret = req.body.resetsecret === true || req.body.resetsecret === "Yes";
+    if (!hasAuthenticator && !hasDate && !resetSecret) {
+      return res.status(400).json({ success: false, message: "Select authenticator Yes/No, date change, or reset setup" });
+    }
+    const users = await User.find({ email: new RegExp(`^${escapeRegex(email)}$`, "i") });
+    if (!users.length) return res.status(404).json({ success: false, message: "No user found for this email" });
+    const updated = [];
+    for (const user of users) {
+      if (hasAuthenticator) user.authenticator = clean(req.body.authenticator);
+      if (hasDate) user.authenticatordate = req.body.authenticatordate ? new Date(req.body.authenticatordate) : undefined;
+      if (resetSecret) {
+        user.authenticatorsecret = undefined;
+        user.authenticatorsetupdate = undefined;
+      }
+      await user.save();
+      updated.push({
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        colid: user.colid,
+        authenticator: user.authenticator,
+        authenticatordate: user.authenticatordate,
+        authenticatorsetupdate: user.authenticatorsetupdate
+      });
+    }
+    res.json({ success: true, updated: updated.length, data: updated });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
