@@ -13,7 +13,7 @@ const conductExamCourseSchema = new mongoose.Schema({
   semester: { type: String, required: true, trim: true },
   course: { type: String, required: true, trim: true },
   coursecode: { type: String, required: true, trim: true },
-  coursetype: { type: String, enum: ["Theory", "Practical", "Tutorial", "Internship", "Project", "Experiential learning"], default: "Theory" },
+  coursetype: { type: String, enum: ["Theory", "Practical", "Viva", "Tutorial", "Internship", "Project", "Experiential learning"], default: "Theory" },
   deliverytype: { type: String, trim: true, default: "" },
   coursemastercode: { type: String, trim: true, default: "" },
   examdate: { type: String, trim: true },

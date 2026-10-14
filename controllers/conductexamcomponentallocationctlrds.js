@@ -16,6 +16,17 @@ const InternalMarksEntryDates = require("../Models/conductexaminternalmarksentry
 const InternalMarksApprovalWorkflow = require("../Models/internalmarksapprovalworkflowds");
 const InternalMarksApprovalRequest = require("../Models/internalmarksapprovalrequestds");
 const AcademicNewTask = require("../Models/academicnewtaskds");
+const ElectiveEnrollment = require("../Models/nepclassenrollmentds");
+
+const electiveEnrollmentFilter = (colid, assessment) => ({
+  colid,
+  academicyear: assessment.academicyear,
+  regulation: assessment.regulation,
+  programcode: assessment.programcode,
+  semester: assessment.semester,
+  coursecode: assessment.coursecode,
+  status: /^Approved$/i
+});
 
 const text = (value) => String(value ?? "").trim();
 const number = (value, fallback = 0) => {
@@ -824,7 +835,7 @@ exports.internalMarksOptions = async (req, res) => {
     ]);
     const [exams, faculty] = await Promise.all([
       ConductExam.find(examFilter).select("academicyear examname examcode regulation program programcode semester").sort({ academicyear: -1, examname: 1 }).lean(),
-      User.find({ colid, role: { $not: /^Student$/i } }).select("name email role department designation").sort({ name: 1 }).limit(5000).lean()
+      User.find(req.query.includeAllUsers === "Yes" ? { colid } : { colid, role: { $not: /^Student$/i } }).select("name email role department designation").sort({ name: 1 }).limit(5000).lean()
     ]);
     const workloadKeys = new Set(workloads.map((row) => [
       row.academicyear,
@@ -906,8 +917,18 @@ exports.internalMarksStudents = async (req, res) => {
     };
     if (text(assessment.program)) studentFilter.program = text(assessment.program);
     if (text(assessment.regulation)) studentFilter.regulation = text(assessment.regulation);
+    let electiveStudents;
+    if (req.query.elective === "Yes") {
+      const enrollments = await ElectiveEnrollment.find(electiveEnrollmentFilter(colid, assessment)).lean();
+      const profiles = await User.find({ colid, role: /^Student$/i, regno: { $in: enrollments.map((row) => row.regno) } }).select("name email regno rollno academicyear regulation program programcode semester section Major").lean();
+      const profileMap = new Map(profiles.map((row) => [text(row.regno), row]));
+      electiveStudents = [...new Map(enrollments.map((row) => {
+        const profile = profileMap.get(text(row.regno));
+        return [text(row.regno), { ...row, ...profile, _id: profile?._id || row._id, name: profile?.name || row.student, email: profile?.email || row.studentemail }];
+      })).values()];
+    }
     const [students, marks] = await Promise.all([
-      User.find(studentFilter).select("name email regno rollno academicyear regulation program programcode semester section Major").sort({ section: 1, rollno: 1, name: 1 }).lean(),
+      electiveStudents || User.find(studentFilter).select("name email regno rollno academicyear regulation program programcode semester section Major").sort({ section: 1, rollno: 1, name: 1 }).lean(),
       ComponentMarks.find({
         colid,
         academicyear: text(assessment.academicyear),
@@ -956,6 +977,10 @@ exports.saveInternalMarks = async (req, res) => {
     if (!text(req.body.examcode)) return res.status(400).json({ success: false, message: "Exam is required" });
     const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
     if (!rows.length) return res.status(400).json({ success: false, message: "No marks received" });
+    let enrolledRegnos;
+    if (req.body.elective === "Yes") {
+      enrolledRegnos = new Set((await ElectiveEnrollment.find(electiveEnrollmentFilter(colid, assessment)).select("regno").lean()).map((row) => text(row.regno)));
+    }
     const maxmarks = number(assessment.marks);
     const weightage = number(assessment.weightage, 1);
     const passmarks = number(assessment.passmarks);
@@ -963,6 +988,10 @@ exports.saveInternalMarks = async (req, res) => {
     const ops = [];
     rows.forEach((row, index) => {
       const regno = text(row.regno);
+      if (enrolledRegnos && !enrolledRegnos.has(regno)) {
+        errors.push({ row: index + 1, regno, message: "No approved elective enrollment for this course" });
+        return;
+      }
       const attendance = /^absent$/i.test(text(row.attendance)) ? "Absent" : "Present";
       const rawMarks = attendance === "Absent" ? 0 : numberOrUndefined(row.rawmarks ?? row.marksentry ?? row.enteredmarks ?? row.marksobtained);
       if (!regno) {

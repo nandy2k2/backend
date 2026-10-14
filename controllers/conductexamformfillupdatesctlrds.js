@@ -1,6 +1,18 @@
 const FormFillupDates = require("../Models/conductexamformfillupdatesds");
-const ProgramMaster = require("../Models/programmasterds");
+const ProgramMaster = require("../Models/mprograms");
 const Institution = require("../Models/insdetails");
+const Exam = require("../Models/conductexamds");
+
+let indexReady;
+const ensureExamIndex = () => {
+  if (!indexReady) indexReady = (async () => {
+    await FormFillupDates.collection.dropIndex("colid_1_academicyear_1_programcode_1").catch((error) => {
+      if (error.code !== 27 && error.code !== 26) throw error;
+    });
+    await FormFillupDates.collection.createIndex({ colid: 1, academicyear: 1, examcode: 1, program: 1, programcode: 1 }, { unique: true });
+  })().catch((error) => { indexReady = null; throw error; });
+  return indexReady;
+};
 
 const text = (value) => String(value ?? "").trim();
 const number = (value, fallback = 0) => {
@@ -10,7 +22,7 @@ const number = (value, fallback = 0) => {
 const uniq = (items) => [...new Set(items.map(text).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 const dateFields = ["lastdate", "lastdatefine1", "lastdatefine2", "lastdatefine3", "iafillingdate"];
 const numberFields = ["examfee", "lastdatefine1amount", "lastdatefine2amount", "lastdatefine3amount"];
-const fields = ["academicyear", "program", "programcode", "examfee", "lastdate", "lastdatefine1", "lastdatefine1amount", "lastdatefine2", "lastdatefine2amount", "lastdatefine3", "lastdatefine3amount", "iafillingdate"];
+const fields = ["academicyear", "exam", "examcode", "program", "programcode", "examfee", "lastdate", "lastdatefine1", "lastdatefine1amount", "lastdatefine2", "lastdatefine2amount", "lastdatefine3", "lastdatefine3amount", "iafillingdate"];
 
 function dateValue(value) {
   if (!value) return undefined;
@@ -28,6 +40,8 @@ function clean(input = {}) {
   const payload = {
     colid: number(input.colid, 0),
     academicyear: text(input.academicyear || input["Academic Year"]),
+    exam: text(input.exam || input.Exam),
+    examcode: text(input.examcode || input["Exam Code"]),
     program: text(input.program || input.Program),
     programcode: text(input.programcode || input["Program Code"] || input.programCode),
     user: text(input.user)
@@ -43,7 +57,7 @@ function clean(input = {}) {
 
 function validate(payload) {
   if (!payload.colid) return "colid is required";
-  for (const field of ["academicyear", "program", "programcode"]) {
+  for (const field of ["academicyear", "exam", "examcode", "program", "programcode"]) {
     if (!payload[field]) return `${field} is required`;
   }
   return "";
@@ -51,7 +65,7 @@ function validate(payload) {
 
 function queryFrom(source = {}) {
   const query = { colid: number(source.colid, 0) };
-  ["academicyear", "program", "programcode"].forEach((field) => {
+  ["academicyear", "exam", "examcode", "program", "programcode"].forEach((field) => {
     if (text(source[field])) query[field] = text(source[field]);
   });
   let filters = [];
@@ -76,14 +90,15 @@ exports.options = async (req, res) => {
   try {
     const colid = number(req.query.colid, 0);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
-    const [rows, programs, institution] = await Promise.all([
+    const [rows, programs, institution, exams] = await Promise.all([
       FormFillupDates.find({ colid }).lean(),
-      ProgramMaster.find({ colid, is_active: { $ne: "No" } }).sort({ course_name: 1 }).lean(),
-      Institution.findOne({ colid }).sort({ _id: -1 }).lean()
+      ProgramMaster.find({ colid }).select("program programcode").sort({ program: 1, programcode: 1 }).lean(),
+      Institution.findOne({ colid }).sort({ _id: -1 }).lean(),
+      Exam.find({ colid }).select("academicyear examname examcode").sort({ academicyear: -1, examname: 1 }).lean()
     ]);
     const programOptions = [];
     const seen = new Set();
-    [...programs.map((row) => ({ program: text(row.course_name), programcode: text(row.course_code) })), ...rows.map((row) => ({ program: text(row.program), programcode: text(row.programcode) }))].forEach((row) => {
+    programs.map((row) => ({ program: text(row.program), programcode: text(row.programcode) })).forEach((row) => {
       const key = `${row.programcode}||${row.program}`;
       if (!row.programcode || seen.has(key)) return;
       seen.add(key);
@@ -99,6 +114,7 @@ exports.options = async (req, res) => {
       institution,
       academicyears: uniq(["2025-26", "2026-27", "2027-28", "2028-29", "2029-30", ...rows.map((row) => row.academicyear)]),
       programs: programOptions,
+      exams,
       fieldOptions
     });
   } catch (error) {
@@ -123,10 +139,11 @@ exports.save = async (req, res) => {
     const payload = clean(req.body);
     const error = validate(payload);
     if (error) return res.status(400).json({ success: false, message: error });
+    await ensureExamIndex();
     const data = req.body.id
       ? await FormFillupDates.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true, runValidators: true })
       : await FormFillupDates.findOneAndUpdate(
-        { colid: payload.colid, academicyear: payload.academicyear, programcode: payload.programcode },
+        { colid: payload.colid, academicyear: payload.academicyear, examcode: payload.examcode, program: payload.program, programcode: payload.programcode },
         payload,
         { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
       );
@@ -151,6 +168,7 @@ exports.bulkUpload = async (req, res) => {
   try {
     const rows = Array.isArray(req.body.items) ? req.body.items : [];
     if (!rows.length) return res.status(400).json({ success: false, message: "No rows received" });
+    await ensureExamIndex();
     const errors = [];
     let saved = 0;
     for (const [index, row] of rows.entries()) {
@@ -161,7 +179,7 @@ exports.bulkUpload = async (req, res) => {
         continue;
       }
       await FormFillupDates.findOneAndUpdate(
-        { colid: payload.colid, academicyear: payload.academicyear, programcode: payload.programcode },
+        { colid: payload.colid, academicyear: payload.academicyear, examcode: payload.examcode, program: payload.program, programcode: payload.programcode },
         payload,
         { upsert: true, new: true, runValidators: true, setDefaultsOnInsert: true }
       );

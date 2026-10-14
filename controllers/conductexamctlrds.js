@@ -288,7 +288,7 @@ const examCoursePayload = (body = {}) => ({
   semester: text(body.semester),
   course: text(body.course),
   coursecode: text(body.coursecode),
-  coursetype: ["Theory", "Practical", "Tutorial", "Internship", "Project", "Experiential learning"].includes(text(body.coursetype || body.courseType)) ? text(body.coursetype || body.courseType) : "Theory",
+  coursetype: ["Theory", "Practical", "Viva", "Tutorial", "Internship", "Project", "Experiential learning"].includes(text(body.coursetype || body.courseType)) ? text(body.coursetype || body.courseType) : "Theory",
   deliverytype: text(body.deliverytype || body.deliveryType),
   coursemastercode: text(body.coursemastercode || body.courseMasterCode),
   examdate: text(body.examdate),

@@ -18,6 +18,7 @@ const Ledgerstud = require("../Models/ledgerstud");
 const User = require("../Models/user");
 const Awsconfig = require("../Models/awsconfig");
 const Institution = require("../Models/insdetails");
+const FormFillupDates = require("../Models/conductexamformfillupdatesds");
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -516,6 +517,7 @@ exports.studentContext = async (req, res) => {
         semester: clean(row.semester) || semester,
         subject: clean(row.subject),
         type: clean(row.type) || "Major",
+        coursetype: clean(row.coursetype),
         course: clean(row.course),
         coursecode: clean(row.coursecode),
         fee: num(feeRow[feeField]),
@@ -543,7 +545,16 @@ exports.studentContext = async (req, res) => {
       failedRows: failed.length,
       courses: supplementaryCourses.length
     } : null;
-    res.json({ data: { student, exam, forms, regularCourses, supplementaryCourses, atktCourses: atktMode ? supplementaryCourses : [], examFeeLedger, maxFee, atktDiagnostics } });
+    let formOverview;
+    if (req.query.overview === "Yes") {
+      const [schedule, barredCourses, submission] = await Promise.all([
+        FormFillupDates.findOne({ colid, academicyear, examcode, program: student.program, programcode: student.programcode }).lean(),
+        PreExamEligibility.find({ colid, regno, academicyear, examcode, regulation: student.regulation, programcode: student.programcode, semester: student.semester, status: { $ne: "Inactive" } }).select("course coursecode attendance fees note").lean(),
+        ConductExamFormSubmission.findOne({ colid, regno, academicyear, examcode, examtype }).select("status updatedAt").sort({ updatedAt: -1 }).lean()
+      ]);
+      formOverview = { schedule, barredCourses, submission, checkedAt: new Date() };
+    }
+    res.json({ data: { student, exam, forms, regularCourses, supplementaryCourses, atktCourses: atktMode ? supplementaryCourses : [], examFeeLedger, maxFee, atktDiagnostics, formOverview } });
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to load student exam form context" });
   }
