@@ -20,6 +20,7 @@ const OllamaConfiguration = require("../Models/ollamaconfigurationds");
 const Awsconfig = require("../Models/awsconfig");
 const Institution = require("../Models/insdetails");
 const User = require("../Models/user");
+const AyurvedaPattern = require("../utils/ayurvedaPaperPattern");
 const { createApprovalTasks, completeApprovalTasks } = require("../utils/approvalTaskHelper");
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -982,7 +983,15 @@ exports.saveQuestionPaper = async (req, res) => {
     const setter = await PaperSetter.findOne({ _id: papersetterid, colid }).lean();
     if (!setter) return res.status(404).json({ success: false, message: "Paper setter assignment not found" });
     if (!setterIsActive(setter)) return res.status(400).json({ success: false, message: "Question paper submission is not active for this date range" });
-    const existingPaper = await QuestionPaper.findOne({ colid, papersetterid }).select("status").lean();
+    const existingPaper = await QuestionPaper.findOne({ colid, papersetterid }).select("status paperformat").lean();
+    const ayurveda = req.body.paperformat === "Ayurveda" || existingPaper?.paperformat === "Ayurveda";
+    if (ayurveda) {
+      const error = AyurvedaPattern.validate(req.body.sections);
+      if (error) return res.status(400).json({ success: false, message: error });
+      req.body.patternid = "";
+      req.body.pattern = "Ayurveda fixed 100-mark pattern";
+      req.body.patternrows = AyurvedaPattern.patternRows();
+    }
     if (/^(InvigilatorSubmitted|Moderation In Progress|Moderation Submitted|Accepted)$/i.test(text(existingPaper?.status))) {
       return res.status(400).json({ success: false, message: "Question paper is already submitted for moderation and cannot be edited" });
     }
@@ -994,6 +1003,7 @@ exports.saveQuestionPaper = async (req, res) => {
     const payload = {
       ...setterData,
       papersetterid: setter._id,
+      paperformat: ayurveda ? "Ayurveda" : "",
       component: text(req.body.component) || text(setter.component),
       status: requestedStatus,
       paperattachmenturl: text(req.body.paperattachmenturl),
@@ -1096,6 +1106,10 @@ exports.submitQuestionPaper = async (req, res) => {
     if (colid === undefined || !papersetterid) return res.status(400).json({ success: false, message: "colid and papersetterid are required" });
     const paper = await QuestionPaper.findOne({ colid, papersetterid });
     if (!paper) return res.status(404).json({ success: false, message: "Save the question paper before submitting" });
+    if (paper.paperformat === "Ayurveda" || req.body.paperformat === "Ayurveda") {
+      const error = AyurvedaPattern.validate(paper.sections, true);
+      if (error) return res.status(400).json({ success: false, message: error });
+    }
     const setter = await PaperSetter.findOne({ _id: papersetterid, colid }).lean();
     if (!setterIsActive(setter)) return res.status(400).json({ success: false, message: "Question paper submission is not active for this date range" });
     if (/^(Moderation Submitted|Accepted)$/i.test(text(paper.status))) return res.status(400).json({ success: false, message: "This question paper is already locked" });
@@ -1190,7 +1204,7 @@ STRICT TEMPLATE REQUIREMENT:
 - If the sample has tables, groups, case blocks, MCQ blocks, or descriptive sections, preserve that layout in the returned sections/questions.
 - Do not add extra questions, remove questions, rename sections, change marks, or change optional/compulsory rules unless the additional AI prompt explicitly says so.`
       : "";
-    const patternRows = Array.isArray(req.body.patternRows) ? req.body.patternRows : [];
+    const patternRows = req.body.paperformat === "Ayurveda" ? AyurvedaPattern.patternRows() : Array.isArray(req.body.patternRows) ? req.body.patternRows : [];
     const includeMath = text(req.body.includeMathematicalExpressions || req.body.includemathematicalexpressions) === "Yes"
       || patternRows.some((row) => text(row.includemathematicalexpressions || row.includeMathematicalExpressions) === "Yes");
     const patternText = patternRows.length ? `
@@ -1242,6 +1256,10 @@ ${templatewise ? "For templatewise generation, return sections directly and also
     const raw = await callQuestionAi({ ...req.body, colid }, prompt);
     const selectedRepairModel = text(req.body.geminiModel) || "gemini-2.5-flash";
     const parsed = await parseOrRepairJson(colid, selectedRepairModel, raw, responseShape);
+    if (req.body.paperformat === "Ayurveda") {
+      const generated = Array.isArray(parsed) ? parsed : (parsed.questions || []);
+      if (generated.length !== 32) return res.status(422).json({ success: false, message: `AI returned ${generated.length} questions instead of the required 32. Generate again; existing questions have been retained.` });
+    }
     if (templatewise && Array.isArray(parsed.sections)) {
       return res.json({ success: true, sections: parsed.sections, html: parsed.html || "", data: parsed.sections.flatMap((section) => section.questions || []), raw });
     }

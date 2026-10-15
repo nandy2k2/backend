@@ -1,3 +1,4 @@
+const { preparePoPayload, recalculatePoTotals } = require("./purchase2crudctlrds");
 const storepoitemsds2 = require("../Models/storepoitemsds2");
 
 exports.addstorepoitemsds2 = async (req, res) => {
@@ -17,7 +18,9 @@ exports.addstorepoitemsds2 = async (req, res) => {
             }
         }
 
+        await preparePoPayload("storepoitemsds2", req.body);
         const newItem = await storepoitemsds2.create(req.body);
+        await recalculatePoTotals(newItem.colid, newItem.poid);
 
         // --- Budget Deduction ---
         if (req.body.category && req.body.year && req.body.colid && req.body.total) {
@@ -132,7 +135,11 @@ exports.updatestorepoitemsds2 = async (req, res) => {
             });
         }
 
+        req.body.colid = existingItem.colid;
+        await preparePoPayload("storepoitemsds2", req.body, existingItem.toObject());
         const updatedItem = await storepoitemsds2.findByIdAndUpdate(id, req.body, { new: true });
+        await recalculatePoTotals(updatedItem.colid, updatedItem.poid);
+        if (existingItem.poid !== updatedItem.poid) await recalculatePoTotals(existingItem.colid, existingItem.poid);
 
         // --- Budget Adjustment ---
         if (req.body.total !== undefined && existingItem.total !== undefined && updatedItem.category && updatedItem.year && updatedItem.colid) {
@@ -203,6 +210,7 @@ exports.deletestorepoitemsds2 = async (req, res) => {
         }
 
         await storepoitemsds2.findByIdAndDelete(id);
+        await recalculatePoTotals(existingItem.colid, existingItem.poid);
 
         // --- Budget Refund ---
         if (existingItem.category && existingItem.year && existingItem.colid && existingItem.total) {

@@ -50,6 +50,14 @@ const storepoorderdsschema = new mongoose.Schema({
     discount: {
         type: Number
     },
+    subtotal: Number,
+    discountamount: Number,
+    taxableamount: Number,
+    gstamount: Number,
+    taxamount: Number,
+    grandtotal: Number,
+    total: Number,
+    calculationrevision: { type: Number, default: 0 },
     description: {
         type: String
     },

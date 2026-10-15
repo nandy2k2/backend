@@ -13,6 +13,7 @@ const {
 const CashfreePaymentLog = require("../Models/cashfreepaymentlogds");
 const AiConfiguration = require("../Models/aiconfigurationds");
 const OllamaConfiguration = require("../Models/ollamaconfigurationds");
+const { normalizeProjectSteps } = require("../utils/skillZoneProjectContent");
 
 const text = (value) => String(value ?? "").trim();
 const num = (value) => {
@@ -734,7 +735,7 @@ exports.saveProject = async (req, res) => {
       description: text(req.body.description),
       difficulty: text(req.body.difficulty),
       status: text(req.body.status) || "Published",
-      steps: Array.isArray(req.body.steps) ? req.body.steps : [],
+      steps: normalizeProjectSteps(req.body.steps),
       user: text(req.body.user),
       username: text(req.body.username || req.body.name),
       colid: num(req.body.colid)
@@ -762,6 +763,7 @@ exports.generateProject = async (req, res) => {
   try {
     const prompt = `Create one skill-development project as JSON with category, projecttitle, description, difficulty, and steps array.
 Each step must have steptitle, description, task, maxmarks and order.
+steptitle, description and task must be strings, not arrays or objects. For multiple tasks, use one task string with separate paragraphs. maxmarks and order must be numbers.
 Category: ${text(req.body.category)}
 Topic/prompt: ${text(req.body.prompt)}
 Difficulty: ${text(req.body.difficulty) || "Medium"}
@@ -770,6 +772,7 @@ Return only JSON object.`;
       ? await callOllama(req.body.colid, req.body.ollamaConfigId, prompt)
       : await callGemini(req.body.colid, req.body.geminiModel || "gemini-2.5-flash", prompt);
     const project = parseJson(raw, {});
+    project.steps = normalizeProjectSteps(project.steps);
     res.json({ success: true, data: project, raw });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

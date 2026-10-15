@@ -90,6 +90,7 @@ const conductExamQuestionPaperSchema = new mongoose.Schema({
     uploadeddate: { type: Date, default: Date.now }
   }],
   patternid: { type: mongoose.Schema.Types.ObjectId, ref: "conductexamquestionpatternds" },
+  paperformat: { type: String, trim: true, default: "" },
   pattern: { type: String, trim: true },
   patterndescription: { type: String, trim: true },
   patternrows: [{

@@ -1,7 +1,9 @@
+const { preparePoPayload, recalculatePoTotals } = require("./purchase2crudctlrds");
 const storepoorderds2 = require("../Models/storepoorderds2");
 
 exports.addstorepoorderds2 = async (req, res) => {
     try {
+        await preparePoPayload("storepoorderds2", req.body);
         const newPO = await storepoorderds2.create(req.body);
 
         // Write audit log
@@ -78,7 +80,12 @@ exports.getallstorepoorderds2 = async (req, res) => {
 exports.updatestorepoorderds2 = async (req, res) => {
     try {
         const { id } = req.query;
-        const updatedPO = await storepoorderds2.findByIdAndUpdate(id, req.body, { new: true });
+        const existing = await storepoorderds2.findById(id);
+        if (!existing) return res.status(404).json({ success: false, message: "PO not found" });
+        req.body.colid = existing.colid;
+        await preparePoPayload("storepoorderds2", req.body, existing.toObject());
+        await storepoorderds2.findByIdAndUpdate(id, req.body, { new: true });
+        const updatedPO = await recalculatePoTotals(existing.colid, req.body.poid);
         if (!updatedPO) return res.status(404).json({ success: false, message: "PO not found" });
         res.status(200).json({
             success: true,

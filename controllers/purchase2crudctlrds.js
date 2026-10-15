@@ -43,6 +43,44 @@ const models = {
   pimprestds2: require("../Models/pimprestds2")
 };
 
+const { calculatePoLine, summarizePo } = require("../utils/purchase2Amounts");
+exports.preparePoPayload = normalizePoPayload;
+exports.recalculatePoTotals = refreshPoTotals;
+const poQueues = new Map();
+async function refreshPoTotals(colid, poid) {
+  if (!poid) return null;
+  const key = `${colid}|${poid}`;
+  const previous = poQueues.get(key) || Promise.resolve();
+  const operation = previous.catch(() => {}).then(async () => {
+    for (let retry = 0; retry < 10; retry += 1) {
+      const header = await models.storepoorderds2.findOneAndUpdate({ colid, poid }, { $inc: { calculationrevision: 1 } }, { new: true });
+      if (!header) return null;
+      const items = await models.storepoitemsds2.find({ colid, poid }).lean();
+      const updated = await models.storepoorderds2.findOneAndUpdate({ _id: header._id, colid, calculationrevision: header.calculationrevision }, { $set: summarizePo(items, true) }, { new: true });
+      if (updated) return updated;
+    }
+    throw new Error("PO items changed while totals were being calculated. Please save again.");
+  });
+  poQueues.set(key, operation);
+  try { return await operation; } finally { if (poQueues.get(key) === operation) poQueues.delete(key); }
+}
+
+async function normalizePoPayload(model, payload, existing = {}) {
+  if (model === "storepoitemsds2") {
+    const merged = { ...existing, ...payload };
+    if (!merged.poid || !await models.storepoorderds2.exists({ colid: payload.colid, poid: merged.poid })) throw new Error("Select an existing PO before adding items");
+    Object.assign(payload, cleanPayload(calculatePoLine(merged, true)));
+    delete payload.calculationerror;
+  }
+  if (model === "storepoorderds2") {
+    payload.poid = payload.poid || existing.poid;
+    if (!payload.poid) throw new Error("PO number is required");
+    if (existing.poid && existing.poid !== payload.poid && await models.storepoitemsds2.exists({ colid: payload.colid, poid: existing.poid })) throw new Error("PO number cannot change after items are added");
+    Object.assign(payload, summarizePo(await models.storepoitemsds2.find({ colid: payload.colid, poid: payload.poid }).lean(), true));
+    delete payload.calculationrevision;
+  }
+}
+
 function getModel(key) {
   return models[String(key || "").trim()];
 }
@@ -192,12 +230,21 @@ exports.savePurchase2Row = async (req, res) => {
     if (!Model) return res.status(404).json({ success: false, message: "Purchase 2 model not found" });
     const payload = cleanPayload(req.body);
     if (!payload.colid) return res.status(400).json({ success: false, message: "colid is required" });
+    const isPo = ["storepoitemsds2", "storepoorderds2"].includes(req.params.model);
+    const existing = isPo && req.body.id ? await Model.findOne({ _id: req.body.id, colid: payload.colid }).lean() : null;
+    if (isPo && req.body.id && !existing) return res.status(404).json({ success: false, message: "Record not found" });
+    await normalizePoPayload(req.params.model, payload, existing || {});
     await validatePurchase2Payload(Model, req.params.model, payload, req.body.id);
     const data = req.body.id
       ? await Model.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true, runValidators: true })
       : await Model.create(payload);
     if (!data) return res.status(404).json({ success: false, message: "Record not found" });
-    res.json({ success: true, data });
+    if (req.params.model === "storepoitemsds2") {
+      if (existing?.poid && existing.poid !== data.poid) await refreshPoTotals(payload.colid, existing.poid);
+      await refreshPoTotals(payload.colid, data.poid);
+    }
+    const result = req.params.model === "storepoorderds2" ? await refreshPoTotals(payload.colid, data.poid) : data;
+    res.json({ success: true, data: result || data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -209,6 +256,7 @@ exports.deletePurchase2Row = async (req, res) => {
     if (!Model) return res.status(404).json({ success: false, message: "Purchase 2 model not found" });
     const data = await Model.findOneAndDelete({ _id: req.body.id, colid: Number(req.body.colid) });
     if (!data) return res.status(404).json({ success: false, message: "Record not found" });
+    if (req.params.model === "storepoitemsds2") await refreshPoTotals(Number(req.body.colid), data.poid);
     res.json({ success: true, message: "Deleted" });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -251,9 +299,16 @@ exports.bulkPurchase2Rows = async (req, res) => {
       });
     }
     for (const row of prepared) {
+      await normalizePoPayload(req.params.model, row);
       await validatePurchase2Payload(Model, req.params.model, row);
     }
-    const data = await Model.insertMany(prepared, { ordered: false });
+    let data;
+    try { data = await Model.insertMany(prepared, { ordered: false }); }
+    finally {
+      if (["storepoitemsds2", "storepoorderds2"].includes(req.params.model)) {
+        for (const poid of new Set(prepared.map((row) => row.poid))) await refreshPoTotals(colid, poid);
+      }
+    }
     res.json({ success: true, inserted: data.length });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

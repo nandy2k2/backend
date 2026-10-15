@@ -7331,6 +7331,7 @@ app.get("/api/v2/repair-maintenance/user-to-counter-fee/options", repairmaintena
 app.post("/api/v2/repair-maintenance/user-to-counter-fee/list", repairmaintenancectlrds.listUserToCounterFee);
 app.post("/api/v2/repair-maintenance/user-to-counter-fee/update", repairmaintenancectlrds.updateUserToCounterFee);
 app.get("/api/v2/repair-maintenance/program-change/options", repairmaintenancectlrds.programChangeOptions);
+app.use("/api/v2/question-paper-indent", require("./controllers/questionpaperindentctlrds"));
 app.post("/api/v2/repair-maintenance/program-change/apply", repairmaintenancectlrds.applyProgramChange);
 app.get("/api/v2/repair-maintenance/selected-program-change/options", repairmaintenancectlrds.selectedProgramChangeOptions);
 app.post("/api/v2/repair-maintenance/selected-program-change/list", repairmaintenancectlrds.selectedProgramChangeList);
