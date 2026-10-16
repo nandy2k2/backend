@@ -187,6 +187,7 @@ async function bookPayload(body, colid) {
   const library = await getLibrary(colid, body.libraryid || body.libraryname);
   Object.assign(payload, libraryPayload(library || body));
   payload.barcodevalue = text(body.barcodevalue) || payload.accessionno;
+  payload.status = text(body.status) || "Available";
   payload.qrcodeurl = text(body.qrcodeurl);
   payload.user = text(body.user);
   return payload;
@@ -386,7 +387,7 @@ exports.libraries = async (req, res) => {
 exports.accessibleLibraryList = async (req, res) => {
   try {
     const colid = number(req.query.colid, undefined);
-    const data = await accessibleLibraries(colid, req.query.user || req.query.email, String(req.query.all || "").toLowerCase() === "yes");
+    const data = await accessibleLibraries(colid, req.query.user || req.query.email, String(req.query.all || "").toLowerCase() === "yes" || /^all$/i.test(text(req.query.role)));
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -517,6 +518,11 @@ exports.books = async (req, res) => {
     const query = { colid };
     await applyLibraryAccess(query, colid, req.query);
     applyFilters(query, req.query, bookFields);
+    if (text(req.query.search)) query.$or = ["accessionno", "title", "author", "isbn"].map(field => ({ [field]: regex(req.query.search) }));
+    if (req.query.compact === "yes") {
+      const data = await LibraryBook.find(query).select("accessionno title author isbn status libraryid libraryname").sort({ accessionno: 1 }).limit(Math.min(limit, 30)).lean();
+      return res.json({ success: true, data });
+    }
     const [data, total] = await Promise.all([
       LibraryBook.find(query).sort({ accessionno: 1 }).skip(skip).limit(limit).lean(),
       LibraryBook.countDocuments(query)
@@ -656,10 +662,13 @@ exports.studentOptions = async (req, res) => {
 exports.students = async (req, res) => {
   try {
     const colid = number(req.query.colid, undefined);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const query = { colid, role: /^Student$/i };
     applyFilters(query, req.query, studentFields);
-    const data = await User.find(query).select("name email user phone regno academicyear admissionyear program programcode semester section major minor").limit(1000).lean();
-    res.json({ success: true, data, options: await distinctOptions(User, colid, studentFields, { role: /^Student$/i }) });
+    if (text(req.query.search)) query.$or = ["name", "regno", "email"].map(field => ({ [field]: regex(req.query.search) }));
+    const limit = Math.min(Math.max(number(req.query.limit, 1000), 1), req.query.compact === "yes" ? 30 : 1000);
+    const data = await User.find(query).select("name email user phone regno academicyear admissionyear program programcode semester section major minor").limit(limit).lean();
+    res.json({ success: true, data, options: req.query.compact === "yes" ? {} : await distinctOptions(User, colid, studentFields, { role: /^Student$/i }) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -716,13 +725,18 @@ exports.issueBook = async (req, res) => {
 exports.issues = async (req, res) => {
   try {
     const colid = number(req.query.colid, undefined);
+    if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const query = { colid };
     await applyLibraryAccess(query, colid, req.query);
     applyFilters(query, req.query, issueFields);
+    if (req.query.exactregno === "yes" && text(req.query.regno)) query.regno = text(req.query.regno);
     const from = dayStart(req.query.fromdate);
     const to = dayEnd(req.query.todate);
     if (from || to) query.issuedate = { ...(from ? { $gte: from } : {}), ...(to ? { $lte: to } : {}) };
-    const data = await LibraryIssue.find(query).sort({ issuedate: -1 }).limit(5000).lean();
+    const limit = Math.min(Math.max(number(req.query.limit, 5000), 1), 5000);
+    const skip = Math.max(number(req.query.skip, 0), 0);
+    const data = await LibraryIssue.find(query).sort({ issuedate: -1, _id: -1 }).skip(skip).limit(limit).lean();
+    if (req.query.compact === "yes") return res.json({ success: true, data, total: await LibraryIssue.countDocuments(query) });
     const optionBase = {};
     await applyLibraryAccess(optionBase, colid, req.query);
     res.json({ success: true, data, options: await distinctOptions(LibraryIssue, colid, issueFields, optionBase), libraries: await accessibleLibraries(colid, req.query.user || req.query.email) });
