@@ -15,6 +15,7 @@ const selectedCourseSchema = new mongoose.Schema(
   {
     course: { type: String, trim: true, default: "" },
     coursecode: { type: String, trim: true, default: "" },
+    coursemastercode: { type: String, trim: true, default: "" },
     type: { type: String, trim: true, default: "" },
     subject: { type: String, trim: true, default: "" },
     fee: { type: Number, default: 0 },

@@ -1277,3 +1277,20 @@ exports.selectedProgramChangeApply = async (req, res) => {
     res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
+
+exports.changeStudentAcademicYear = async (req, res) => {
+  try {
+    const colid = number(req.body.colid);
+    const oldyear = requiredValue(req.body, "oldacademicyear");
+    const newyear = requiredValue(req.body, "newacademicyear");
+    const ids = uniqueText(toArray(req.body.ids));
+    if (!colid || colid <= 0) return res.status(400).json({ message: "A valid colid is required" });
+    if (!ids.length || ids.length > 5000 || ids.some(id => !mongoose.Types.ObjectId.isValid(id))) return res.status(400).json({ message: "Select between 1 and 5000 valid students" });
+    if (sameText(oldyear, newyear)) return res.status(400).json({ message: "Old and new academic years must differ" });
+    const result = await User.updateMany({ colid, role: /^student$/i, _id: { $in: ids }, academicyear: oldyear }, { $set: { academicyear: newyear } }, { runValidators: true });
+    const matched = result.matchedCount ?? result.n ?? 0;
+    res.json({ success: true, matched, modified: result.modifiedCount ?? result.nModified ?? 0, skipped: ids.length - matched });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message });
+  }
+};

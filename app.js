@@ -7337,6 +7337,7 @@ app.post("/api/v2/repair-maintenance/program-change/apply", repairmaintenancectl
 app.get("/api/v2/repair-maintenance/selected-program-change/options", repairmaintenancectlrds.selectedProgramChangeOptions);
 app.post("/api/v2/repair-maintenance/selected-program-change/list", repairmaintenancectlrds.selectedProgramChangeList);
 app.post("/api/v2/repair-maintenance/selected-program-change/apply", repairmaintenancectlrds.selectedProgramChangeApply);
+app.post("/api/v2/repair-maintenance/change-academic-year/apply", repairmaintenancectlrds.changeStudentAcademicYear);
 app.get("/api/v2/programwiseaccess/options", programwiseaccessctlrds.options);
 app.get("/api/v2/programwiseaccess", programwiseaccessctlrds.list);
 app.post("/api/v2/programwiseaccess", programwiseaccessctlrds.save);

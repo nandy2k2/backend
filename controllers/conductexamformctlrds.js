@@ -506,6 +506,8 @@ exports.studentContext = async (req, res) => {
       atktFeeMap.set([row.programcode, row.semester, row.coursecode].map(clean).join("||").toLowerCase(), row);
       atktFeeMap.set(clean(row.coursecode).toLowerCase(), row);
     });
+    const masterCodeRows = await RegulationCourseMap.find({ ...baseCourseQuery, coursecode: { $in: [...compulsory, ...electives, ...failed].map(row => clean(row.coursecode)).filter(Boolean) } }).select("coursecode coursemastercode").lean();
+    const masterCodes = new Map(masterCodeRows.map(row => [clean(row.coursecode), clean(row.coursemastercode)]));
     const enrich = (row, feeField, fallbackExamType) => {
       const atktFeeKey = [row.programcode, row.semester, row.coursecode].map(clean).join("||").toLowerCase();
       const feeRow = atktMode ? (atktFeeMap.get(atktFeeKey) || atktFeeMap.get(clean(row.coursecode).toLowerCase()) || {}) : (fees[clean(row.coursecode).toLowerCase()] || {});
@@ -520,6 +522,7 @@ exports.studentContext = async (req, res) => {
         coursetype: clean(row.coursetype),
         course: clean(row.course),
         coursecode: clean(row.coursecode),
+        coursemastercode: clean(row.coursemastercode) || masterCodes.get(clean(row.coursecode)) || "",
         fee: num(feeRow[feeField]),
         examtype: fallbackExamType,
         examdate: clean(row.examdate),
@@ -1011,6 +1014,7 @@ exports.submitStudentExamForm = async (req, res) => {
           course: clean(course.course),
           coursecode,
           student: clean(student.name),
+          coursemastercode: clean(examCourse?.coursemastercode || course.coursemastercode),
           regno,
           email: clean(student.email),
           phone: clean(student.phone),

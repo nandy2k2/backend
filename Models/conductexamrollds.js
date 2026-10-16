@@ -15,6 +15,7 @@ const conductExamRollSchema = new mongoose.Schema({
   semester: { type: String, required: true, trim: true },
   course: { type: String, required: true, trim: true },
   coursecode: { type: String, required: true, trim: true },
+  coursemastercode: { type: String, trim: true, default: "" },
   student: { type: String, required: true, trim: true },
   regno: { type: String, required: true, trim: true },
   email: { type: String, trim: true },
