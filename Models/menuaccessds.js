@@ -29,6 +29,7 @@ const menuaccessdsschema = new mongoose.Schema({
     enum: ['Allow', 'Deny'],
     default: 'Allow'
   },
+  order: { type: Number },
   user: {
     type: String
   },

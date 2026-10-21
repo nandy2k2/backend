@@ -1044,6 +1044,7 @@ app.post('/api/v2/examination-model2/component-marks', conductExamComponentAlloc
 app.post('/api/v2/examination-model2/component-marks-delete', conductExamComponentAllocationController.deleteMark);
 app.post('/api/v2/examination-model2/component-marks-bulk', conductExamComponentAllocationController.bulkMarks);
 app.get('/api/v2/internal-marks-entry/options', conductExamComponentAllocationController.internalMarksOptions);
+app.use('/api/v2/internal-questionwise', require('./controllers/internalquestionwisectlrds'));
 app.get('/api/v2/internal-marks-entry/components', conductExamComponentAllocationController.internalMarksComponents);
 app.get('/api/v2/internal-marks-entry/students', conductExamComponentAllocationController.internalMarksStudents);
 app.post('/api/v2/internal-marks-entry/save', conductExamComponentAllocationController.saveInternalMarks);
@@ -6275,6 +6276,7 @@ app.get("/api/v2/conductexam/invigilator-student-attendance-options", conductexa
 app.get("/api/v2/conductexam/invigilator-room-students", conductexamctlrds.getInvigilatorRoomStudents);
 app.post("/api/v2/conductexam/mark-examroll-attendance", conductexamctlrds.markExamRollAttendance);
 app.post("/api/v2/conductexam/seat-allocation", conductexamctlrds.allocateExamSeats);
+app.use("/api/v2/conductexam/manual-seat-allocation", require("./controllers/manualseatallocationctlrds"));
 app.get("/api/v2/conductexam/scanning-options", conductexamscanningctlrds.options);
 app.get("/api/v2/conductexam/scanning-attended-students", conductexamscanningctlrds.attendedStudents);
 app.post("/api/v2/conductexam/scanning-assign", conductexamscanningctlrds.assign);

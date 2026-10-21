@@ -1,5 +1,11 @@
 const menuaccessds = require('./../Models/menuaccessds');
 const User = require('./../Models/user');
+const optionalOrder = value => {
+  if (value === undefined || value === null || String(value).trim() === '') return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new Error('Order must be a valid number');
+  return parsed;
+};
 
 exports.getMenuAccessRules = async (req, res) => {
   try {
@@ -33,6 +39,7 @@ exports.createMenuAccessRule = async (req, res) => {
       path,
       role,
       access,
+      order: optionalOrder(req.body.order),
       user,
       status1: 'Submitted',
       comments: 'NA'
@@ -49,9 +56,12 @@ exports.updateMenuAccessRule = async (req, res) => {
     const { id } = req.body;
     const { colid, menugroup, groupname, title, path, role, access, user } = req.body;
 
+    const order = optionalOrder(req.body.order);
+    const orderUpdate = req.body.order === undefined ? {} : order === undefined ? { $unset: { order: 1 } } : { order };
     const data = await menuaccessds.findByIdAndUpdate(
       id,
       {
+        ...orderUpdate,
         colid: Number(colid),
         menugroup,
         groupname: groupname || menugroup,

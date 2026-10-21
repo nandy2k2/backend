@@ -1,0 +1,10 @@
+const mongoose = require("mongoose");
+const componentContext = { assessmentid: { type: String, default: "" }, assessmentcomponent: String, componenttype: String, scoretype: String, assessmentgroup: String };
+const context = { colid: { type: Number, required: true }, academicyear: { type: String, required: true }, exam: String, examcode: { type: String, required: true }, regulation: String, program: String, programcode: { type: String, required: true }, semester: { type: String, required: true }, course: String, coursecode: { type: String, required: true } };
+const QuestionSchema = new mongoose.Schema({ ...context, questionno: { type: String, required: true }, question: { type: String, required: true }, questiontype: { type: String, enum: ["MCQ", "Descriptive", "Practical"], required: true }, fullmarks: { type: Number, min: 0, required: true }, coid: { type: String, required: true }, conumber: String, co: String, user: String }, { timestamps: true });
+QuestionSchema.add(componentContext);
+QuestionSchema.index({ colid: 1, academicyear: 1, examcode: 1, regulation: 1, programcode: 1, semester: 1, coursecode: 1, assessmentid: 1, questionno: 1 }, { unique: true });
+const MarkSchema = new mongoose.Schema({ ...context, questionid: { type: String, required: true }, questionno: String, question: String, questiontype: String, fullmarks: Number, coid: String, conumber: String, co: String, regno: { type: String, required: true }, student: String, email: String, marks: { type: Number, required: true, min: 0 }, attendance: { type: String, enum: ["Present", "Absent"], default: "Present" }, user: String }, { timestamps: true });
+MarkSchema.add(componentContext);
+MarkSchema.index({ colid: 1, questionid: 1, regno: 1 }, { unique: true });
+module.exports = { Question: mongoose.model("internalassessmentquestionds", QuestionSchema), Mark: mongoose.model("internalquestionwisemarksds", MarkSchema) };
