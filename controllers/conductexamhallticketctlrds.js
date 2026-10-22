@@ -3,6 +3,9 @@ const StudentViewControl = require("../Models/conductexamstudentviewcontrolds");
 const Institution = require("../Models/insdetails");
 const User = require("../Models/user");
 const UserSignature = require("../Models/usersignatureds");
+const ProgramMaster = require("../Models/mprograms");
+const ExamMaster = require("../Models/conductexamds");
+const CourseMap = require("../Models/regulationcoursemapds");
 const BlockchainLedger = require("../Models/blockchainledgerds");
 const { appendBlock } = require("./blockchainledgerctlrds");
 
@@ -199,6 +202,28 @@ exports.getHallTicket = async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
+};
+
+exports.getHallTicket4 = async (req, res) => {
+  try {
+    const colid = number(req.query.colid);
+    if (!(colid > 0) || !text(req.query.academicyear) || !text(req.query.examcode) || !text(req.query.regno)) return res.status(400).json({ message: "Select academic year, exam and student" });
+    const payload = await loadHallTicketPayload({ colid, academicyear: req.query.academicyear, examcode: req.query.examcode, regno: req.query.regno });
+    if (payload.error) return res.status(400).json({ message: payload.error });
+    const first = payload.rows[0];
+    const [program, exam, courses] = await Promise.all([
+      ProgramMaster.findOne({ colid, programcode: first.programcode, year: first.academicyear }).lean().then(async row => row || ProgramMaster.findOne({ colid, programcode: first.programcode }).lean()),
+      ExamMaster.findOne({ colid, academicyear: first.academicyear, examcode: first.examcode }).lean(),
+      CourseMap.find({ colid, academicyear: first.academicyear, coursecode: { $in: payload.rows.map(row => row.coursecode) } }).lean()
+    ]);
+    payload.programMaster = program || null;
+    payload.exam = { ...payload.exam, ...(exam || {}), exam: exam?.examname || payload.exam.exam };
+    payload.rows = payload.rows.map(row => {
+      const mapped = courses.find(course => course.coursecode === row.coursecode && course.programcode === row.programcode && course.semester === row.semester && (!row.regulation || course.regulation === row.regulation));
+      return { ...row, coursetype: row.papertype || row.coursetype || mapped?.coursetype || "Theory" };
+    });
+    res.json({ data: payload });
+  } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
 exports.storeHallTicketBlockchain = async (req, res) => {

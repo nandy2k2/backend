@@ -12,6 +12,8 @@ router.post("/allocate", async (req, res) => {
     const scope = Object.fromEntries(keys.map(key => [key, text(req.body[key])]));
     const ids = [...new Set(Array.isArray(req.body.ids) ? req.body.ids : [])];
     const building = text(req.body.building), examroom = text(req.body.room);
+    const blockno = text(req.body.blockno);
+    if (blockno.length > 100) return res.status(400).json({ message: "Block number must be at most 100 characters." });
     if (!(colid > 0) || Object.values(scope).some(value => !value) || !building || !examroom || !ids.length || ids.length > 5000 || ids.some(id => !mongoose.Types.ObjectId.isValid(id)) || !Number.isInteger(capacity) || capacity < 1 || ![0, 1, 2, 3].includes(skip)) return res.status(400).json({ message: "Select exam, program, course, students, building, room, valid capacity and skip rule." });
     const { regulation: selectedRegulation, ...populatedCourseScope } = scope;
     if (!await Course.exists({ colid, ...populatedCourseScope })) return res.status(400).json({ message: "The selected course is not populated for this exam." });
@@ -39,7 +41,7 @@ router.post("/allocate", async (req, res) => {
         used.add(seat); seat += skip + 1;
       }
     }
-    const result = await Roll.bulkWrite(assignments.map(row => ({ updateOne: { filter: { _id: row.id, colid, ...populatedCourseScope }, update: { $set: { building, examroom, seatno: row.seatno, ...(room?.campus ? { campus: room.campus } : {}) } } } })));
+    const result = await Roll.bulkWrite(assignments.map(row => ({ updateOne: { filter: { _id: row.id, colid, ...populatedCourseScope }, update: { $set: { building, examroom, seatno: row.seatno, ...(room?.campus ? { campus: room.campus } : {}), ...(blockno ? { blockno } : {}) } } } })));
     res.json({ allocated: result.modifiedCount ?? assignments.length });
   } catch (error) { res.status(500).json({ message: error.message }); }
 });

@@ -64,3 +64,13 @@ test("foreign or stale selected IDs and invalid rules cannot be allocated", asyn
     const f = fixture(); assert.equal((await f.run(patch)).status, 400); assert.equal(f.writes.length, 0);
   }
 });
+test("optional block number is trimmed and assigned only when provided", async () => {
+  const f = fixture();
+  assert.equal((await f.run({ blockno: " B-12 " })).status, 200);
+  for (const write of f.writes) assert.equal(write.updateOne.update.$set.blockno, "B-12");
+  for (const blockno of [undefined, "", "   "]) {
+    const blank = fixture(); assert.equal((await blank.run({ blockno })).status, 200);
+    for (const write of blank.writes) assert.equal(Object.hasOwn(write.updateOne.update.$set, "blockno"), false);
+  }
+  const invalid = fixture(); assert.equal((await invalid.run({ blockno: "x".repeat(101) })).status, 400); assert.equal(invalid.writes.length, 0);
+});

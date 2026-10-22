@@ -6263,6 +6263,7 @@ app.post("/api/v2/conductexam/examroll-rules/bulk-update", exameligibilityctlrds
 app.get("/api/v2/conductexam/hallticket-options", conductexamhallticketctlrds.options);
 app.get("/api/v2/conductexam/hallticket-eligible-students", conductexamhallticketctlrds.getEligibleStudents);
 app.get("/api/v2/conductexam/hallticket", conductexamhallticketctlrds.getHallTicket);
+app.get("/api/v2/conductexam/hallticket-4", conductexamhallticketctlrds.getHallTicket4);
 app.post("/api/v2/conductexam/hallticket-blockchain-store", conductexamhallticketctlrds.storeHallTicketBlockchain);
 app.get("/api/v2/public/hallticket-blockchain-verify", conductexamhallticketctlrds.verifyHallTicketBlockchain);
 app.get("/api/v2/public/hallticket-verify", conductexamhallticketctlrds.verifyHallTicket);
@@ -6277,6 +6278,8 @@ app.get("/api/v2/conductexam/invigilator-room-students", conductexamctlrds.getIn
 app.post("/api/v2/conductexam/mark-examroll-attendance", conductexamctlrds.markExamRollAttendance);
 app.post("/api/v2/conductexam/seat-allocation", conductexamctlrds.allocateExamSeats);
 app.use("/api/v2/conductexam/manual-seat-allocation", require("./controllers/manualseatallocationctlrds"));
+app.use("/api/v2/conductexam/block-assignment", require("./controllers/examblockassignmentctlrds"));
+app.post("/api/v2/conductexam/barcode-ai-format", require("./controllers/exambarcodedynamicctlrds").format);
 app.get("/api/v2/conductexam/scanning-options", conductexamscanningctlrds.options);
 app.get("/api/v2/conductexam/scanning-attended-students", conductexamscanningctlrds.attendedStudents);
 app.post("/api/v2/conductexam/scanning-assign", conductexamscanningctlrds.assign);

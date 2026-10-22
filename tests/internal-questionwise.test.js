@@ -39,6 +39,14 @@ test("invalid question marks or students are rejected before writes", async () =
     const f = fixture(); assert.equal((await f.run("post", "/marks/save", { cells: [cell] })).status, 400); assert.equal(f.writes.length, 0);
   }
 });
+test("full marks are accepted but higher marks never reach storage", async () => {
+  const f = fixture();
+  assert.equal((await f.run("post", "/marks/save", { cells: [{ regno: "R1", questionid: "q1", marks: 10 }] })).status, 200);
+  assert.equal(f.writes[0].updateOne.update.$set.marks, 10);
+  const invalid = fixture();
+  assert.equal((await invalid.run("post", "/marks/save", { cells: [{ regno: "R1", questionid: "q1", marks: 10.01 }] })).status, 400);
+  assert.equal(invalid.writes.length, 0);
+});
 test("closed entry dates block questionwise saving", async () => {
   const f = fixture({ allowed: false }); assert.equal((await f.run("post", "/marks/save", { cells: [] })).status, 400);
 });

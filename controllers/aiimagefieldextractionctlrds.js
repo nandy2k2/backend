@@ -197,6 +197,13 @@ exports.models = async (req, res) => {
   }
 };
 
+exports.generateStructuredText = async ({ colid, provider, model, prompt }) => {
+  const args = { colid, model, prompt, images: [] };
+  const selected = normalizeProvider(provider);
+  const output = selected === "Ollama" ? await callOllamaVision(args) : selected === "Claude" ? await callClaudeVision(args) : selected === "ChatGPT" ? await callOpenAiVision(args) : await callGeminiVision(args);
+  return extractJson(output);
+};
+
 exports.extract = async (req, res) => {
   try {
     const { colid, provider, model, ollamaConfigId, images = [], fields = [], context } = req.body || {};
