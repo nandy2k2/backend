@@ -4,6 +4,7 @@ const AWS = require("aws-sdk");
 const mongoose = require("mongoose");
 const OnlineExam = require("../Models/onlineexamds");
 const OnlineExamAttempt = require("../Models/onlineexamattemptds");
+const { applicantAttempt, applicantAttemptResponse } = require("../utils/admissionApplicantAttempt");
 const User = require("../Models/user");
 const RegulationCourseMap = require("../Models/regulationcoursemapds");
 const Syllabus = require("../Models/syllabusds");
@@ -632,7 +633,7 @@ exports.applicantExams = async (req, res) => {
     const exams = await OnlineExam.find({ colid, _id: { $in: assignments.map((a) => a.examid) }, examcontext: /^Admission$/i, status: /^Published$/i }).sort({ starttime: 1 }).lean();
     const attempts = await OnlineExamAttempt.find({ colid, examid: { $in: exams.map((e) => e._id) }, regno: applicationid, examcontext: /^Admission$/i }).lean();
     const byExam = Object.fromEntries(attempts.map((a) => [String(a.examid), a]));
-    res.json({ success: true, data: exams.map((exam) => ({ ...exam, attempt: byExam[String(exam._id)] || null, canStart: currentAllowed(exam) && !byExam[String(exam._id)]?.submittime })) });
+    res.json({ success: true, data: exams.map((exam) => ({ _id: exam._id, examname: exam.examname, examcode: exam.examcode, timezone: exam.timezone, starttime: exam.starttime, endtime: exam.endtime, durationminutes: exam.durationminutes, attempt: applicantAttempt(byExam[String(exam._id)]), canStart: currentAllowed(exam) && !byExam[String(exam._id)]?.submittime })) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -678,7 +679,7 @@ exports.startApplicantAttempt = async (req, res) => {
       totalmarks: initialAnswers(orderedExam).reduce((sum, a) => sum + num(a.maxmarks), 0),
       answers: initialAnswers(orderedExam)
     });
-    res.json({ success: true, exam: examWithAttemptQuestionOrder(exam, attempt), attempt });
+    res.json({ success: true, exam: examWithAttemptQuestionOrder(exam, attempt), attempt: applicantAttempt(attempt) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1091,7 +1092,7 @@ exports.saveAttempt = async (req, res) => {
     });
     attempt.remainingseconds = Math.max(0, num(req.body.remainingseconds, attempt.remainingseconds));
     await attempt.save();
-    res.json({ success: true, data: attempt });
+    res.json({ success: true, data: applicantAttemptResponse(attempt) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1128,7 +1129,7 @@ exports.submitAttempt = async (req, res) => {
     attempt.remainingseconds = Math.max(0, num(req.body.remainingseconds));
     attempt.marksobtained = attempt.answers.reduce((sum, a) => sum + num(a.marksobtained), 0);
     await attempt.save();
-    res.json({ success: true, data: attempt });
+    res.json({ success: true, data: applicantAttemptResponse(attempt) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
