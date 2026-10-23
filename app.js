@@ -1008,6 +1008,7 @@ app.post('/api/v2/student-data-upload-selected-subject-update', studentDataUploa
 app.post('/api/v2/student-data-upload-specialization', studentDataUploadController.updateStudentSpecialization);
 app.post('/api/v2/student-data-upload-ai-field', studentDataUploadController.generateFieldWithAi);
 app.post('/api/v2/student-data-upload-photo', studentDataUploadController.uploadPhotoMiddleware, studentDataUploadController.uploadPhoto);
+app.use('/api/v2/student-bulk-fields', require('./controllers/studentbulkfieldsctlrds'));
 app.get('/api/v2/raw-data/options', rawDataManagementController.options);
 app.get('/api/v2/raw-data/sources', rawDataManagementController.listSources);
 app.post('/api/v2/raw-data/sources', rawDataManagementController.saveSource);
@@ -6264,6 +6265,8 @@ app.get("/api/v2/conductexam/hallticket-options", conductexamhallticketctlrds.op
 app.get("/api/v2/conductexam/hallticket-eligible-students", conductexamhallticketctlrds.getEligibleStudents);
 app.get("/api/v2/conductexam/hallticket", conductexamhallticketctlrds.getHallTicket);
 app.get("/api/v2/conductexam/hallticket-4", conductexamhallticketctlrds.getHallTicket4);
+app.use("/api/v2/conductexam/supervisor-sheet-2", require("./controllers/supervisorsheet2ctlrds"));
+app.use("/api/v2/role-signatures", require("./controllers/rolewisesignaturectlrds"));
 app.post("/api/v2/conductexam/hallticket-blockchain-store", conductexamhallticketctlrds.storeHallTicketBlockchain);
 app.get("/api/v2/public/hallticket-blockchain-verify", conductexamhallticketctlrds.verifyHallTicketBlockchain);
 app.get("/api/v2/public/hallticket-verify", conductexamhallticketctlrds.verifyHallTicket);

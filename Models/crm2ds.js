@@ -5,12 +5,13 @@ const masters = {
   source: "Source", pipeline: "Pipeline", type: "Type", category: "Category",
   leadrating: "Lead rating", case: "Case", distributiontype: "Distribution type",
   mediumofinstruction: "Medium of Instruction", quota: "Quota", document: "Document",
-  admissionoffice: "Admission office", interactionmode: "Interaction mode"
+  admissionoffice: "Admission office", interactionmode: "Interaction mode", agent: "Agent"
 };
-const masterLeadFields = { category: "crmcategory", mediumofinstruction: "Mediumofinstruction", document: "documents.documentname", interactionmode: "interactions.mode" };
+const masterLeadFields = { category: "crmcategory", mediumofinstruction: "Mediumofinstruction", document: "documents.documentname", interactionmode: "interactions.mode", agent: "agentname" };
 const excluded = new Set(["_id", "__v", "program", "programcode", "semester", "Major", "Minor", "MDC", "IDC", "VAC", "SEC", "major", "minor", "mdc", "idc", "vac", "sec", "minorsub", "mdcsub", "vocationalsub", "authenticatorsecret"]);
 const definitions = {};
 excluded.add("srno"); excluded.add("expotoken");
+for (const field of ["abcid", "rollno", "dob", "birthdate", "dateofbirth", "customFields", "admissionapplicationid", "Admissionapplicationid"]) excluded.add(field);
 for (const field of ["regno", "scholarnumber", "scholarno", "authenticator", "excluded", "role", "expopushtoken", "Smp", "smp", "profileapprovalstatus", "profileapprovalcomments", "admissionyear", "section", "isfinalyear", "eligibilityname", "designation", "regulation", "AEC", "othersub", "merit", "obtain", "obtained", "bonus", "weightage", "ncctype", "institution", "specialization1", "specialization2"]) excluded.add(field);
 User.schema.eachPath((field, schemaType) => {
   if (excluded.has(field) || field.includes(".$")) return;
@@ -52,7 +53,7 @@ Object.assign(definitions, {
   emailkey: { type: String, required: true, select: false }, phonekey: { type: String, required: true, select: false },
   counsellorname: String, counselloremail: String,
   source: String, pipeline: String, type: String, leadrating: String, case: String, distributiontype: String, crmcategory: String,
-  education: [{ level: { type: String, required: true }, institution: String, board: String, passingyear: String, subjects: [{ subject: { type: String, required: true }, obtained: { type: Number, min: 0 }, total: { type: Number, min: 0 }, grade: String }] }],
+  education: [{ level: { type: String, required: true }, institution: String, board: String, passingyear: String, marks: { type: Number, min: 0 }, grade: String, subjects: [{ subject: { type: String, required: true }, obtained: { type: Number, min: 0 }, total: { type: Number, min: 0 }, grade: String }] }],
   documents: [{ documentname: { type: String, required: true }, title: String, url: { type: String, required: true }, uploadedat: { type: Date, default: Date.now } }],
   interactions: [{ details: { type: String, required: true }, mode: { type: String, required: true }, pipeline: { type: String, required: true }, nextfollowupdate: Date, interactiondate: { type: Date, default: Date.now }, createdby: String, updatedby: String, createdAt: { type: Date, default: Date.now }, updatedAt: Date }],
   createdby: String, updatedby: String
@@ -62,6 +63,10 @@ leadSchema.index({ colid: 1, emailkey: 1 }, { unique: true });
 leadSchema.index({ colid: 1, phonekey: 1 }, { unique: true });
 const masterModels = Object.fromEntries(Object.keys(masters).map(key => {
   const schema = new mongoose.Schema({ colid: { type: Number, required: true, index: true }, name: { type: String, required: true, trim: true }, namekey: { type: String, required: true }, description: String, status: { type: String, enum: ["Active", "Inactive"], default: "Active" }, order: { type: Number, default: 0 }, createdby: String }, { timestamps: true });
+  if (key === "agent") {
+    schema.add({ email: { type: String, required: true, trim: true, lowercase: true }, phone: String, pan: String, gst: String, address: String, state: String, country: String });
+    schema.index({ colid: 1, email: 1 }, { unique: true });
+  }
   schema.index({ colid: 1, namekey: 1 }, { unique: true });
   const modelName = `crm2${key}masterds`;
   return [key, mongoose.models[modelName] || mongoose.model(modelName, schema)];

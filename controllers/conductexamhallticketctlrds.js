@@ -3,6 +3,7 @@ const StudentViewControl = require("../Models/conductexamstudentviewcontrolds");
 const Institution = require("../Models/insdetails");
 const User = require("../Models/user");
 const UserSignature = require("../Models/usersignatureds");
+const RoleSignature = require("../Models/rolewisesignatureds");
 const ProgramMaster = require("../Models/mprograms");
 const ExamMaster = require("../Models/conductexamds");
 const CourseMap = require("../Models/regulationcoursemapds");
@@ -217,10 +218,11 @@ exports.getHallTicket4 = async (req, res) => {
       CourseMap.find({ colid, academicyear: first.academicyear, coursecode: { $in: payload.rows.map(row => row.coursecode) } }).lean()
     ]);
     payload.programMaster = program || null;
+    if (req.query.variant === '4a') payload.controllerSignature = await RoleSignature.findOne({ colid, role: 'coe', status: 'Active' }).lean();
     payload.exam = { ...payload.exam, ...(exam || {}), exam: exam?.examname || payload.exam.exam };
     payload.rows = payload.rows.map(row => {
       const mapped = courses.find(course => course.coursecode === row.coursecode && course.programcode === row.programcode && course.semester === row.semester && (!row.regulation || course.regulation === row.regulation));
-      return { ...row, coursetype: row.papertype || row.coursetype || mapped?.coursetype || "Theory" };
+      return { ...row, coursemastercode: row.coursemastercode || mapped?.coursemastercode || "", coursetype: row.papertype || row.coursetype || mapped?.coursetype || "Theory" };
     });
     res.json({ data: payload });
   } catch (error) { res.status(500).json({ message: error.message }); }

@@ -71,8 +71,14 @@ async function saveMaster(kind, body, colid) {
   const existing = body.id ? await Model.findOne({ _id: body.id, colid }).lean() : null;
   if (body.id && !existing) throw error("Record not found", 404);
   const payload = { colid, name: text(body.name), namekey: text(body.name).toLowerCase(), description: text(body.description), status: body.status || "Active", order: Number(body.order || 0), createdby: text(body.user) };
+  if (kind === "agent") {
+    payload.email = emailKey(body.email);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) throw error("Enter a valid agent email");
+    for (const field of ["phone", "pan", "gst", "address", "state", "country"]) payload[field] = text(body[field]);
+  }
   const data = body.id ? await Model.findOneAndUpdate({ _id: body.id, colid }, payload, { new: true, runValidators: true }) : await Model.create(payload);
   if (!data) throw error("Record not found", 404);
+  if (kind === "agent" && existing) await Lead.updateMany({ colid, agentemail: existing.email }, { $set: { agentname: payload.name, agentemail: payload.email } });
   if (existing && existing.name !== payload.name) {
     if (kind === "document") await Lead.updateMany({ colid, "documents.documentname": existing.name }, { $set: { "documents.$[doc].documentname": payload.name } }, { arrayFilters: [{ "doc.documentname": existing.name }] });
     else if (kind === "interactionmode") await Lead.updateMany({ colid, "interactions.mode": existing.name }, { $set: { "interactions.$[entry].mode": payload.name } }, { arrayFilters: [{ "entry.mode": existing.name }] });
@@ -82,7 +88,7 @@ async function saveMaster(kind, body, colid) {
 }
 router.get("/masters/:kind", wrap(async (req, res) => {
   const Model = masterModel(req.params.kind), query = { colid: req.colid };
-  if (text(req.query.search)) query.$or = ["name", "description"].map(field => ({ [field]: regex(req.query.search) }));
+  if (text(req.query.search)) query.$or = (req.params.kind === "agent" ? ["name", "email", "phone", "pan", "gst", "state", "country"] : ["name", "description"]).map(field => ({ [field]: regex(req.query.search) }));
   if (req.query.status) query.status = req.query.status;
   const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100), skip = Math.max(Number(req.query.skip) || 0, 0);
   const [data, total] = await Promise.all([Model.find(query).sort({ order: 1, name: 1 }).skip(skip).limit(limit).lean(), Model.countDocuments(query)]);
@@ -129,7 +135,9 @@ async function saveLead(body, colid) {
     if (!Array.isArray(payload.education) || payload.education.length > 50) throw error("Enter up to 50 education records");
     payload.education = payload.education.map(record => {
       if (!text(record?.level) || !Array.isArray(record.subjects) || record.subjects.length > 200) throw error("Each education record needs a level and up to 200 subjects");
-      return { level: text(record.level), institution: text(record.institution), board: text(record.board), passingyear: text(record.passingyear), subjects: record.subjects.map(row => {
+      const marks = record.marks === "" || record.marks == null ? null : Number(record.marks);
+      if (marks !== null && (!Number.isFinite(marks) || marks < 0)) throw error("Enter valid non-negative education marks");
+      return { level: text(record.level), institution: text(record.institution), board: text(record.board), passingyear: text(record.passingyear), marks, grade: text(record.grade), subjects: record.subjects.map(row => {
         const obtained = row.obtained === "" || row.obtained == null ? null : Number(row.obtained);
         const total = row.total === "" || row.total == null ? null : Number(row.total);
         if (!text(row.subject) || [obtained, total].some(value => value !== null && (!Number.isFinite(value) || value < 0)) || (obtained !== null && total !== null && obtained > total)) throw error("Enter valid subject marks: obtained cannot exceed total");
@@ -143,10 +151,16 @@ async function saveLead(body, colid) {
     if (body.category === undefined || (body.category === existing.category && (!body.crmcategory || !demographicCategories.includes(body.category)))) payload.category = null;
   }
   for (const kind of Object.keys(masters)) {
-    if (["document", "interactionmode", "admissionoffice"].includes(kind)) continue;
+    if (["document", "interactionmode", "admissionoffice", "agent"].includes(kind)) continue;
     const field = masterLeadFields[kind] || kind;
     if (payload[field] && !await masterModels[kind].exists({ colid, name: payload[field] })) throw error(`Select ${masters[kind]} from its CRM 2 master`);
   }
+  if (body.agentemail !== undefined) {
+    const email = emailKey(body.agentemail);
+    const agent = email ? await masterModels.agent.findOne({ colid, email }).lean() : null;
+    if (email && !agent) throw error("Select an agent from this institution's Agent master");
+    payload.agentname = agent?.name || ""; payload.agentemail = agent?.email || "";
+  } else delete payload.agentname;
   if (body.admissionofficeid !== undefined || body.admissionoffice !== undefined) {
     const id = text(body.admissionofficeid), name = text(body.admissionoffice);
     const office = id || name ? await masterModels.admissionoffice.findOne({ colid, ...(id ? { _id: id } : { name }) }).lean() : null;

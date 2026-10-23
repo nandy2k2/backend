@@ -25,8 +25,8 @@ test("education retains missing numeric marks and cannot carry managed fields", 
   assert.equal(f.creates[0].education[0].subjects[0].obtained, null);
 });
 const lean = value => ({ select() { return this; }, lean: async () => value });
-function fixture({ duplicate = false, existing = null, counsellor = null, createError = null, awsConfig = null, office = null, masterExists = true } = {}) {
-  const queries = [], creates = [], updates = [], uploads = [], aggregations = [];
+function fixture({ duplicate = false, existing = null, counsellor = null, createError = null, awsConfig = null, office = null, masterExists = true, agent = null } = {}) {
+  const queries = [], creates = [], updates = [], uploads = [], aggregations = [], masterCreates = [];
   const Lead = {
     schema: schema.Lead.schema,
     exists: async query => { queries.push(query); return duplicate; },
@@ -40,7 +40,7 @@ function fixture({ duplicate = false, existing = null, counsellor = null, create
   };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(file, "utf8"), { module, exports: module.exports, require(name) {
-    if (name === "../Models/crm2ds") return { ...schema, Lead, masterModels: Object.fromEntries(Object.keys(schema.masters).map(key => [key, { exists: async query => { queries.push(query); return masterExists; }, findOne: query => { queries.push(query); return lean(key === "admissionoffice" ? office : null); } }])) };
+    if (name === "../Models/crm2ds") return { ...schema, Lead, masterModels: Object.fromEntries(Object.keys(schema.masters).map(key => [key, { create: async payload => { masterCreates.push(payload); return payload; }, exists: async query => { queries.push(query); return masterExists; }, findOne: query => { queries.push(query); return lean(key === "admissionoffice" ? office : key === "agent" ? agent : null); } }])) };
     if (name === "../Models/user") return { schema: require("../Models/user").schema, findOne: query => { queries.push(query); return lean(counsellor); } };
     if (name === "../Models/awsconfig") return { findOne: query => { queries.push(query); return lean(awsConfig); } };
     if (name === "aws-sdk") return { S3: class { putObject(payload) { uploads.push(payload); return { promise: async () => ({}) }; } } };
@@ -52,8 +52,34 @@ function fixture({ duplicate = false, existing = null, counsellor = null, create
     await layer.route.stack.at(-1).handle({ body, query, params, file }, { status(value) { status = value; return this; }, json(value) { data = value; } });
     return { status, data };
   };
-  return { queries, creates, updates, uploads, aggregations, invoke };
+  return { queries, creates, updates, uploads, aggregations, masterCreates, invoke };
 }
+test("removed lead fields are absent from metadata and cannot be saved", async () => {
+  const removed = ["abcid", "rollno", "dob", "birthdate", "dateofbirth", "customFields", "admissionapplicationid"];
+  for (const field of removed) assert.equal(schema.fields.some(item => item.field === field), false);
+  const f = fixture();
+  await f.invoke("post", "/leads/save", { colid: 42, ...leadData, ...Object.fromEntries(removed.map(field => [field, "Ignored"])) });
+  for (const field of removed) assert.equal(f.creates[0][field], undefined);
+});
+test("agent master saves requested fields with normalized email and institution scope", async () => {
+  const f = fixture();
+  const result = await f.invoke("post", "/masters/:kind/save", { colid: 42, name: "Agent", email: "AGENT@EXAMPLE.COM", phone: "1234567890", pan: "PAN", gst: "GST", address: "Address", state: "State", country: "India" }, {}, { kind: "agent" });
+  assert.equal(result.status, 200);
+  assert.equal(f.masterCreates[0].email, "agent@example.com");
+  assert.equal(f.masterCreates[0].colid, 42); assert.equal(f.masterCreates[0].country, "India");
+});
+test("lead agent name and email are resolved from the scoped master, not client text", async () => {
+  const f = fixture({ agent: { name: "Real agent", email: "agent@example.com" } });
+  assert.equal((await f.invoke("post", "/leads/save", { colid: 42, ...leadData, agentname: "Forged", agentemail: "AGENT@example.com" })).status, 200);
+  assert.equal(f.creates[0].agentname, "Real agent"); assert.equal(f.creates[0].agentemail, "agent@example.com");
+  assert.equal(f.queries.at(-1).colid, 42);
+  const invalid = fixture(); assert.equal((await invalid.invoke("post", "/leads/save", { colid: 42, ...leadData, agentemail: "foreign@example.com" })).status, 400);
+});
+test("education records retain overall marks and grade with subjectwise marks", async () => {
+  const f = fixture();
+  const result = await f.invoke("post", "/leads/save", { colid: 42, ...leadData, education: [{ level: "12th", marks: "450", grade: "A", subjects: [{ subject: "Maths", obtained: 90, total: 100, grade: "A" }] }] });
+  assert.equal(result.status, 200); assert.equal(f.creates[0].education[0].marks, 450); assert.equal(f.creates[0].education[0].grade, "A");
+});
 test("basic lead needs only identity fields, not User login or academic requirements", () => {
   const lead = new schema.Lead({ colid: 42, ...leadData, emailkey: "lead@example.com", phonekey: "919876543210" });
   assert.equal(lead.validateSync(), undefined);
