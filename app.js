@@ -810,6 +810,7 @@ app.post('/admission-form-documents-delete', admissionFormDocumentController.del
 app.post('/admission-form-documents-bulk', admissionFormDocumentController.bulkDocuments);
 app.get('/api/v2/mprograms-management', mprogramsManagementController.getPrograms);
 app.get('/api/v2/mprograms-management/options', mprogramsManagementController.getProgramOptions);
+app.get('/api/v2/mprograms-management/incharges', mprogramsManagementController.getProgramIncharges);
 app.post('/api/v2/mprograms-management', mprogramsManagementController.createProgram);
 app.post('/api/v2/mprograms-management-update', mprogramsManagementController.updateProgram);
 app.post('/api/v2/mprograms-management-delete', mprogramsManagementController.deleteProgram);
@@ -1009,6 +1010,7 @@ app.post('/api/v2/student-data-upload-specialization', studentDataUploadControll
 app.post('/api/v2/student-data-upload-ai-field', studentDataUploadController.generateFieldWithAi);
 app.post('/api/v2/student-data-upload-photo', studentDataUploadController.uploadPhotoMiddleware, studentDataUploadController.uploadPhoto);
 app.use('/api/v2/student-bulk-fields', require('./controllers/studentbulkfieldsctlrds'));
+app.use('/api/v2/biometric-id-mapping', require('./controllers/biometricidmappingctlrds'));
 app.get('/api/v2/raw-data/options', rawDataManagementController.options);
 app.get('/api/v2/raw-data/sources', rawDataManagementController.listSources);
 app.post('/api/v2/raw-data/sources', rawDataManagementController.saveSource);
@@ -5850,6 +5852,7 @@ const hrLeaveUpload = multer({ storage: multer.memoryStorage() });
 const hrleavemanagementctlrds = require("./controllers/hrleavemanagementctlrds");
 const userjoiningdatectlrds = require("./controllers/userjoiningdatectlrds");
 const hremployeeattendancectlrds = require("./controllers/hremployeeattendancectlrds");
+app.use('/api/v2/hr-biometric-attendance', require('./controllers/hrbiometricattendancectlrds'));
 const hrshiftctlrds = require("./controllers/hrshiftctlrds");
 const ds1profileeditconfigctlr = require("./controllers/ds1profileeditconfigctlr");
 const ds1profileeditlogctlr = require("./controllers/ds1profileeditlogctlr");
@@ -7341,6 +7344,8 @@ app.post("/api/v2/repair-maintenance/user-to-counter-fee/update", repairmaintena
 app.get("/api/v2/repair-maintenance/program-change/options", repairmaintenancectlrds.programChangeOptions);
 app.use("/api/v2/question-paper-indent", require("./controllers/questionpaperindentctlrds"));
 app.use("/api/v2/crm2", require("./controllers/crm2ctlrds"));
+app.use('/api/v2/admission-scholarships', require('./controllers/admissionscholarshipctlrds'));
+app.use('/api/v2/crm2-admissions', require('./controllers/crm2admissionctlrds'));
 app.use("/api/v2/crm2-programs", require("./controllers/crm2programctlrds"));
 app.post("/api/v2/repair-maintenance/program-change/apply", repairmaintenancectlrds.applyProgramChange);
 app.get("/api/v2/repair-maintenance/selected-program-change/options", repairmaintenancectlrds.selectedProgramChangeOptions);

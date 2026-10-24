@@ -1,4 +1,45 @@
 const MPrograms = require("../Models/mprograms");
+const User = require("../Models/user");
+const extraEnums = { gender: ['Male', 'Female', 'All'], coursetype: ['Regular', 'Online', 'ODL'], coursetime: ['Full', 'Parttime'], semestertype: ['Annual', 'Semester', 'Trimester'] };
+const extraStrings = ['enrollmentcode', 'displayname', 'marksheetname', 'branchcode', 'programlevelcode', 'shift', 'programincharge', 'programinchargeemail', ...Object.keys(extraEnums)];
+const extraNumbers = ['noofsemesters', 'noofyears', 'maxallowedyear'];
+const badValue = message => Object.assign(new Error(message), { statusCode: 400 });
+const escaped = value => text(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const extraValue = (body, field) => {
+  const key = Object.keys(body).find(key => key.replace(/[ _-]/g, '').toLowerCase() === field);
+  return key === undefined ? undefined : body[key];
+};
+function extraPayload(body) {
+  const result = {};
+  for (const field of extraStrings) {
+    const value = extraValue(body, field);
+    if (value === undefined) continue;
+    const cleaned = text(value), options = extraEnums[field];
+    if (options && cleaned) {
+      const match = options.find(option => option.toLowerCase() === cleaned.toLowerCase());
+      if (!match) throw badValue(`Invalid ${field}. Select ${options.join(', ')}.`);
+      result[field] = match;
+    } else result[field] = cleaned;
+  }
+  for (const field of extraNumbers) {
+    const value = extraValue(body, field);
+    if (value === undefined) continue;
+    if (value === '' || value === null) { result[field] = null; continue; }
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < 0 || (field === 'noofsemesters' && !Number.isInteger(number))) throw badValue(`${field} must be a non-negative ${field === 'noofsemesters' ? 'whole number' : 'number'}.`);
+    result[field] = number;
+  }
+  return result;
+}
+async function resolveIncharge(payload) {
+  if (payload.programincharge === undefined && payload.programinchargeemail === undefined) return;
+  const email = text(payload.programinchargeemail), name = text(payload.programincharge);
+  if (!email && !name) { payload.programincharge = ''; payload.programinchargeemail = ''; return; }
+  const people = await User.find({ colid: payload.colid, ...(email ? { email: new RegExp(`^${escaped(email)}$`, 'i') } : { name: new RegExp(`^${escaped(name)}$`, 'i') }) }).select('name email').limit(2).lean();
+  if (people.length !== 1 || !people[0].email) throw badValue('Select a valid program incharge from this institution. For duplicate names, provide the email.');
+  payload.programincharge = people[0].name;
+  payload.programinchargeemail = people[0].email;
+}
 
 const text = (value) => String(value || "").trim();
 
@@ -20,12 +61,14 @@ const programPayload = (body = {}) => {
   const amountValue = body.amount ?? body.Amount;
   const parsedAmount = amountValue === '' || amountValue === undefined || amountValue === null ? 0 : Number(amountValue);
   return {
+    ...extraPayload(body),
     name: text(body.name || program),
     user: text(body.user),
     colid: numberColid(body.colid),
     year: text(body.year || body.academicyear || body.academicYear),
     program,
     programcode: text(body.programcode || body.programCode),
+    programgroup: text(body.programgroup ?? body.programGroup ?? body['program group'] ?? body['Program Group']),
     type: text(body.type),
     level: text(body.level),
 	    institution: text(body.institution || body.Institution),
@@ -52,7 +95,7 @@ exports.getPrograms = async (req, res) => {
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
 
     const filter = { colid };
-    ["year", "type", "level", "status1", "programcode", "institution", "department", "faculty", "typeofsession", "excluded"].forEach((field) => {
+    ["year", "type", "level", "status1", "programcode", "programgroup", "institution", "department", "faculty", "typeofsession", "excluded", ...extraStrings].forEach((field) => {
       if (text(req.query[field])) filter[field] = text(req.query[field]);
     });
     if (text(req.query.program)) filter.program = new RegExp(text(req.query.program).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
@@ -70,10 +113,11 @@ exports.createProgram = async (req, res) => {
     if (!payload.colid || !payload.name || !payload.user || !payload.program || !payload.programcode) {
       return res.status(400).json({ success: false, message: "Program, program code, user and colid are required" });
     }
+    await resolveIncharge(payload);
     const data = await MPrograms.create(payload);
     res.json({ success: true, data });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -81,6 +125,7 @@ exports.updateProgram = async (req, res) => {
   try {
     const colid = numberColid(req.body.colid);
     const payload = programPayload(req.body);
+    await resolveIncharge(payload);
     const data = await MPrograms.findOneAndUpdate(
       { _id: req.body.id, colid },
       payload,
@@ -89,7 +134,7 @@ exports.updateProgram = async (req, res) => {
     if (!data) return res.status(404).json({ success: false, message: "Program not found" });
     res.json({ success: true, data });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.statusCode || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -130,14 +175,17 @@ exports.bulkPrograms = async (req, res) => {
 
     const errors = [];
     const docs = [];
-    rows.forEach((row, index) => {
-      const item = programPayload({ ...row, colid, user: req.body.user || row.user });
-      if (!item.name || !item.user || !item.program || !item.programcode) {
-        errors.push({ row: index + 2, message: "Program and programcode are required" });
-        return;
+    for (let index = 0; index < rows.length; index += 1) {
+      try {
+        const row = rows[index];
+        const item = programPayload({ ...row, colid, user: req.body.user || row.user });
+        if (!item.name || !item.user || !item.program || !item.programcode) throw badValue('Program and programcode are required');
+        await resolveIncharge(item);
+        docs.push(item);
+      } catch (error) {
+        errors.push({ row: index + 2, message: error.message });
       }
-      docs.push(item);
-    });
+    }
 
     const inserted = docs.length ? await MPrograms.insertMany(docs, { ordered: false }) : [];
     res.json({ success: true, inserted: inserted.length, errors, data: inserted });
@@ -150,7 +198,7 @@ exports.getProgramOptions = async (req, res) => {
   try {
     const colid = numberColid(req.query.colid);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
-    const [years, types, levels, statuses, institutions, departments, faculties, sessionTypes, excluded] = await Promise.all([
+    const [years, types, levels, statuses, institutions, departments, faculties, sessionTypes, excluded, programgroups] = await Promise.all([
       MPrograms.distinct("year", { colid }),
       MPrograms.distinct("type", { colid }),
       MPrograms.distinct("level", { colid }),
@@ -159,10 +207,12 @@ exports.getProgramOptions = async (req, res) => {
       MPrograms.distinct("department", { colid }),
       MPrograms.distinct("faculty", { colid }),
       MPrograms.distinct("typeofsession", { colid }),
-      MPrograms.distinct("excluded", { colid })
+      MPrograms.distinct("excluded", { colid }),
+      MPrograms.distinct("programgroup", { colid })
     ]);
     res.json({
       success: true,
+      programgroups: programgroups.filter(Boolean).sort(),
       years: years.filter(Boolean).sort(),
       types: types.filter(Boolean).sort(),
       levels: levels.filter(Boolean).sort(),
@@ -176,4 +226,15 @@ exports.getProgramOptions = async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
+};
+
+exports.getProgramIncharges = async (req, res) => {
+  try {
+    const colid = numberColid(req.query.colid);
+    if (!colid) throw badValue('colid is required');
+    const query = { colid, email: { $nin: ['', null] } };
+    if (text(req.query.search)) query.$or = ['name', 'email'].map(field => ({ [field]: new RegExp(escaped(req.query.search), 'i') }));
+    const data = await User.find(query).select('name email').sort({ name: 1 }).limit(30).lean();
+    res.json({ data });
+  } catch (error) { res.status(error.statusCode || 500).json({ message: error.message }); }
 };

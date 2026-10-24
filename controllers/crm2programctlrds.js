@@ -22,7 +22,7 @@ async function owner(req) {
   return email;
 }
 const pagination = query => ({ limit: Math.min(100, Math.max(1, Number(query.limit) || 25)), skip: Math.max(0, Number(query.skip) || 0) });
-const leadFields = ['name', 'email', 'phone', 'academicyear', 'source', 'type', 'crmcategory', 'category', 'state', 'city', 'active', 'admissionstatus', 'agentname', 'admissionoffice'];
+const leadFields = ['name', 'email', 'phone', 'academicyear', 'source', 'type', 'crmcategory', 'category', 'state', 'city', 'active', 'admitted', 'admissionstatus', 'agentname', 'admissionoffice'];
 const assignmentFields = ['academicyear', 'program', 'programcode', 'pipeline', 'case', 'location'];
 function filtersOf(source) {
   let filters;
@@ -96,6 +96,49 @@ router.post('/assign', wrap(async (req, res) => {
   }
   res.json({ saved });
 }));
+router.post('/bulk-action', wrap(async (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids)] : [];
+  const mine = req.body.mode === 'my';
+  if (!['my', 'master'].includes(req.body.mode) || !ids.length || ids.length > 100 || !ids.every(id)) throw fail('Select 1-100 valid leads');
+  const email = await owner(req);
+  const sources = mine ? await Assignment.find({ colid: req.colid, _id: { $in: ids }, counselloremail: email }).lean() : [];
+  if (mine && sources.length !== ids.length) throw fail('One or more assignments are no longer assigned to you', 403);
+  const leadids = mine ? [...new Set(sources.map(row => String(row.leadid)))] : ids;
+  const leads = await Lead.find({ colid: req.colid, _id: { $in: leadids } }).select('pipeline case followupdate').lean();
+  if (leads.length !== leadids.length) throw fail('One or more leads were not found in this institution');
+  if (req.body.action === 'active') {
+    if (!['Yes', 'No'].includes(req.body.active)) throw fail('Active must be Yes or No');
+    if (mine) await Assignment.updateMany({ colid: req.colid, _id: { $in: ids }, counselloremail: email }, { $set: { active: req.body.active, updatedby: email } }, { runValidators: true });
+    await Lead.updateMany({ colid: req.colid, _id: { $in: leadids } }, { $set: { active: req.body.active } }, { runValidators: true });
+    return res.json({ saved: leadids.length });
+  }
+  if (req.body.action !== 'transfer' || !id(req.body.mappingid) || !text(req.body.programcode)) throw fail('Select a program and its mapped counselor');
+  const mapping = await Mapping.findOne({ colid: req.colid, _id: req.body.mappingid, programcode: text(req.body.programcode) }).lean();
+  if (!mapping || !await User.exists({ colid: req.colid, email: new RegExp(`^${regex(mapping.counselloremail).source}$`, 'i'), role: { $not: /^Student$/i } })) throw fail('Selected counselor is not available for this program');
+  const years = mine ? [...new Set(sources.map(row => text(row.academicyear)))] : [text(req.body.academicyear)];
+  if (years.some(year => !year)) throw fail('Select an academic year; legacy assignments without a year must be allocated first');
+  for (const year of years) if (!await Program.exists({ colid: req.colid, year, programcode: mapping.programcode })) throw fail(`Program not available for academic year ${year}`);
+  if (mine) {
+    const keys = sources.map(row => `${row.leadid}:${row.academicyear}`);
+    if (new Set(keys).size !== keys.length) throw fail('Select only one assignment per lead and academic year for transfer');
+    for (const row of sources) {
+      const conflict = await Assignment.exists({ colid: req.colid, leadid: row.leadid, academicyear: row.academicyear, programcode: mapping.programcode, _id: { $ne: row._id } });
+      if (conflict) throw fail('A selected lead already has this program assignment. Transfer that assignment instead');
+    }
+  }
+  await ensureYearIndex(Assignment.collection);
+  const changes = { program: mapping.program, programcode: mapping.programcode, mappingid: mapping._id, counsellorname: mapping.counsellorname, counselloremail: mapping.counselloremail, location: mapping.location, updatedby: email, assignedby: email };
+  let saved = 0;
+  for (const row of mine ? sources : leads) {
+    const query = mine ? { colid: req.colid, _id: row._id, counselloremail: email } : { colid: req.colid, leadid: row._id, academicyear: years[0], programcode: mapping.programcode };
+    const update = { $set: changes };
+    if (!mine) update.$setOnInsert = { colid: req.colid, leadid: row._id, academicyear: years[0], pipeline: row.pipeline || '', case: row.case || '', followupdate: row.followupdate || null };
+    const result = await Assignment.findOneAndUpdate(query, update, { upsert: !mine, new: true, runValidators: true });
+    if (result) saved += 1;
+  }
+  if (!mine) await Lead.updateMany({ colid: req.colid, _id: { $in: leadids } }, { $set: { counsellorname: mapping.counsellorname, counselloremail: mapping.counselloremail } }, { runValidators: true });
+  res.json({ saved });
+}));
 router.get('/lead-assignments/:id', wrap(async (req, res) => {
   if (!id(req.params.id)) throw fail('Select a valid lead');
   if (!await Lead.findOne({ colid: req.colid, _id: req.params.id }).select('_id').lean()) throw fail('Lead not found', 404);
@@ -114,12 +157,20 @@ router.get('/my-leads', wrap(async (req, res) => {
     } else if (assignmentFields.includes(filter.field)) query[filter.field] = regex(filter.value);
     else if (leadFields.includes(filter.field)) { leadQuery[filter.field] = regex(filter.value); filterLeads = true; }
   }
+  if (req.query.active === 'Yes') { leadQuery.active = 'Yes'; query.active = { $ne: 'No' }; filterLeads = true; }
+  if (req.query.active === 'No') {
+    const inactive = await Lead.find({ colid: req.colid, active: 'No' }).select('_id').lean();
+    query.$or = [{ active: 'No' }, { leadid: { $in: inactive.map(row => row._id) } }];
+  }
   if (req.query.search) { leadQuery.$or = ['name', 'email', 'phone'].map(field => ({ [field]: regex(req.query.search) })); filterLeads = true; }
   if (filterLeads) query.leadid = { $in: (await Lead.find(leadQuery).select('_id').lean()).map(row => row._id) };
   const { skip, limit } = pagination(req.query);
   const rows = await Assignment.find(query).select('-interactions').sort({ updatedAt: -1, _id: -1 }).skip(skip).limit(limit).lean();
   const leads = await Lead.find({ colid: req.colid, _id: { $in: rows.map(row => row.leadid) } }).select(leadFields.join(' ')).lean();
-  res.json({ data: rows.map(row => ({ ...row, lead: leads.find(lead => String(lead._id) === String(row.leadid)) || {} })), total: await Assignment.countDocuments(query) });
+  res.json({ data: rows.map(row => {
+    const lead = leads.find(lead => String(lead._id) === String(row.leadid)) || {};
+    return { ...row, lead: { ...lead, active: row.active === 'No' ? 'No' : lead.active, admitted: row.admitted ?? lead.admitted } };
+  }), total: await Assignment.countDocuments(query) });
 }));
 router.get('/filter-options', wrap(async (req, res) => {
   const field = text(req.query.field), email = await owner(req);
@@ -147,7 +198,9 @@ router.post('/my-leads/save', wrap(async (req, res) => {
   if (!id(body.id)) throw fail('Select a valid assignment');
   const query = { colid: req.colid, _id: body.id, counselloremail: email };
   if (!await Assignment.exists(query)) throw fail('Assigned lead not found', 404);
+  if (body.admitted !== undefined && !['Yes', 'No'].includes(body.admitted)) throw fail('Admitted must be Yes or No');
   const changes = { updatedby: email };
+  if (body.admitted !== undefined) changes.admitted = body.admitted;
   for (const field of ['pipeline', 'case']) if (body[field] !== undefined) {
     const value = text(body[field]);
     if (value && !await masterModels[field].exists({ colid: req.colid, name: value })) throw fail(`Select ${field} from its master`);
@@ -164,6 +217,10 @@ router.post('/my-leads/save', wrap(async (req, res) => {
   }
   const data = await Assignment.findOneAndUpdate(query, update, { new: true, runValidators: true });
   if (!data) throw fail('Assigned lead not found', 404);
+  if (body.admitted !== undefined) {
+    const anyAdmitted = body.admitted === 'Yes' || await Assignment.exists({ colid: req.colid, leadid: data.leadid, admitted: 'Yes' });
+    await Lead.updateOne({ colid: req.colid, _id: data.leadid }, { $set: { admitted: anyAdmitted ? 'Yes' : 'No', updatedby: email } }, { runValidators: true });
+  }
   res.json({ data });
 }));
 const reports = require('./crm2programreportctlrds');

@@ -9,6 +9,10 @@ const userschema = new mongoose.Schema({
     googleemail: {
         type: String
     },
+    biometricid: {
+        type: String,
+        trim: true
+    },
     excluded: {
         type: String,
         enum: ['Yes', 'No'],

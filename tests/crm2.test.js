@@ -24,10 +24,12 @@ test("education retains missing numeric marks and cannot carry managed fields", 
   assert.equal(f.creates[0].education[0].colid, undefined);
   assert.equal(f.creates[0].education[0].subjects[0].obtained, null);
 });
-const lean = value => ({ select() { return this; }, lean: async () => value });
-function fixture({ duplicate = false, existing = null, counsellor = null, createError = null, awsConfig = null, office = null, masterExists = true, agent = null } = {}) {
+const lean = value => ({ select() { return this; }, sort() { return this; }, skip() { return this; }, limit() { return this; }, lean: async () => value });
+function fixture({ duplicate = false, existing = null, counsellor = null, createError = null, awsConfig = null, office = null, masterExists = true, agent = null, leadsRecords = [] } = {}) {
   const queries = [], creates = [], updates = [], uploads = [], aggregations = [], masterCreates = [];
   const Lead = {
+    find: query => { queries.push(query); return lean(leadsRecords); },
+    countDocuments: async query => { queries.push(query); return leadsRecords.length; },
     schema: schema.Lead.schema,
     exists: async query => { queries.push(query); return duplicate; },
     create: async payload => { if (createError) throw createError; creates.push(payload); return { _id: "lead1", ...payload }; },
@@ -54,6 +56,30 @@ function fixture({ duplicate = false, existing = null, counsellor = null, create
   };
   return { queries, creates, updates, uploads, aggregations, masterCreates, invoke };
 }
+test('merge search requires year/name and only searches scoped name matches, excluding credentials', async () => {
+  const f = fixture({ leadsRecords: [{ _id: '111111111111111111111111', name: 'Ann', password: 'secret', emailkey: 'secret', interactions: [{ details: 'Called' }] }] });
+  assert.equal((await f.invoke('get', '/leads/merge-candidates', {}, { colid: 42, name: 'Ann' })).status, 400);
+  const result = await f.invoke('get', '/leads/merge-candidates', {}, { colid: 42, academicyear: '2026-27', name: 'Ann.*' });
+  assert.equal(result.status, 200); assert.equal(f.queries[0].colid, 42); assert.equal(f.queries[0].academicyear, '2026-27');
+  assert.equal(f.queries[0].name.source, 'Ann\\.\\*');
+  assert.equal(result.data.data[0].password, undefined); assert.equal(result.data.data[0].emailkey, undefined); assert.equal(result.data.data[0].interactions[0].details, 'Called');
+});
+test('merge retains primary and only deactivates other matching institution/year leads', async () => {
+  const ids = ['111111111111111111111111', '222222222222222222222222'];
+  const f = fixture({ leadsRecords: ids.map(_id => ({ _id })) });
+  const result = await f.invoke('post', '/leads/merge', { colid: 42, academicyear: '2026-27', name: 'Ann', ids, primaryid: ids[0], user: 'admin' });
+  assert.equal(result.status, 200); assert.equal(f.updates.length, 1);
+  assert.equal(f.updates[0].$set.active, 'No');
+  const query = f.queries.at(-1); assert.equal(query.colid, 42); assert.equal(query.academicyear, '2026-27');
+  assert.equal(query._id.$in.length, 1); assert.equal(query._id.$in[0], ids[1]);
+  assert.equal((await fixture().invoke('post', '/leads/merge', { colid: 42, academicyear: '2026-27', name: 'Ann', ids, primaryid: ids[0] })).status, 409);
+  assert.equal((await f.invoke('post', '/leads/merge', { colid: 42, academicyear: '2026-27', name: 'Ann', ids, primaryid: '333333333333333333333333' })).status, 400);
+});
+test('lead master active tab is applied after dynamic filters and cannot be overridden by them', async () => {
+  const f = fixture();
+  await f.invoke('get', '/leads', {}, { colid: 42, active: 'No', filters: JSON.stringify([{ field: 'active', value: 'Yes' }]) });
+  assert.ok(f.queries.every(query => query.colid === 42 && query.active === 'No'));
+});
 test("removed lead fields are absent from metadata and cannot be saved", async () => {
   const removed = ["abcid", "rollno", "dob", "birthdate", "dateofbirth", "customFields", "admissionapplicationid"];
   for (const field of removed) assert.equal(schema.fields.some(item => item.field === field), false);

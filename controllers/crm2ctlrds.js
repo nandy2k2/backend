@@ -193,6 +193,25 @@ router.post("/leads/save", wrap(async (req, res) => {
   const saved = await saveLead(req.body, req.colid);
   res.json({ success: true, data: publicLead(saved) });
 }));
+router.get('/leads/merge-candidates', wrap(async (req, res) => {
+  const academicyear = text(req.query.academicyear), name = text(req.query.name);
+  if (!academicyear || !name) throw error('Select academic year and enter a name', 400);
+  const query = { colid: req.colid, academicyear, name: regex(name) };
+  const rows = await Lead.find(query).select('-password -emailkey -phonekey').sort({ name: 1, _id: 1 }).limit(101).lean();
+  if (rows.length > 100) throw error('More than 100 matches. Enter a more specific name', 400);
+  res.json({ data: rows.map(row => ({ ...publicLead(row), interactions: row.interactions || [] })) });
+}));
+router.post('/leads/merge', wrap(async (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? [...new Set(req.body.ids.map(text))] : [];
+  const primaryid = text(req.body.primaryid), academicyear = text(req.body.academicyear), name = text(req.body.name);
+  if (ids.length < 2 || ids.length > 100 || !ids.every(value => /^[a-f\d]{24}$/i.test(value)) || !ids.includes(primaryid) || !academicyear || !name) throw error('Select at least two matching leads and exactly one primary lead', 400);
+  const query = { colid: req.colid, academicyear, name: regex(name), _id: { $in: ids } };
+  const matches = await Lead.find(query).select('_id').lean();
+  if (matches.length !== ids.length) throw error('Some leads no longer match this search. Reload before merging', 409);
+  const others = ids.filter(value => value !== primaryid);
+  const result = await Lead.updateMany({ ...query, _id: { $in: others } }, { $set: { active: 'No', updatedby: text(req.body.user) } }, { runValidators: true });
+  res.json({ primaryid, deactivated: result.modifiedCount, message: 'Primary lead retained; other selected leads marked Active No' });
+}));
 router.get("/leads", wrap(async (req, res) => {
   const query = { colid: req.colid };
   if (text(req.query.search)) query.$or = ["name", "email", "phone"].map(field => ({ [field]: regex(req.query.search) }));
@@ -203,6 +222,7 @@ router.get("/leads", wrap(async (req, res) => {
     const type = Lead.schema.path(filter.field)?.instance;
     query[filter.field] = type === "Number" ? Number(filter.value) : type === "Date" ? new Date(filter.value) : regex(filter.value);
   }
+  if (['Yes', 'No'].includes(req.query.active)) query.active = req.query.active;
   const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100), skip = Math.max(Number(req.query.skip) || 0, 0);
   const [data, total] = await Promise.all([Lead.find(query).select("-interactions").sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(), Lead.countDocuments(query)]);
   res.json({ success: true, data: data.map(publicLead), total });

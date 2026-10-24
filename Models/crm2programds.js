@@ -8,6 +8,8 @@ mapping.index({ colid: 1, programcode: 1, counselloremail: 1, location: 1 }, { u
 const assignment = new mongoose.Schema({
   colid: { type: Number, required: true }, leadid: { type: mongoose.Schema.Types.ObjectId, required: true },
   academicyear: { type: String, trim: true },
+  active: { type: String, enum: ['Yes', 'No'], default: 'Yes' },
+  admitted: { type: String, enum: ['Yes', 'No'], default: 'No' },
   program: { type: String, required: true }, programcode: { type: String, required: true }, mappingid: mongoose.Schema.Types.ObjectId,
   counsellorname: String, counselloremail: { type: String, required: true, lowercase: true, trim: true }, location: String,
   pipeline: String, case: String, followupdate: Date, assignedby: String, updatedby: String,

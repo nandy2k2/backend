@@ -22,6 +22,7 @@ User.schema.eachPath((field, schemaType) => {
 });
 Object.assign(definitions, {
   active: { type: String, enum: ["Yes", "No"], default: "Yes" }, followupdate: Date,
+  admitted: { type: String, enum: ['Yes', 'No'], default: 'No' },
   agentname: String, agentemail: String, admissionstatus: { type: String, enum: ["Admitted", "Not admitted"], default: "Not admitted" },
   admissionofficeid: String, admissionoffice: String, campusvisitdate: Date, campuscounsellor: String, campuscounseloremail: String,
   gender: { type: String, enum: ["Male", "Female", "Not specified"] },
@@ -37,7 +38,7 @@ const groups = {
   Identity: ["name", "email", "phone", "googleemail", "regno", "scholarnumber", "abcid", "rollno", "gender", "dob", "birthdate", "nationality", "photo"],
   "Family & Address": ["fathername", "mothername", "guardianname", "guardianmobile", "guardianemail", "address", "city", "district", "state", "pincode", "category", "quota", "annualincome", "freeshipcardholder", "samestate"],
   "Education & Work": ["academicyear", "degree", "department", "joiningdate", "skills", "Mediumofinstruction", "admissionapplicationid", "isdisabled", "scholarship", ...educationFields],
-  "CRM Details": ["active", "followupdate", "agentname", "agentemail", "admissionstatus", "admissionofficeid", "admissionoffice", "campusvisitdate", "campuscounsellor", "campuscounseloremail"],
+  "CRM Details": ["active", "admitted", "followupdate", "agentname", "agentemail", "admissionstatus", "admissionofficeid", "admissionoffice", "campusvisitdate", "campuscounsellor", "campuscounseloremail"],
   "Additional Details": []
 };
 const managed = new Set(["colid", "user", "addedby", "authenticatordate", "authenticatorsetupdate", "crm2profileversion"]);

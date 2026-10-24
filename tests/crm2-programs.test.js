@@ -6,24 +6,28 @@ function setup({ noMappings = false, foreign = false } = {}) {
   const people = [{ name: 'One', email: 'one@example.com' }, { name: 'Two', email: 'two@example.com' }];
   const mappings = noMappings ? [] : [{ _id: M1, program: 'Science', programcode: 'P1', counsellorname: 'One', counselloremail: people[0].email, location: 'North' }, { _id: M2, program: 'Science', programcode: 'P1', counsellorname: 'Two', counselloremail: people[1].email }];
   const chain = (value, model, query) => ({ select(fields) { calls.push({ model, query, select: fields }); return this; }, sort() { return this; }, skip() { return this; }, limit() { return this; }, lean: async () => value });
-  const assignment = { _id: A1, leadid: L1, programcode: 'P1', counselloremail: 'one@example.com', interactions: [] };
+  const assignment = { _id: A1, leadid: L1, academicyear: '2026-27', programcode: 'P1', counselloremail: 'one@example.com', interactions: [] };
   const Mapping = {
+    findOne(query) { calls.push({ model: 'mapping', query }); return chain(mappings.find(row => row._id === query._id && row.programcode === query.programcode) || null); },
     find(query) { calls.push({ model: 'mapping', query }); return chain(mappings); },
     async create(data) { calls.push({ model: 'mapping', create: data }); return data; },
     async findOneAndUpdate(query, update) { calls.push({ model: 'mapping', query, update }); return update.$set; },
     async deleteMany(query) { calls.push({ model: 'mapping', query }); return { deletedCount: 1 }; }
   };
   const Lead = {
+    async updateOne(query, update) { calls.push({ model: 'lead', query, update }); return { modifiedCount: 1 }; },
+    async updateMany(query, update) { calls.push({ model: 'lead', query, update }); return { modifiedCount: 1 }; },
     find(query) { calls.push({ model: 'lead', query }); return chain(query._id?.$in ? query._id.$in.map(_id => ({ _id, name: 'Lead', pipeline: 'New' })) : [{ _id: L1 }], 'lead', query); },
     findOne(query) { calls.push({ model: 'lead', query }); return chain({ _id: L1, name: 'Lead' }); },
     async distinct(field, query) { calls.push({ model: 'lead', query }); return ['2026-27']; }
   };
   const Assignment = {
+    async updateMany(query, update) { calls.push({ model: 'assignment', query, update }); return { modifiedCount: 1 }; },
     async aggregate(pipeline) { calls.push({ model: 'assignment', aggregate: pipeline }); return [{ _id: 'one@example.com', count: 5 }, { _id: 'two@example.com', count: 0 }]; },
     async findOneAndUpdate(query, update, options) { calls.push({ model: 'assignment', query, update, options }); return { ...assignment, ...update.$set }; },
-    find(query) { calls.push({ model: 'assignment', query }); return chain([assignment], 'assignment', query); },
+    find(query) { calls.push({ model: 'assignment', query }); return chain(foreign ? [] : [assignment], 'assignment', query); },
     findOne(query) { calls.push({ model: 'assignment', query }); return chain(foreign ? null : assignment); },
-    async exists(query) { calls.push({ model: 'assignment', query }); return !foreign; },
+    async exists(query) { calls.push({ model: 'assignment', query }); return query._id?.$ne ? false : !foreign; },
     async countDocuments(query) { calls.push({ model: 'assignment', query }); return 1; },
     async distinct(field, query) { calls.push({ model: 'assignment', query }); return field === 'leadid' ? [L1] : ['Science']; }
   };
@@ -36,10 +40,51 @@ function setup({ noMappings = false, foreign = false } = {}) {
     '../Models/user': { exists: async query => { calls.push({ model: 'user', query }); return true; }, find: query => { calls.push({ model: 'user', query }); return chain(people); }, findOne: query => { calls.push({ model: 'user', query }); return chain(people[0]); } }
   };
   const module = { exports: {} };
+  deps['../Models/mprograms'].exists = async query => { calls.push({ model: 'program', query }); return true; };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../controllers/crm2programctlrds.js'), 'utf8'), { module, require: name => name === 'express' ? { Router: () => ({ get: (route, fn) => { routes[`GET ${route}`] = fn; }, post: (route, fn) => { routes[`POST ${route}`] = fn; } }) } : deps[name] });
   const call = async (route, data = {}, params = {}) => { if (route === 'POST /assign') data = { academicyear: '2026-27', ...data }; let status = 200, body; await routes[route]({ query: data, body: data, params }, { status(value) { status = value; return this; }, json(value) { body = value; } }); return { status, body }; };
   return { call, calls };
 }
+test('bulk Active update validates Yes/No and restricts programwise selection to owned assignments', async () => {
+  const f = setup();
+  assert.equal((await f.call('POST /bulk-action', { colid: 42, user: 'one@example.com', mode: 'my', ids: [A1], action: 'active', active: 'No' })).status, 200);
+  const write = f.calls.find(row => row.model === 'lead' && row.update);
+  assert.equal(write.query.colid, 42); assert.equal(String(write.query._id.$in[0]), L1); assert.equal(write.update.$set.active, 'No');
+  assert.equal((await setup().call('POST /bulk-action', { colid: 42, user: 'one@example.com', mode: 'master', ids: [L1], action: 'active', active: 'INVALID' })).status, 400);
+  assert.equal((await setup({ foreign: true }).call('POST /bulk-action', { colid: 42, user: 'one@example.com', mode: 'my', ids: [A1], action: 'active', active: 'Yes' })).status, 403);
+});
+test('master transfer validates mapped program counselor and updates only selected program assignment and lead counselor', async () => {
+  const f = setup();
+  const result = await f.call('POST /bulk-action', { colid: 42, user: 'one@example.com', mode: 'master', ids: [L1, L2], action: 'transfer', academicyear: '2026-27', programcode: 'P1', mappingid: M2 });
+  assert.equal(result.status, 200); assert.equal(result.body.saved, 2);
+  const writes = f.calls.filter(row => row.model === 'assignment' && row.update);
+  assert.equal(writes.length, 2); assert.equal(writes[0].query.academicyear, '2026-27'); assert.equal(writes[0].update.$set.counselloremail, 'two@example.com'); assert.equal(writes[0].update.$set.interactions, undefined);
+  assert.equal((await setup().call('POST /bulk-action', { colid: 42, user: 'one@example.com', mode: 'master', ids: [L1], action: 'transfer', academicyear: '2026-27', programcode: 'OTHER', mappingid: M2 })).status, 400);
+});
+test('programwise transfer updates owned assignment in place and preserves history and academic year', async () => {
+  const f = setup();
+  const result = await f.call('POST /bulk-action', { colid: 42, user: 'one@example.com', mode: 'my', ids: [A1], action: 'transfer', programcode: 'P1', mappingid: M2 });
+  assert.equal(result.status, 200);
+  const write = f.calls.find(row => row.model === 'assignment' && row.update);
+  assert.equal(write.query._id, A1); assert.equal(write.query.counselloremail, 'one@example.com'); assert.equal(write.options.upsert, false);
+  assert.equal(write.update.$set.interactions, undefined); assert.equal(write.update.$set.academicyear, undefined);
+});
+test('programwise active tabs filter the linked lead while retaining counselor scope', async () => {
+  const f = setup();
+  await f.call('GET /my-leads', { colid: 42, user: 'one@example.com', active: 'No', filters: JSON.stringify([{ field: 'active', value: 'Yes' }]) });
+  const leadQuery = f.calls.find(row => row.model === 'lead' && row.query.active)?.query;
+  assert.equal(leadQuery.colid, 42); assert.equal(leadQuery.active, 'No');
+  const assignmentQuery = f.calls.find(row => row.model === 'assignment' && row.query)?.query;
+  assert.equal(assignmentQuery.counselloremail, 'one@example.com'); assert.equal(assignmentQuery.colid, 42);
+});
+test('programwise Admitted updates linked institution-scoped lead only after ownership validation', async () => {
+  const f = setup();
+  assert.equal((await f.call('POST /my-leads/save', { colid: 42, user: 'one@example.com', id: A1, admitted: 'Yes' })).status, 200);
+  const write = f.calls.find(row => row.model === 'lead' && row.update);
+  assert.equal(write.query.colid, 42); assert.equal(write.query._id, L1); assert.equal(write.update.$set.admitted, 'Yes');
+  assert.equal((await setup({ foreign: true }).call('POST /my-leads/save', { colid: 42, user: 'one@example.com', id: A1, admitted: 'Yes' })).status, 404);
+  assert.equal((await setup().call('POST /my-leads/save', { colid: 42, user: 'one@example.com', id: A1, admitted: 'Other' })).status, 400);
+});
 test('mapping validates master data and stores auto-populated name and email scoped to institution', async () => {
   const { call, calls } = setup();
   const result = await call('POST /mappings/save', { colid: 42, programcode: 'P1', counselloremail: 'one@example.com', location: 'North' });
