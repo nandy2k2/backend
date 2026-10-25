@@ -8,6 +8,13 @@ const Payment = require('../Models/skillpaymentlinkds');
 const { SkillZoneAccess: Access } = require('../Models/skilldevelopmentzoneds');
 const router = express.Router();
 const text = value => String(value ?? '').trim();
+function paymentContact(body) {
+  const email = text(body.email) || 'nandy2k2@gmail.com';
+  const phone = text(body.phone || body.phonenumber) || '9008168822';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Enter a valid payment email');
+  if (!/^\+?\d{10,15}$/.test(phone)) throw new Error('Enter a valid payment phone number (10 to 15 digits)');
+  return { email, phone };
+}
 const exact = value => new RegExp(`^${text(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 function validate(body) {
   const colid = Number(body.colid), amount = Number(body.amount);
@@ -34,23 +41,24 @@ const wrap = fn => async (req, res) => {
 };
 router.post('/start', wrap(async (req, res) => {
   const { colid, amount, origin } = validate(req.body);
+  const contact = paymentContact(req.body);
   const students = await User.find({ colid, regno: text(req.body.regno), role: 'Student' }).select('name email phone regno').limit(2).lean();
   if (students.length !== 1) throw new Error('Student not found or regno is duplicated in this institution');
   const student = students[0];
   const config = await Config.findOne({ colid, isactive: true, $or: [{ configscope: 'Admin' }, { configscope: { $exists: false } }, { configscope: '' }] }).sort({ updatedAt: -1 }).lean();
   if (!config) throw new Error('Active admin Cashfree configuration is required');
-  if (!student.email || !student.phone) throw new Error('Student email and phone must be saved in User master');
+  if (!student.email) throw new Error('Student email must be saved in User master for Skill Development access');
   const token = crypto.randomBytes(32).toString('hex');
   const orderid = `SKLINK-${crypto.randomBytes(16).toString('hex')}`;
   const payment = await Payment.create({ token, orderid, colid, amount, studentid: student._id, regno: student.regno, email: student.email.toLowerCase(), student: student.name, configid: config._id, accessid: new mongoose.Types.ObjectId() });
   const data = await gateway(config, '/orders', {
     order_id: orderid, order_amount: amount, order_currency: 'INR',
-    customer_details: { customer_id: String(student._id), customer_name: student.name, customer_email: student.email, customer_phone: String(student.phone) },
+    customer_details: { customer_id: String(student._id), customer_name: student.name, customer_email: contact.email, customer_phone: contact.phone },
     order_note: 'Skill Development - one month access',
     order_meta: { return_url: `${origin}/skill-development-payment-link?token=${token}` }
   });
   if (!data.payment_session_id) throw new Error('Cashfree did not return a payment session');
-  await Log.create({ colid, orderid, amount, originalamount: amount, configid: String(config._id), configscope: 'Admin', environment: config.environment, source: 'SkillDevelopmentPaymentLink', sourceid: String(payment._id), regno: student.regno, customername: student.name, customeremail: student.email, customerphone: String(student.phone), paymentsessionid: data.payment_session_id, cashfreeorderid: String(data.cf_order_id || ''), status: data.order_status || 'ACTIVE', gatewayresponse: data });
+  await Log.create({ colid, orderid, amount, originalamount: amount, configid: String(config._id), configscope: 'Admin', environment: config.environment, source: 'SkillDevelopmentPaymentLink', sourceid: String(payment._id), regno: student.regno, customername: student.name, customeremail: contact.email, customerphone: contact.phone, paymentsessionid: data.payment_session_id, cashfreeorderid: String(data.cf_order_id || ''), status: data.order_status || 'ACTIVE', gatewayresponse: data });
   res.json({ success: true, token, sessionid: data.payment_session_id, mode: config.environment });
 }));
 router.post('/verify', wrap(async (req, res) => {
@@ -70,4 +78,4 @@ router.post('/verify', wrap(async (req, res) => {
   await Log.updateOne({ colid: payment.colid, orderid: payment.orderid }, { $set: { status: 'PAID', paymentstatus: 'Paid', paidamount: payment.amount, paiddate: fixed.accessfrom, verifyresponse: data } });
   res.json({ success: true, paid: true, accesstill: fixed.accesstill, message: 'Payment successful. Skill Development access is active. Please logout and login again.' });
 }));
-module.exports = { router, validate, exact };
+module.exports = { router, validate, exact, paymentContact };

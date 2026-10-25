@@ -1,11 +1,19 @@
 const { test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { router, validate } = require('../controllers/skillpaymentlinkctlrds');
+const { router, validate, paymentContact } = require('../controllers/skillpaymentlinkctlrds');
 const Payment = require('../Models/skillpaymentlinkds');
 const Config = require('../Models/cashfreeconfigds');
 const Log = require('../Models/cashfreepaymentlogds');
 const { SkillZoneAccess: Access } = require('../Models/skilldevelopmentzoneds');
 const originals = [];
+test('payment contact supports query values and independent defaults', () => {
+  assert.deepEqual(paymentContact({}), { email: 'nandy2k2@gmail.com', phone: '9008168822' });
+  assert.deepEqual(paymentContact({ email: 'student@example.com' }), { email: 'student@example.com', phone: '9008168822' });
+  assert.deepEqual(paymentContact({ phone: '9876543210' }), { email: 'nandy2k2@gmail.com', phone: '9876543210' });
+  assert.deepEqual(paymentContact({ email: 'student@example.com', phonenumber: '9876543210' }), { email: 'student@example.com', phone: '9876543210' });
+  assert.throws(() => paymentContact({ email: 'bad' }));
+  assert.throws(() => paymentContact({ phone: 'bad' }));
+});
 function stub(object, key, value) { originals.push([object, key, object[key]]); object[key] = value; }
 afterEach(() => { while (originals.length) { const [object, key, value] = originals.pop(); object[key] = value; } });
 test('validates institution, student identity, amount precision and return origin', () => {
