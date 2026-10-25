@@ -7500,6 +7500,7 @@ app.get("/api/v2/cashfree/config", cashfreectlrds.listConfigs);
 app.post("/api/v2/cashfree/config", cashfreectlrds.saveConfig);
 app.post("/api/v2/cashfree/config/delete", cashfreectlrds.deleteConfig);
 app.post("/api/v2/cashfree/order", cashfreectlrds.createOrder);
+app.use('/api/v2/skill-payment-link', require('./controllers/skillpaymentlinkctlrds').router);
 app.get("/api/v2/cashfree/verify", cashfreectlrds.verifyOrder);
 app.post("/api/v2/cashfree/verify", cashfreectlrds.verifyOrder);
 app.get("/api/v2/cashfree/logs", cashfreectlrds.listLogs);
