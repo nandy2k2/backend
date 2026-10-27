@@ -219,6 +219,7 @@ exports.getHallTicket4 = async (req, res) => {
     ]);
     payload.programMaster = program || null;
     if (req.query.variant === '4a') payload.controllerSignature = await RoleSignature.findOne({ colid, role: 'coe', status: 'Active' }).lean();
+    if (req.query.variant === '4c') payload.principalSignature = await RoleSignature.findOne({ colid, role: 'principal', status: 'Active' }).lean();
     payload.exam = { ...payload.exam, ...(exam || {}), exam: exam?.examname || payload.exam.exam };
     payload.rows = payload.rows.map(row => {
       const mapped = courses.find(course => course.coursecode === row.coursecode && course.programcode === row.programcode && course.semester === row.semester && (!row.regulation || course.regulation === row.regulation));
