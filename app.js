@@ -7581,6 +7581,10 @@ app.get("/api/v2/parent-portal/student-context", parentportalctlrds.studentConte
 app.post("/api/v2/addprconfigds2", prconfigdsctlr2.addprconfigds2);
 app.get("/api/v2/getprconfigds2", prconfigdsctlr2.getprconfigds2);
 app.post("/api/v2/updateprconfigds2", prconfigdsctlr2.updateprconfigds2);
+app.get('/api/v2/purchase2/pr-availability', purchase2crudctlrds.getPrAvailability);
+app.post('/api/v2/purchase2/po-from-pr', purchase2crudctlrds.createPoFromPr);
+app.post('/api/v2/purchase2/po-draft/save', purchase2crudctlrds.savePoDraft);
+app.post('/api/v2/purchase2/po-draft/action', purchase2crudctlrds.poAction);
 app.get("/api/v2/purchase2/:model", purchase2crudctlrds.getPurchase2Rows);
 app.post("/api/v2/purchase2/:model", purchase2crudctlrds.savePurchase2Row);
 app.post("/api/v2/purchase2/:model/delete", purchase2crudctlrds.deletePurchase2Row);

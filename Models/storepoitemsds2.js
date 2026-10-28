@@ -17,6 +17,9 @@ const storepoitemsdsschema = new mongoose.Schema({
     year: {
         type: String
     },
+    pritemid: { type: String, index: true },
+    prnumber: { type: String },
+    prallocation: { type: Boolean },
     poid: {
         type: String
     },

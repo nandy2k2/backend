@@ -32,6 +32,16 @@ const storepoorderdsschema = new mongoose.Schema({
     storeid: {
         type: String
     },
+    deliverylocation: String,
+    deliveryaddress: String,
+    deliveryphone: String,
+    deliveryemail: String,
+    deliverycontactperson: String,
+    deliveryinstructions: String,
+    deliverydate: String,
+    vendoraddress: String,
+    vendorcontact: String,
+    vendorgst: String,
     storename: {
         type: String
     },

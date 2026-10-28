@@ -66,7 +66,7 @@ function fixture() {
   const controller = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../controllers/purchase2crudctlrds.js"), "utf8"), {
     module: controller, exports: controller.exports,
-    require: name => name.endsWith("purchase2Amounts") ? amounts : name.endsWith("/storepoitemsds2") ? itemModel : name.endsWith("/storepoorderds2") ? headerModel : {}
+    require: name => name.endsWith('purchase2PoRules') ? require('../utils/purchase2PoRules') : name.endsWith("purchase2Amounts") ? amounts : name.endsWith("/storepoitemsds2") ? itemModel : name.endsWith("/storepoorderds2") ? headerModel : {}
   });
   async function invoke(action, model, body, query = {}) {
     let code = 200, data;

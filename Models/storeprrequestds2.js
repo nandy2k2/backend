@@ -2,6 +2,7 @@ const createModel = require("./purchase2genericmodel");
 
 module.exports = createModel("storeprrequestds2", {
   prnumber: { type: String, trim: true, index: true },
+  porevision: { type: Number, default: 0 },
   storeid: { type: String, trim: true },
   storename: { type: String, trim: true },
   departmentname: { type: String, trim: true },

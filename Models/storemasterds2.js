@@ -16,6 +16,10 @@ const storemasterschema = new mongoose.Schema({
     storename: {
         type: String,
     },
+    address: String,
+    email: String,
+    contactperson: String,
+    contactnumber: String,
     location: {
         type: String
     },

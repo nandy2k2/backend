@@ -69,10 +69,26 @@ async function normalizePoPayload(model, payload, existing = {}) {
   if (model === "storepoitemsds2") {
     const merged = { ...existing, ...payload };
     if (!merged.poid || !await models.storepoorderds2.exists({ colid: payload.colid, poid: merged.poid })) throw new Error("Select an existing PO before adding items");
+    const header = await models.storepoorderds2.findOne({ colid: payload.colid, poid: merged.poid }).lean();
+    if (header && !require('../utils/purchase2PoRules').draft(header)) throw new Error('Submitted or approved PO items are locked');
+    if (header?.prnumber) {
+      if (!existing._id) throw new Error('Add PR items using Create PO from PR to prevent duplicate allocations');
+      if (Number(merged.quantity) > Number(existing.quantity)) throw new Error('PR-linked quantity cannot increase here. Create a PO for the remaining PR quantity');
+      for (const field of ['poid','pritemid','itemid','itemcode']) if (payload[field] !== undefined && String(payload[field] || '') !== String(existing[field] || '')) throw new Error('The PR line and PO linkage cannot change');
+    } else if (merged.pritemid) throw new Error('A PR line must belong to a PR-linked PO');
     Object.assign(payload, cleanPayload(calculatePoLine(merged, true)));
     delete payload.calculationerror;
   }
   if (model === "storepoorderds2") {
+    const rules = require('../utils/purchase2PoRules');
+    if (existing._id) {
+      rules.guardHeader(existing, payload);
+      for (const field of ['postatus','approvalStatus','currentStep','submittedtime','approvedtime','approvalhistory']) {
+        if (payload[field] !== undefined && JSON.stringify(payload[field]) !== JSON.stringify(existing[field])) throw new Error('Use the PO workbench submission and approval actions to change lifecycle status');
+      }
+    } else if (!rules.draft(payload)) throw new Error('New purchase orders must start as Draft');
+    if (payload.prnumber && !existing._id) throw new Error('Use Create PO from PR for atomic PR allocation');
+    if (existing._id && String(payload.prnumber ?? existing.prnumber ?? '') !== String(existing.prnumber || '')) throw new Error('A PO cannot change its linked PR');
     payload.poid = payload.poid || existing.poid;
     if (!payload.poid) throw new Error("PO number is required");
     if (existing.poid && existing.poid !== payload.poid && await models.storepoitemsds2.exists({ colid: payload.colid, poid: existing.poid })) throw new Error("PO number cannot change after items are added");
@@ -223,6 +239,30 @@ exports.getPurchase2Rows = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+exports.getPrAvailability = async (req, res) => {
+  try {
+    const colid = Number(req.query.colid);
+    if (!Number.isFinite(colid) || colid <= 0) throw new Error('Institution is required');
+    res.json({ success: true, data: await require('../services/purchase2PrPo').list(colid, text(req.query.prnumber)) });
+  } catch (error) { res.status(400).json({ success: false, message: error.message }); }
+};
+exports.createPoFromPr = async (req, res) => {
+  try {
+    const actor = await require('../services/purchase2PoAccess').staff(req);
+    const colid = actor.colid;
+    if (!Number.isFinite(colid) || colid <= 0 || !text(req.body.user) || !text(req.body.prnumber) || !req.body.assignmentid) throw new Error('Institution, assigned PR and user are required');
+    const data = await require('../services/purchase2PrPo').create(colid, { ...req.body, user: actor.email, name: actor.name });
+    res.json({ success: true, data });
+  } catch (error) { res.status(409).json({ success: false, message: error.code === 20 ? 'PR-based PO creation requires MongoDB replica-set transactions' : error.message }); }
+};
+exports.savePoDraft = async (req, res) => {
+  try { const actor = await require('../services/purchase2PoAccess').staff(req); res.json({ success: true, data: await require('../services/purchase2PoDraft').save(actor, req.body) }); }
+  catch (error) { res.status(409).json({ success: false, message: error.message }); }
+};
+exports.poAction = async (req, res) => {
+  try { const actor = await require('../services/purchase2PoAccess').staff(req); res.json({ success: true, data: await require('../services/purchase2PoDraft').action(actor, req.body) }); }
+  catch (error) { res.status(403).json({ success: false, message: error.message }); }
+};
 
 exports.savePurchase2Row = async (req, res) => {
   try {
@@ -244,6 +284,10 @@ exports.savePurchase2Row = async (req, res) => {
       await refreshPoTotals(payload.colid, data.poid);
     }
     const result = req.params.model === "storepoorderds2" ? await refreshPoTotals(payload.colid, data.poid) : data;
+    if (isPo) {
+      const header = req.params.model === 'storepoorderds2' ? data : await models.storepoorderds2.findOne({ colid: payload.colid, poid: data.poid }).lean();
+      if (header?.prnumber) await require('../services/purchase2PrPo').refresh(payload.colid, header.prnumber);
+    }
     res.json({ success: true, data: result || data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -254,9 +298,18 @@ exports.deletePurchase2Row = async (req, res) => {
   try {
     const Model = getModel(req.params.model);
     if (!Model) return res.status(404).json({ success: false, message: "Purchase 2 model not found" });
+    if (['storepoitemsds2','storepoorderds2'].includes(req.params.model)) {
+      const row = await Model.findOne({ _id: req.body.id, colid: Number(req.body.colid) }).lean();
+      const header = req.params.model === 'storepoorderds2' ? row : row ? await models.storepoorderds2.findOne({ colid: Number(req.body.colid), poid: row.poid }).lean() : null;
+      if (header && !require('../utils/purchase2PoRules').draft(header)) throw new Error('Submitted or approved POs cannot be deleted or have items removed');
+    }
     const data = await Model.findOneAndDelete({ _id: req.body.id, colid: Number(req.body.colid) });
     if (!data) return res.status(404).json({ success: false, message: "Record not found" });
     if (req.params.model === "storepoitemsds2") await refreshPoTotals(Number(req.body.colid), data.poid);
+    if (['storepoitemsds2','storepoorderds2'].includes(req.params.model)) {
+      const header = req.params.model === 'storepoorderds2' ? data : await models.storepoorderds2.findOne({ colid: Number(req.body.colid), poid: data.poid }).lean();
+      if (header?.prnumber) await require('../services/purchase2PrPo').refresh(Number(req.body.colid), header.prnumber);
+    }
     res.json({ success: true, message: "Deleted" });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
