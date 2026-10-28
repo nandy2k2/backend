@@ -164,6 +164,7 @@ const roleAccessMap = {
     ...crmAccessCatalog.voiceAiAll
   ],
   counselor: [
+    ["Dashboard", "Dashboard", "Counsellor dashboard", "/counsellor-dashboard"],
     ["CRM", "CRM", "My leads", "/crm-my-leads"],
     ["CRM", "CRM", "My followup", "/crm-my-followups"],
     ["CRM", "CRM", "Mark campus visit", "/crm-counselor-campus-visit"],
@@ -180,6 +181,7 @@ const roleAccessMap = {
     ...crmAccessCatalog.voiceAiAll
   ],
   telecaller: [
+    ["Dashboard", "Dashboard", "Telecaller dashboard", "/telecaller-dashboard"],
     ["CRM", "CRM", "My leads", "/crm-my-leads"],
     ["CRM", "CRM", "My followup", "/crm-my-followups"],
     ...crmAccessCatalog.changePassword,

@@ -1043,6 +1043,7 @@ app.get('/api/v2/examination-model2/component-marks-rows', conductExamComponentA
 app.post('/api/v2/examination-model2/component-marks-savebulk', conductExamComponentAllocationController.saveExaminerMarks);
 app.post('/api/v2/examination-model2/component-marks-submit', conductExamComponentAllocationController.submitExaminerMarks);
 app.get('/api/v2/examination-model2/component-marks', conductExamComponentAllocationController.listMarks);
+app.get('/api/v2/student-internal-marks', require('./controllers/studentinternalmarksctlrds').list);
 app.post('/api/v2/examination-model2/component-marks', conductExamComponentAllocationController.saveMark);
 app.post('/api/v2/examination-model2/component-marks-delete', conductExamComponentAllocationController.deleteMark);
 app.post('/api/v2/examination-model2/component-marks-bulk', conductExamComponentAllocationController.bulkMarks);
@@ -7344,6 +7345,12 @@ app.post("/api/v2/repair-maintenance/user-to-counter-fee/update", repairmaintena
 app.get("/api/v2/repair-maintenance/program-change/options", repairmaintenancectlrds.programChangeOptions);
 app.use("/api/v2/question-paper-indent", require("./controllers/questionpaperindentctlrds"));
 app.use("/api/v2/crm2", require("./controllers/crm2ctlrds"));
+app.use('/api/v2/crm2/config', require('./controllers/crm2configurationctlrds').router);
+app.use('/api/v2/crm2/lead-records', require('./controllers/crm2leadrecordsctlrds').router);
+app.use('/api/v2/crm2/applications', require('./controllers/crm2applicationsctlrds').router);
+app.use('/api/v2/lead-portal', require('./controllers/crm2leadportalctlrds').router);
+app.use('/api/v2/crm2-counselor-dashboard', require('./controllers/crm2counselordashboardctlrds').router);
+app.use('/api/v2/crm2-telecaller-dashboard', (req, res, next) => { req.telecallerDashboard = true; next(); }, require('./controllers/crm2counselordashboardctlrds').router);
 app.use('/api/v2/admission-scholarships', require('./controllers/admissionscholarshipctlrds'));
 app.use('/api/v2/crm2-admissions', require('./controllers/crm2admissionctlrds'));
 app.use("/api/v2/crm2-programs", require("./controllers/crm2programctlrds"));

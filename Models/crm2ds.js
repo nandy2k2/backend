@@ -11,6 +11,7 @@ const masterLeadFields = { category: "crmcategory", mediumofinstruction: "Medium
 const excluded = new Set(["_id", "__v", "program", "programcode", "semester", "Major", "Minor", "MDC", "IDC", "VAC", "SEC", "major", "minor", "mdc", "idc", "vac", "sec", "minorsub", "mdcsub", "vocationalsub", "authenticatorsecret"]);
 const definitions = {};
 excluded.add("srno"); excluded.add("expotoken");
+excluded.add('biometricid'); excluded.add('notification');
 for (const field of ["abcid", "rollno", "dob", "birthdate", "dateofbirth", "customFields", "admissionapplicationid", "Admissionapplicationid"]) excluded.add(field);
 for (const field of ["regno", "scholarnumber", "scholarno", "authenticator", "excluded", "role", "expopushtoken", "Smp", "smp", "profileapprovalstatus", "profileapprovalcomments", "admissionyear", "section", "isfinalyear", "eligibilityname", "designation", "regulation", "AEC", "othersub", "merit", "obtain", "obtained", "bonus", "weightage", "ncctype", "institution", "specialization1", "specialization2"]) excluded.add(field);
 User.schema.eachPath((field, schemaType) => {
@@ -22,6 +23,8 @@ User.schema.eachPath((field, schemaType) => {
 });
 Object.assign(definitions, {
   active: { type: String, enum: ["Yes", "No"], default: "Yes" }, followupdate: Date,
+  telecallername: String, telecalleremail: String, dateadded: { type: Date, default: Date.now },
+  country: String,
   admitted: { type: String, enum: ['Yes', 'No'], default: 'No' },
   agentname: String, agentemail: String, admissionstatus: { type: String, enum: ["Admitted", "Not admitted"], default: "Not admitted" },
   admissionofficeid: String, admissionoffice: String, campusvisitdate: Date, campuscounsellor: String, campuscounseloremail: String,
@@ -36,12 +39,13 @@ for (const level of ["12th", "10th"]) for (const suffix of ["institution", "pass
 }
 const groups = {
   Identity: ["name", "email", "phone", "googleemail", "regno", "scholarnumber", "abcid", "rollno", "gender", "dob", "birthdate", "nationality", "photo"],
-  "Family & Address": ["fathername", "mothername", "guardianname", "guardianmobile", "guardianemail", "address", "city", "district", "state", "pincode", "category", "quota", "annualincome", "freeshipcardholder", "samestate"],
+  "Family & Address": ["fathername", "mothername", "guardianname", "guardianmobile", "guardianemail", "address", "country", "state", "city", "district", "pincode", "category", "quota", "annualincome", "freeshipcardholder", "samestate"],
   "Education & Work": ["academicyear", "degree", "department", "joiningdate", "skills", "Mediumofinstruction", "admissionapplicationid", "isdisabled", "scholarship", ...educationFields],
-  "CRM Details": ["active", "admitted", "followupdate", "agentname", "agentemail", "admissionstatus", "admissionofficeid", "admissionoffice", "campusvisitdate", "campuscounsellor", "campuscounseloremail"],
+  "CRM Details": ["telecallername", "telecalleremail", "dateadded", "active", "admitted", "followupdate", "agentname", "agentemail", "admissionstatus", "admissionofficeid", "admissionoffice", "campusvisitdate", "campuscounsellor", "campuscounseloremail"],
   "Additional Details": []
 };
 const managed = new Set(["colid", "user", "addedby", "authenticatordate", "authenticatorsetupdate", "crm2profileversion"]);
+managed.add('dateadded');
 const profileSchema = new mongoose.Schema(definitions);
 const fields = Object.keys(definitions).filter(field => !field.includes(".$") && !managed.has(field)).map(field => {
   const original = profileSchema.path(field);
@@ -53,6 +57,9 @@ Object.assign(definitions, {
   email: { type: String, required: true, trim: true }, phone: { type: String, required: true, trim: true },
   emailkey: { type: String, required: true, select: false }, phonekey: { type: String, required: true, select: false },
   counsellorname: String, counselloremail: String,
+  counsellorassignedat: Date,
+  telecallerassignedat: Date,
+  programsinterested: [{ academicyear: { type: String, required: true }, program: { type: String, required: true }, programcode: { type: String, required: true }, priority: { type: Number, min: 1 } }],
   source: String, pipeline: String, type: String, leadrating: String, case: String, distributiontype: String, crmcategory: String,
   education: [{ level: { type: String, required: true }, institution: String, board: String, passingyear: String, marks: { type: Number, min: 0 }, grade: String, subjects: [{ subject: { type: String, required: true }, obtained: { type: Number, min: 0 }, total: { type: Number, min: 0 }, grade: String }] }],
   documents: [{ documentname: { type: String, required: true }, title: String, url: { type: String, required: true }, uploadedat: { type: Date, default: Date.now } }],

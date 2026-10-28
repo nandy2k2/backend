@@ -5,6 +5,106 @@ const { createRequire } = require("node:module");
 const schema = require("../Models/crm2ds");
 const file = path.join(__dirname, "../controllers/crm2ctlrds.js"), actualRequire = createRequire(file);
 const leadData = { name: "Lead", email: "LEAD@example.com", phone: "+91 98765-43210" };
+test('bulk telecaller assignment derives identity and email from the institution user master', async () => {
+  const f = fixture({ counsellor: { name: 'Telecaller', email: 'tele@example.com' } });
+  const result = await f.invoke('post', '/leads/bulk-update', { colid: 42, ids: ['111111111111111111111111'], field: 'telecalleremail', value: 'tele@example.com', telecallername: 'Spoof' });
+  assert.equal(result.status, 200); assert.equal(f.updates[0].$set.telecallername, 'Telecaller');
+  assert.equal(f.updates[0].$set.telecalleremail, 'tele@example.com'); assert.equal(f.queries[0].role.source, '^telecaller$');
+  assert.equal(f.queries.at(-1).colid, 42);
+});
+test('lead master supports inclusive date-added range together with field filters', async () => {
+  const f = fixture();
+  const result = await f.invoke('get', '/leads', {}, { colid: 42, dateFrom: '2026-10-01', dateTo: '2026-10-28', filters: JSON.stringify([{ field: 'source', value: 'Website' }]) });
+  assert.equal(result.status, 200); const query = f.queries.at(-1);
+  assert.equal(query.source.source, 'Website'); assert.equal(query.$and[0].$or[0].dateadded.$lt.toISOString(), '2026-10-29T00:00:00.000Z');
+});
+test('auto assignment is opt-in and only available in lead master', async () => {
+  const data = { colid: 42, ...leadData, country: 'India', state: 'Gujarat', city: 'Ahmedabad', programsinterested: [{ academicyear: '2026-27', programcode: 'P1', priority: 1 }] };
+  const person = { name: 'Real counselor', email: 'person@example.com' };
+  const f = fixture({ counsellor: person, autoMappings: [{ counselloremail: person.email }] });
+  const result = await f.invoke('post', '/leads/save', { ...data, autoassign: true });
+  assert.equal(result.status, 200); assert.equal(f.creates[0].counselloremail, person.email);
+  const off = fixture({ counsellor: person, autoMappings: [{ counselloremail: person.email }] });
+  await off.invoke('post', '/leads/save', data);
+  assert.equal(off.queries.some(query => query.country && query.programcode), false);
+  const mine = fixture({ counsellor: person });
+  await mine.invoke('post', '/leads/save', { ...data, autoassign: true, leadmode: 'my', user: person.email });
+  assert.equal(mine.creates[0].counselloremail, person.email);
+  assert.equal(mine.queries.some(query => query.country && query.programcode), false);
+});
+test('no matching counselor produces a warning and preserves existing assignment', async () => {
+  const f = fixture({ existing: { ...leadData, counselloremail: 'existing@example.com', counsellorname: 'Existing' } });
+  const result = await f.invoke('post', '/leads/save', { colid: 42, ...leadData, id: 'lead1', autoassign: true, counselloremail: 'ignored@example.com' });
+  assert.equal(result.status, 200); assert.match(result.data.assignmentwarning, /No matching counselor found/);
+  assert.equal(f.updates[0].counselloremail, undefined);
+});
+test('interested programs are scoped, canonicalized and deduplicated', async () => {
+  const f = fixture();
+  const choice = { academicyear: '2026-27', programcode: '012', program: 'Spoof' };
+  const result = await f.invoke('post', '/leads/save', { colid: 42, ...leadData, programsinterested: [choice, choice] });
+  assert.equal(result.status, 200); assert.equal(f.creates[0].programsinterested.length, 1);
+  assert.equal(f.creates[0].programsinterested[0].program, 'Master program');
+  assert.equal(f.queries.find(query => query.year)?.colid, 42);
+  const invalid = fixture({ masterExists: false });
+  assert.equal((await invalid.invoke('post', '/leads/save', { colid: 42, ...leadData, programsinterested: [choice] })).status, 400);
+});
+test('lead address validates the complete scoped country/state/city combination', async () => {
+  const f = fixture();
+  const result = await f.invoke('post', '/leads/save', { colid: 42, ...leadData, country: 'India', state: 'Gujarat', city: 'Ahmedabad' });
+  assert.equal(result.status, 200); assert.equal(f.creates[0].country, 'India');
+  const addressQuery = f.queries.find(query => query.country);
+  assert.equal(addressQuery.colid, 42); assert.equal(addressQuery.state.source, '^Gujarat$'); assert.equal(addressQuery.city.source, '^Ahmedabad$');
+  const bad = fixture({ addressExists: false });
+  assert.equal((await bad.invoke('post', '/leads/save', { colid: 42, ...leadData, country: 'India', state: 'Other', city: 'Ahmedabad' })).status, 400);
+});
+test('lead creation fixes source and date and excludes notification and biometric fields', async () => {
+  const f = fixture();
+  const result = await f.invoke('post', '/leads/save', { colid: 42, ...leadData, addedby: 'API', dateadded: '2000-01-01', biometricid: 'secret', notification: 'Yes' });
+  assert.equal(result.status, 200);
+  assert.equal(f.creates[0].addedby, 'Counselor');
+  assert.ok(new Date(f.creates[0].dateadded).getTime() > Date.now() - 60000);
+  assert.equal(f.creates[0].biometricid, undefined); assert.equal(f.creates[0].notification, undefined);
+});
+test('My leads creation derives counselor from User and owned list cannot override owner with filters', async () => {
+  const person = { name: 'Counselor', email: 'counselor@example.com' };
+  const f = fixture({ counsellor: person });
+  const result = await f.invoke('post', '/leads/save', { colid: 42, ...leadData, leadmode: 'my', user: person.email, counselloremail: 'someone@example.com' });
+  assert.equal(result.status, 200); assert.equal(f.creates[0].counselloremail, person.email);
+  const list = await f.invoke('get', '/leads', {}, { colid: 42, user: person.email, leadmode: 'my', filters: JSON.stringify([{ field: 'counselloremail', value: 'someone@example.com' }]) });
+  assert.equal(list.status, 200);
+  assert.equal(f.queries.at(-1).counselloremail.source, '^counselor@example\\.com$');
+});
+test('Agent new lead bypasses Agent master and binds the signed-in User', async () => {
+  const person = { name: 'Agent User', email: 'agent@example.com' };
+  const f = fixture({ counsellor: person });
+  const result = await f.invoke('post', '/leads/save', { colid: 42, ...leadData, leadmode: 'agent', user: person.email, agentemail: 'spoof@example.com' });
+  assert.equal(result.status, 200); assert.equal(f.creates[0].agentemail, person.email);
+  assert.equal(f.creates[0].agentname, person.name); assert.equal(f.creates[0].addedby, 'Agent');
+});
+test('Agent duplicate rules block fresh, admitted, ambiguous or undated leads and reclaim old unadmitted only', async () => {
+  const person = { name: 'Agent User', email: 'agent@example.com' };
+  const old = { _id: '111111111111111111111111', admitted: 'No', dateadded: new Date(Date.now() - 16 * 86400000), agentemail: 'old@example.com' };
+  for (const records of [[{ ...old, dateadded: new Date() }], [{ ...old, admitted: 'Yes' }], [{ ...old, admissionstatus: 'Admitted' }], [old, old], [{ ...old, dateadded: null }]]) {
+    const f = fixture({ counsellor: person, leadsRecords: records });
+    const result = await f.invoke('post', '/leads/save', { colid: 42, ...leadData, leadmode: 'agent', user: person.email });
+    assert.equal(result.status, 409); assert.equal(f.updates.length, 0);
+  }
+  const f = fixture({ counsellor: person, leadsRecords: [old] });
+  const result = await f.invoke('post', '/leads/save', { colid: 42, ...leadData, leadmode: 'agent', user: person.email });
+  assert.equal(result.status, 200); assert.equal(result.data.reassigned, true);
+  assert.equal(f.updates[0].$set.agentemail, person.email);
+  assert.equal(f.updates[0].$set.dateadded, undefined);
+});
+test('owned workspaces reject updates to another owner lead', async () => {
+  const f = fixture({ counsellor: { name: 'Me', email: 'me@example.com' }, existing: { ...leadData, agentemail: 'other@example.com' } });
+  const result = await f.invoke('post', '/leads/save', { colid: 42, ...leadData, id: 'lead1', leadmode: 'agent', user: 'me@example.com' });
+  assert.equal(result.status, 403); assert.equal(f.updates.length, 0);
+});
+test('telecaller identity is validated and resolved from User', async () => {
+  const f = fixture({ counsellor: { name: 'Telecaller', email: 'tele@example.com' } });
+  const result = await f.invoke('post', '/leads/save', { colid: 42, ...leadData, telecalleremail: 'tele@example.com', telecallername: 'Spoof' });
+  assert.equal(result.status, 200); assert.equal(f.creates[0].telecallername, 'Telecaller');
+});
 test("subjectwise education persists numeric marks and rejects impossible marks", async () => {
   const f = fixture();
   const education = [{ level: "12th", board: "CBSE", subjects: [{ subject: "Physics", obtained: "85", total: "100", grade: "A" }] }];
@@ -25,8 +125,8 @@ test("education retains missing numeric marks and cannot carry managed fields", 
   assert.equal(f.creates[0].education[0].subjects[0].obtained, null);
 });
 const lean = value => ({ select() { return this; }, sort() { return this; }, skip() { return this; }, limit() { return this; }, lean: async () => value });
-function fixture({ duplicate = false, existing = null, counsellor = null, createError = null, awsConfig = null, office = null, masterExists = true, agent = null, leadsRecords = [] } = {}) {
-  const queries = [], creates = [], updates = [], uploads = [], aggregations = [], masterCreates = [];
+function fixture({ duplicate = false, existing = null, counsellor = null, createError = null, awsConfig = null, office = null, masterExists = true, agent = null, leadsRecords = [], addressExists = true, autoMappings = [] } = {}) {
+  const queries = [], creates = [], updates = [], uploads = [], aggregations = [], masterCreates = [], taskEvents = [];
   const Lead = {
     find: query => { queries.push(query); return lean(leadsRecords); },
     countDocuments: async query => { queries.push(query); return leadsRecords.length; },
@@ -44,6 +144,10 @@ function fixture({ duplicate = false, existing = null, counsellor = null, create
   vm.runInNewContext(fs.readFileSync(file, "utf8"), { module, exports: module.exports, require(name) {
     if (name === "../Models/crm2ds") return { ...schema, Lead, masterModels: Object.fromEntries(Object.keys(schema.masters).map(key => [key, { create: async payload => { masterCreates.push(payload); return payload; }, exists: async query => { queries.push(query); return masterExists; }, findOne: query => { queries.push(query); return lean(key === "admissionoffice" ? office : key === "agent" ? agent : null); } }])) };
     if (name === "../Models/user") return { schema: require("../Models/user").schema, findOne: query => { queries.push(query); return lean(counsellor); } };
+    if (name === '../Models/crm2configurationds') return { Address: { exists: async query => { queries.push(query); return addressExists; } } };
+    if (name === '../Models/mprograms') return { findOne: query => { queries.push(query); return lean(masterExists ? { program: 'Master program', programcode: query.programcode } : null); } };
+    if (name === '../Models/crm2programds') return { Mapping: { find: query => { queries.push(query); return lean(autoMappings); } } };
+    if (name === '../services/crm2FollowupTask') return { syncFollowupTask: async (...args) => taskEvents.push(['sync', ...args]), closeFollowupTasks: async (...args) => taskEvents.push(['close', ...args]) };
     if (name === "../Models/awsconfig") return { findOne: query => { queries.push(query); return lean(awsConfig); } };
     if (name === "aws-sdk") return { S3: class { putObject(payload) { uploads.push(payload); return { promise: async () => ({}) }; } } };
     return actualRequire(name);
@@ -54,7 +158,7 @@ function fixture({ duplicate = false, existing = null, counsellor = null, create
     await layer.route.stack.at(-1).handle({ body, query, params, file }, { status(value) { status = value; return this; }, json(value) { data = value; } });
     return { status, data };
   };
-  return { queries, creates, updates, uploads, aggregations, masterCreates, invoke };
+  return { queries, creates, updates, uploads, aggregations, masterCreates, taskEvents, invoke };
 }
 test('merge search requires year/name and only searches scoped name matches, excluding credentials', async () => {
   const f = fixture({ leadsRecords: [{ _id: '111111111111111111111111', name: 'Ann', password: 'secret', emailkey: 'secret', interactions: [{ details: 'Called' }] }] });
@@ -252,6 +356,9 @@ test("interaction history and current pipeline/follow-up are updated atomically"
   assert.equal(f.updates[0].$push.interactions.details, "Discussed admission");
   assert.equal(f.updates[0].$set.pipeline, "Interested");
   assert.equal(f.updates[0].$set.followupdate.toISOString(), "2026-10-22T00:00:00.000Z");
+  assert.equal(f.taskEvents[0][0], 'sync');
+  assert.equal(f.taskEvents[0][1], 42);
+  assert.equal(String(f.taskEvents[0][3]), String(f.updates[0].$push.interactions._id));
   assert.equal(f.queries.at(-1).colid, 42);
   assert.equal(f.queries.at(-1)._id, leadid);
 });

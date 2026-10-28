@@ -4,18 +4,21 @@ const { Lead, masterModels } = require('../Models/crm2ds');
 const Program = require('../Models/mprograms');
 const User = require('../Models/user');
 const ensureYearIndex = require('../utils/crm2ProgramYearIndex');
+const ensureAddressIndex = require('../utils/crm2MappingAddressIndex');
 const text = value => String(value ?? '').trim();
 const regex = value => new RegExp(text(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
 const id = value => /^[a-f\d]{24}$/i.test(text(value));
 const fail = (message, status = 400) => Object.assign(new Error(message), { status });
 const wrap = fn => async (req, res) => {
   try {
-    req.colid = Number(req.body?.colid || req.query.colid);
+    const identity = require('../utils/crm2DashboardScope').dashboardIdentity({ ...req.query, ...req.body }, req);
+    req.colid = Number(identity.colid);
+    if (identity.dashboardyear) req.dashboardIdentity = identity;
     if (!(req.colid > 0) || !Number.isFinite(req.colid)) throw fail('Institution is required');
     await fn(req, res);
   } catch (error) { res.status(error.code === 11000 ? 409 : error.status || 400).json({ message: error.code === 11000 ? 'This counselor/program/location mapping already exists.' : error.message }); }
 };
-const actor = req => text(req.user?.email || req.body?.user || req.query.user).toLowerCase();
+const actor = req => text(req.dashboardIdentity?.user || req.user?.email || req.body?.user || req.query.user).toLowerCase();
 async function owner(req) {
   const email = actor(req);
   if (!email || !await User.exists({ colid: req.colid, email: new RegExp(`^${regex(email).source}$`, 'i'), role: { $not: /^Student$/i } })) throw fail('A logged-in non-student user is required', 403);
@@ -45,7 +48,7 @@ router.get('/academic-years', wrap(async (req, res) => {
 router.get('/mappings', wrap(async (req, res) => {
   const query = { colid: req.colid };
   if (req.query.programcode) query.programcode = text(req.query.programcode);
-  if (text(req.query.search)) query.$or = ['program', 'programcode', 'counsellorname', 'counselloremail', 'location'].map(field => ({ [field]: regex(req.query.search) }));
+  if (text(req.query.search)) query.$or = ['program', 'programcode', 'counsellorname', 'counselloremail', 'location', 'country', 'state', 'city'].map(field => ({ [field]: regex(req.query.search) }));
   res.json({ data: await Mapping.find(query).sort({ program: 1, counsellorname: 1 }).lean() });
 }));
 router.post('/mappings/save', wrap(async (req, res) => {
@@ -55,6 +58,16 @@ router.post('/mappings/save', wrap(async (req, res) => {
   const person = await User.findOne({ colid: req.colid, email: new RegExp(`^${regex(req.body.counselloremail).source}$`, 'i'), role: { $not: /^Student$/i } }).select('name email').lean();
   if (!program || !person) throw fail('Select a program and counselor from the masters');
   const payload = { program: program.program, programcode: program.programcode, counsellorname: person.name, counselloremail: text(person.email).toLowerCase(), location: text(req.body.location), createdby: actor(req) };
+  for (const field of ['country','state','city']) payload[field] = text(req.body[field]);
+  if (payload.state && !payload.country || payload.city && !payload.state) throw fail('Select country before state, and state before city');
+  if (payload.country) {
+    const { Address } = require('../Models/crm2configurationds');
+    const address = { colid: req.colid, country: new RegExp(`^${regex(payload.country).source}$`, 'i') };
+    if (payload.state) address.state = new RegExp(`^${regex(payload.state).source}$`, 'i');
+    if (payload.city) address.city = new RegExp(`^${regex(payload.city).source}$`, 'i');
+    if (!await Address.exists(address)) throw fail('Select country, state and city from Address master');
+  }
+  if (Mapping.collection) await ensureAddressIndex(Mapping.collection);
   const data = req.body.id ? await Mapping.findOneAndUpdate({ colid: req.colid, _id: req.body.id }, { $set: payload }, { new: true, runValidators: true }) : await Mapping.create({ colid: req.colid, ...payload });
   if (!data) throw fail('Mapping not found', 404);
   res.json({ data });
@@ -72,7 +85,7 @@ router.post('/assign', wrap(async (req, res) => {
   const selections = Array.isArray(req.body.programs) ? req.body.programs : [];
   if (!leadids.length || leadids.length > 100 || !leadids.every(id) || !selections.length || selections.length > 50) throw fail('Select 1-100 leads and 1-50 programs');
   if (new Set(selections.map(row => row.programcode)).size !== selections.length) throw fail('Select each program once');
-  const leads = await Lead.find({ colid: req.colid, _id: { $in: leadids } }).select('pipeline case followupdate').lean();
+  const leads = await Lead.find({ colid: req.colid, ...(req.dashboardIdentity ? { counselloremail: new RegExp(`^${regex(email).source}$`, 'i'), ...require('../utils/crm2DashboardScope').yearScope(req.dashboardIdentity.dashboardyear) } : {}), _id: { $in: leadids } }).select('pipeline case followupdate').lean();
   if (leads.length !== leadids.length) throw fail('One or more leads were not found in this institution');
   // Validate all programs and mapped counselors before writing any assignments.
   const plans = [];
@@ -136,7 +149,7 @@ router.post('/bulk-action', wrap(async (req, res) => {
     const result = await Assignment.findOneAndUpdate(query, update, { upsert: !mine, new: true, runValidators: true });
     if (result) saved += 1;
   }
-  if (!mine) await Lead.updateMany({ colid: req.colid, _id: { $in: leadids } }, { $set: { counsellorname: mapping.counsellorname, counselloremail: mapping.counselloremail } }, { runValidators: true });
+  if (!mine) await Lead.updateMany({ colid: req.colid, _id: { $in: leadids } }, { $set: { counsellorname: mapping.counsellorname, counselloremail: mapping.counselloremail, counsellorassignedat: new Date() } }, { runValidators: true });
   res.json({ saved });
 }));
 router.get('/lead-assignments/:id', wrap(async (req, res) => {

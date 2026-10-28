@@ -156,6 +156,7 @@ exports.loginapi= async (req,res) => {
         }
 
         // const { colid, name, email: userEmail, regno, role, user: username } = user;
+        await require('../services/crm2CounselorAccess')(user);
         const token=jwt.sign({ user: email, colid: String([user.colid]) }, process.env.JWT_SECRET, {
                     expiresIn: process.env.JWT_EXPIRES_IN
                 });

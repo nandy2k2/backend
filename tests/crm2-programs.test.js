@@ -36,6 +36,9 @@ function setup({ noMappings = false, foreign = false } = {}) {
     '../Models/crm2programds': { Mapping, Assignment }, '../Models/crm2ds': { Lead, masterModels: masters },
     '../Models/mprograms': { findOne: query => { calls.push({ model: 'program', query }); return chain({ program: 'Science', programcode: query.programcode }); }, find: query => { calls.push({ model: 'program', query }); return chain([{ program: 'Science', programcode: 'P1' }, { program: 'Science', programcode: 'P1' }]); }, distinct: async (_, query) => { calls.push({ model: 'program', query }); return ['2025-26', '2026-27']; } },
     '../utils/crm2ProgramYearIndex': async () => {},
+    '../utils/crm2DashboardScope': require('../utils/crm2DashboardScope'),
+    '../utils/crm2MappingAddressIndex': async () => {},
+    '../Models/crm2configurationds': { Address: { exists: async query => { calls.push({ model: 'address', query }); return true; } } },
     './crm2programreportctlrds': { options: async () => {}, report: async () => {} },
     '../Models/user': { exists: async query => { calls.push({ model: 'user', query }); return true; }, find: query => { calls.push({ model: 'user', query }); return chain(people); }, findOne: query => { calls.push({ model: 'user', query }); return chain(people[0]); } }
   };
@@ -52,6 +55,16 @@ test('bulk Active update validates Yes/No and restricts programwise selection to
   assert.equal(write.query.colid, 42); assert.equal(String(write.query._id.$in[0]), L1); assert.equal(write.update.$set.active, 'No');
   assert.equal((await setup().call('POST /bulk-action', { colid: 42, user: 'one@example.com', mode: 'master', ids: [L1], action: 'active', active: 'INVALID' })).status, 400);
   assert.equal((await setup({ foreign: true }).call('POST /bulk-action', { colid: 42, user: 'one@example.com', mode: 'my', ids: [A1], action: 'active', active: 'Yes' })).status, 403);
+});
+test('counselor mapping saves country/state/city and validates against scoped Address master', async () => {
+  const f = setup();
+  const result = await f.call('POST /mappings/save', { colid: 42, user: 'one@example.com', programcode: 'P1', counselloremail: 'one@example.com', country: 'India', state: 'Gujarat', city: 'Ahmedabad' });
+  assert.equal(result.status, 200);
+  const created = f.calls.find(call => call.model === 'mapping' && call.create).create;
+  assert.equal(created.country, 'India'); assert.equal(created.city, 'Ahmedabad');
+  const checked = f.calls.find(call => call.model === 'address').query;
+  assert.equal(checked.colid, 42); assert.equal(checked.state.source, '^Gujarat$');
+  assert.equal((await f.call('POST /mappings/save', { colid: 42, programcode: 'P1', counselloremail: 'one@example.com', city: 'Ahmedabad' })).status, 400);
 });
 test('master transfer validates mapped program counselor and updates only selected program assignment and lead counselor', async () => {
   const f = setup();

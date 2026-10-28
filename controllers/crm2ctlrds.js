@@ -5,6 +5,7 @@ const multer = require("multer");
 const AWS = require("aws-sdk");
 const Awsconfig = require("../Models/awsconfig");
 const User = require("../Models/user");
+const { reclaimable, ownerField } = require('../utils/crm2LeadOwnership');
 const { randomBytes, scrypt } = require("node:crypto");
 const deriveKey = require("node:util").promisify(scrypt);
 const text = value => String(value ?? "").trim();
@@ -28,9 +29,20 @@ function publicLead(saved) {
 const error = (message, status = 400) => Object.assign(new Error(message), { status });
 const wrap = handler => async (req, res) => {
   try {
-    const colid = Number(req.body?.colid || req.query.colid);
+    const identity = require('../utils/crm2DashboardScope').dashboardIdentity({ ...req.query, ...req.body }, req);
+    const colid = Number(req.portalLead?.colid || identity.colid);
     if (!Number.isFinite(colid) || colid <= 0) throw error("Institution ID is required");
     req.colid = colid;
+    const mode = identity.dashboardyear ? 'my' : text(req.body?.leadmode || req.query.leadmode);
+    if (identity.dashboardyear && req.body) req.body.user = identity.user;
+    if (mode && !['my', 'agent'].includes(mode)) throw error('Invalid lead workspace');
+    req.leadMode = mode;
+    if (mode) {
+      const email = emailKey(identity.dashboardyear ? identity.user : req.user?.email || req.body?.user || req.query.user);
+      const actor = await User.findOne({ colid, email: exactEmail(email), role: { $not: /^Student$/i } }).select('name email').lean();
+      if (!email || !actor) throw error('User session is unavailable', 403);
+      req.leadOwner = actor;
+    }
     await handler(req, res);
   } catch (err) {
     res.status(err.code === 11000 ? 409 : err.status || 500).json({ success: false, message: err.code === 11000 ? "Duplicate found. The email, phone or master name already exists; cannot proceed." : err.message });
@@ -51,15 +63,18 @@ router.post("/upload", multer({ storage: multer.memoryStorage(), limits: { fileS
 }));
 router.get("/counsellors", wrap(async (req, res) => {
   const query = { colid: req.colid, role: { $not: /^Student$/i } };
+  if (req.query.assignmentrole === 'telecaller') query.role = /^telecaller$/i;
   if (text(req.query.search)) query.$or = ["name", "email"].map(field => ({ [field]: regex(req.query.search) }));
   res.json({ success: true, data: await User.find(query).select("name email designation department").sort({ name: 1 }).limit(30).lean() });
 }));
 router.get("/field-options", wrap(async (req, res) => {
   const field = text(req.query.field);
   if (field === "password" || !fields.some(item => item.field === field && item.type === "String")) throw error("Invalid dropdown field");
-  const Model = User.schema.path(field) ? User : Lead;
+  const Model = req.query.dashboardyear ? Lead : User.schema.path(field) ? User : Lead;
+  const match = { colid: req.colid, [field]: { $type: "string", $ne: "", $regex: regex(req.query.search || "") } };
+  if (req.query.dashboardyear) { Object.assign(match, { counselloremail: exactEmail(req.leadOwner.email) }); match.$and = [require('../utils/crm2DashboardScope').yearScope(req.query.dashboardyear)]; }
   const values = await Model.aggregate([
-    { $match: { colid: req.colid, [field]: { $type: "string", $ne: "", $regex: regex(req.query.search || "") } } },
+    { $match: match },
     { $group: { _id: `$${field}` } }, { $sort: { _id: 1 } }, { $limit: 30 }
   ]);
   res.json({ success: true, data: values.map(row => row._id) });
@@ -104,10 +119,16 @@ router.post("/masters/:kind/delete", wrap(async (req, res) => {
   res.json({ success: true, deleted: result.deletedCount });
 }));
 
-const writable = new Set([...fields.map(item => item.field), ...Object.keys(masters).filter(kind => !["document", "interactionmode"].includes(kind)).map(kind => masterLeadFields[kind] || kind), "education", "documents", "counsellorname", "counselloremail"]);
-async function saveLead(body, colid) {
-  const existing = body.id ? await Lead.findOne({ _id: body.id, colid }).select("-interactions").lean() : null;
+const writable = new Set([...fields.map(item => item.field), ...Object.keys(masters).filter(kind => !["document", "interactionmode"].includes(kind)).map(kind => masterLeadFields[kind] || kind), "education", "documents", "counsellorname", "counselloremail", 'programsinterested']);
+async function saveLead(body, colid, mode = '', owner = null, feedback = {}) {
+  const existing = body.id ? await Lead.findOne({ _id: body.id, colid, ...require('../utils/crm2DashboardScope').yearScope(body.dashboardyear) }).select("-interactions").lean() : null;
   if (body.id && !existing) throw error("Lead not found", 404);
+  const ownedField = ownerField(mode);
+  if (existing && ownedField && emailKey(existing[ownedField]) !== emailKey(owner.email)) throw error('This lead is not assigned to you', 403);
+  body = { ...body };
+  delete body.dateadded; delete body.addedby;
+  if (mode === 'my') { body.counsellorname = owner.name; body.counselloremail = owner.email; }
+  if (mode === 'agent') { delete body.agentname; delete body.agentemail; }
   const input = { ...existing, ...body };
   if (!text(input.name) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text(input.email)) || !/^[+\d\s().-]+$/.test(text(input.phone)) || phoneKey(input.phone).length < 7 || phoneKey(input.phone).length > 15) throw error("Enter a name, valid email and phone number (7–15 digits)");
   const emailkey = emailKey(input.email), phonekey = phoneKey(input.phone);
@@ -130,6 +151,34 @@ async function saveLead(body, colid) {
     else payload[field] = typeof value === "string" ? value.trim() : value;
   }
   payload.name = text(input.name); payload.email = emailkey; payload.phone = text(input.phone);
+  if (!existing && body.dashboardyear) payload.academicyear = text(body.dashboardyear);
+  if (payload.programsinterested !== undefined) {
+    if (typeof payload.programsinterested === 'string') { try { payload.programsinterested = JSON.parse(payload.programsinterested); } catch { throw error('Programs interested must be a JSON array'); } }
+    if (!Array.isArray(payload.programsinterested) || payload.programsinterested.length > 100) throw error('Select up to 100 programs');
+    const Program = require('../Models/mprograms');
+    const seen = new Set(), selections = [];
+    for (const [index, item] of payload.programsinterested.entries()) {
+      const academicyear = text(item?.academicyear), programcode = text(item?.programcode);
+      if (!academicyear || !programcode) throw error('Each interested program needs academic year and program code');
+      const key = JSON.stringify([academicyear, programcode]); if (seen.has(key)) continue;
+      const program = await Program.findOne({ colid, year: academicyear, programcode }).lean();
+      if (!program) throw error('Select interested programs from Program master for the academic year');
+      const priority = item.priority === undefined ? index + 1 : Number(item.priority);
+      if (!Number.isInteger(priority) || priority < 1 || priority > 1000) throw error('Program priority must be a whole number between 1 and 1000');
+      selections.push({ academicyear, program: program.program, programcode: program.programcode, priority }); seen.add(key);
+    }
+    payload.programsinterested = selections;
+  }
+  if (text(input.country) && ['country', 'state', 'city'].some(field => body[field] !== undefined)) {
+    const { Address } = require('../Models/crm2configurationds');
+    const address = { colid, country: exactEmail(input.country) };
+    if (text(input.state)) address.state = exactEmail(input.state);
+    if (text(input.city)) {
+      if (!text(input.state)) throw error('Select state before city');
+      address.city = exactEmail(input.city);
+    }
+    if (!await Address.exists(address)) throw error('Select country, state and city from Address master');
+  }
   if (payload.education !== undefined) {
     if (typeof payload.education === "string") { try { payload.education = JSON.parse(payload.education); } catch { throw error("Education must be a JSON array"); } }
     if (!Array.isArray(payload.education) || payload.education.length > 50) throw error("Enter up to 50 education records");
@@ -180,18 +229,50 @@ async function saveLead(body, colid) {
       if (!/^https?:\/\//i.test(text(document.url)) || !await masterModels.document.exists({ colid, name: document.documentname })) throw error("Each document needs a valid link and a selection from Document master");
     }
   }
-  if (body.counselloremail !== undefined) {
+  if (body.counselloremail !== undefined && !(body.autoassign === true && !mode)) {
     const email = emailKey(body.counselloremail);
     const counsellor = email ? await User.findOne({ colid, email: exactEmail(email), role: { $not: /^Student$/i } }).select("name email").lean() : null;
     if (email && !counsellor) throw error("Select a valid counsellor from this institution");
     payload.counsellorname = counsellor?.name || ""; payload.counselloremail = counsellor?.email || "";
   } else delete payload.counsellorname;
-  if (!existing) { payload.createdby = text(body.user); payload.user = text(body.user); payload.addedby = text(body.user); }
-  return existing ? Lead.findOneAndUpdate({ _id: body.id, colid }, payload, { new: true, runValidators: true }) : Lead.create(payload);
+  if (body.telecalleremail !== undefined) {
+    const email = emailKey(body.telecalleremail);
+    const person = email ? await User.findOne({ colid, email: exactEmail(email), role: { $not: /^Student$/i } }).select('name email').lean() : null;
+    if (email && !person) throw error('Select a valid telecaller from this institution');
+    payload.telecallername = person?.name || ''; payload.telecalleremail = person?.email || '';
+  } else delete payload.telecallername;
+  if (mode === 'agent') { payload.agentname = owner.name; payload.agentemail = emailKey(owner.email); }
+  if (body.autoassign === true && !mode) {
+    const { Mapping } = require('../Models/crm2programds');
+    const { findAutoCounselor } = require('../utils/crm2AutoCounselor');
+    const counselor = await findAutoCounselor({ Mapping, User }, colid, { ...existing, ...payload });
+    if (counselor) Object.assign(payload, counselor);
+    else {
+      delete payload.counsellorname; delete payload.counselloremail;
+      feedback.assignmentwarning = 'No matching counselor found. Lead saved without changing counselor.';
+    }
+  }
+  if (!existing) { payload.createdby = text(body.user); payload.user = text(body.user); payload.addedby = mode === 'agent' ? 'Agent' : 'Counselor'; payload.dateadded = new Date(); }
+  if (payload.counselloremail && (!existing || emailKey(payload.counselloremail) !== emailKey(existing.counselloremail))) payload.counsellorassignedat = new Date();
+  if (payload.telecalleremail && (!existing || emailKey(payload.telecalleremail) !== emailKey(existing.telecalleremail))) payload.telecallerassignedat = new Date();
+  return existing ? Lead.findOneAndUpdate({ _id: body.id, colid, ...(ownedField ? { [ownedField]: exactEmail(owner.email) } : {}) }, payload, { new: true, runValidators: true }) : Lead.create(payload);
 }
 router.post("/leads/save", wrap(async (req, res) => {
-  const saved = await saveLead(req.body, req.colid);
-  res.json({ success: true, data: publicLead(saved) });
+  if (req.leadMode === 'agent' && !req.body.id) {
+    const email = emailKey(req.body.email), phone = phoneKey(req.body.phone);
+    if (!text(req.body.name) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || phone.length < 7 || phone.length > 15) throw error('Enter name, valid email and phone');
+    const matches = await Lead.find({ colid: req.colid, $or: [{ emailkey: email }, { phonekey: phone }, { email: exactEmail(email) }] }).limit(2).lean();
+    if (matches.length) {
+      if (matches.length !== 1 || !reclaimable(matches[0])) throw error('Lead exists', 409);
+      const lead = matches[0];
+      const saved = await Lead.findOneAndUpdate({ _id: lead._id, colid: req.colid, admitted: { $nin: ['Yes', 'YES', 'yes'] }, admissionstatus: { $nin: ['Admitted', 'ADMITTED', 'admitted'] }, ...(lead.dateadded ? { dateadded: lead.dateadded } : { dateadded: null, createdAt: lead.createdAt }), agentemail: lead.agentemail || { $in: ['', null] } }, { $set: { agentname: req.leadOwner.name, agentemail: emailKey(req.leadOwner.email), updatedby: req.leadOwner.email } }, { new: true, runValidators: true });
+      if (!saved) throw error('Lead exists; its details changed. Please check again.', 409);
+      return res.json({ success: true, reassigned: true, message: 'Lead exists and assigned to You.', data: publicLead(saved) });
+    }
+  }
+  const feedback = {};
+  const saved = await saveLead(req.body, req.colid, req.leadMode, req.leadOwner, feedback);
+  res.json({ success: true, ...feedback, data: publicLead(saved) });
 }));
 router.get('/leads/merge-candidates', wrap(async (req, res) => {
   const academicyear = text(req.query.academicyear), name = text(req.query.name);
@@ -217,18 +298,33 @@ router.get("/leads", wrap(async (req, res) => {
   if (text(req.query.search)) query.$or = ["name", "email", "phone"].map(field => ({ [field]: regex(req.query.search) }));
   let filters = [];
   try { filters = JSON.parse(req.query.filters || "[]"); } catch { throw error("Invalid filters"); }
-  for (const filter of Array.isArray(filters) ? filters : []) {
+  for (const filter of req.query.dashboardyear ? [] : Array.isArray(filters) ? filters : []) {
     if (!writable.has(filter.field) || filter.field === "password" || !text(filter.value)) continue;
     const type = Lead.schema.path(filter.field)?.instance;
     query[filter.field] = type === "Number" ? Number(filter.value) : type === "Date" ? new Date(filter.value) : regex(filter.value);
   }
   if (['Yes', 'No'].includes(req.query.active)) query.active = req.query.active;
+  if (req.query.dashboardyear) {
+    const { yearScope, newAssignedScope, admittedScope } = require('../utils/crm2DashboardScope');
+    query.$and = [yearScope(req.query.dashboardyear)];
+    if (req.query.dashboardview === 'admitted') query.$and.push(admittedScope);
+    if (req.query.dashboardview === 'new') {
+      const logins = await require('../Models/crm2staffloginds').find({ colid: req.colid, email: emailKey(req.leadOwner.email) }).sort({ loggedAt: -1, _id: -1 }).limit(2).lean();
+      query.$and.push(newAssignedScope(logins[1]?.loggedAt));
+    }
+  }
+  if (req.query.dashboardyear) require('../utils/crm2LeadFilters').applyFilters(query, req.query);
+  else {
+    const dates = require('../utils/crm2LeadFilters').dateConditions(req.query);
+    if (dates.length) query.$and = [...(query.$and || []), ...dates];
+  }
+  if (ownerField(req.leadMode)) query[ownerField(req.leadMode)] = exactEmail(req.leadOwner.email);
   const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100), skip = Math.max(Number(req.query.skip) || 0, 0);
   const [data, total] = await Promise.all([Lead.find(query).select("-interactions").sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(), Lead.countDocuments(query)]);
   res.json({ success: true, data: data.map(publicLead), total });
 }));
 router.post("/leads/delete", wrap(async (req, res) => {
-  const result = await Lead.deleteMany({ colid: req.colid, _id: { $in: Array.isArray(req.body.ids) ? req.body.ids : [] } });
+  const result = await Lead.deleteMany({ colid: req.colid, ...(ownerField(req.leadMode) ? { [ownerField(req.leadMode)]: exactEmail(req.leadOwner.email) } : {}), ...require('../utils/crm2DashboardScope').yearScope(req.body.dashboardyear), _id: { $in: Array.isArray(req.body.ids) ? req.body.ids : [] } });
   res.json({ success: true, deleted: result.deletedCount });
 }));
 router.post("/leads/bulk-update", wrap(async (req, res) => {
@@ -239,34 +335,38 @@ router.post("/leads/bulk-update", wrap(async (req, res) => {
   if (["pipeline", "type", "source"].includes(field)) {
     if (!value || !await masterModels[field].exists({ colid: req.colid, name: value })) throw error(`Select ${masters[field]} from its master`);
     changes[field] = value;
-  } else if (field === "counselloremail") {
-    const person = await User.findOne({ colid: req.colid, email: exactEmail(value), role: { $not: /^Student$/i } }).select("name email").lean();
+  } else if (["counselloremail", "telecalleremail"].includes(field)) {
+    const person = await User.findOne({ colid: req.colid, email: exactEmail(value), role: field === 'telecalleremail' ? /^telecaller$/i : { $not: /^Student$/i } }).select("name email").lean();
     if (!person) throw error("Select a counsellor from this institution");
-    changes.counsellorname = person.name; changes.counselloremail = person.email;
+    changes[field === 'telecalleremail' ? 'telecallername' : 'counsellorname'] = person.name;
+    changes[field] = person.email;
+    changes[field === 'telecalleremail' ? 'telecallerassignedat' : 'counsellorassignedat'] = new Date();
   } else if (field === "active" && ["Yes", "No"].includes(value)) changes.active = value;
   else if (field === "admissionstatus" && ["Admitted", "Not admitted"].includes(value)) changes.admissionstatus = value;
   else throw error("Invalid bulk update field or value");
-  const result = await Lead.updateMany({ colid: req.colid, _id: { $in: ids } }, { $set: changes }, { runValidators: true });
+  const result = await Lead.updateMany({ colid: req.colid, ...(ownerField(req.leadMode) ? { [ownerField(req.leadMode)]: exactEmail(req.leadOwner.email) } : {}), ...require('../utils/crm2DashboardScope').yearScope(req.body.dashboardyear), _id: { $in: ids } }, { $set: changes }, { runValidators: true });
   res.json({ success: true, matched: result.matchedCount, modified: result.modifiedCount });
 }));
 
 router.get("/lead-options", wrap(async (req, res) => {
-  const query = { colid: req.colid };
+  const query = { colid: req.colid, ...(ownerField(req.leadMode) ? { [ownerField(req.leadMode)]: exactEmail(req.leadOwner.email) } : {}) };
+  if (req.query.dashboardyear) query.$and = [require('../utils/crm2DashboardScope').yearScope(req.query.dashboardyear)];
   if (text(req.query.search)) query.$or = ["name", "email", "phone"].map(field => ({ [field]: regex(req.query.search) }));
   res.json({ success: true, data: await Lead.find(query).select("name email phone pipeline followupdate").sort({ name: 1 }).limit(30).lean() });
 }));
 const validId = value => /^[a-f\d]{24}$/i.test(text(value));
+const interactionOwner = req => ({ ...(ownerField(req.leadMode) ? { [ownerField(req.leadMode)]: exactEmail(req.leadOwner.email) } : {}), ...require('../utils/crm2DashboardScope').yearScope(req.query.dashboardyear || req.body?.dashboardyear) });
 router.get("/interactions", wrap(async (req, res) => {
   if (!validId(req.query.leadid)) throw error("Select a lead");
   const skip = Math.max(Number(req.query.skip) || 0, 0), limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100);
   const result = await Lead.aggregate([
-    { $match: { colid: req.colid, _id: new mongoose.Types.ObjectId(req.query.leadid) } },
+    { $match: { colid: req.colid, _id: new mongoose.Types.ObjectId(req.query.leadid), ...interactionOwner(req) } },
     { $project: { name: 1, email: 1, total: { $size: { $ifNull: ["$interactions", []] } }, data: { $slice: [{ $reverseArray: { $ifNull: ["$interactions", []] } }, skip, limit] } } }
   ]);
   if (!result[0]) throw error("Lead not found", 404);
   res.json({ success: true, data: result[0].data, total: result[0].total });
 }));
-async function saveInteraction(body, colid) {
+async function saveInteraction(body, colid, ownership = {}) {
   if (!validId(body.leadid) || (body.id && !validId(body.id))) throw error("Select a valid lead and interaction");
   if (!text(body.details)) throw error("Interaction details are required");
   if (!text(body.mode) || !await masterModels.interactionmode.exists({ colid, name: text(body.mode) })) throw error("Select a mode from Interaction master");
@@ -275,19 +375,24 @@ async function saveInteraction(body, colid) {
   const interactiondate = body.interactiondate ? new Date(body.interactiondate) : new Date();
   if ((nextfollowupdate && Number.isNaN(nextfollowupdate.getTime())) || Number.isNaN(interactiondate.getTime())) throw error("Enter valid interaction and follow-up dates");
   const values = { details: text(body.details), mode: text(body.mode), pipeline: text(body.pipeline), nextfollowupdate, interactiondate, updatedby: text(body.user), updatedAt: new Date() };
+  if (body.dashboardyear) values.academicyear = text(body.dashboardyear);
   const update = { $set: { pipeline: values.pipeline, followupdate: nextfollowupdate, updatedby: text(body.user) } };
+  const interactionid = body.id || new mongoose.Types.ObjectId();
   if (body.id) for (const [field, value] of Object.entries(values)) update.$set[`interactions.$.${field}`] = value;
-  else update.$push = { interactions: { ...values, _id: new mongoose.Types.ObjectId(), createdby: text(body.user), createdAt: new Date() } };
-  const lead = await Lead.findOneAndUpdate({ _id: body.leadid, colid, ...(body.id ? { "interactions._id": body.id } : {}) }, update, { new: true, runValidators: true, projection: { name: 1, email: 1, pipeline: 1, followupdate: 1 } });
+  else update.$push = { interactions: { ...values, _id: interactionid, createdby: text(body.user), createdAt: new Date() } };
+  const lead = await Lead.findOneAndUpdate({ _id: body.leadid, colid, ...ownership, ...(body.id ? { "interactions._id": body.id } : {}) }, update, { new: true, runValidators: true, projection: { name: 1, email: 1, phone: 1, pipeline: 1, followupdate: 1, academicyear: 1 } });
   if (!lead) throw error("Lead or interaction not found", 404);
+  if (nextfollowupdate || body.id) await require('../services/crm2FollowupTask').syncFollowupTask(colid, lead, interactionid, values, text(body.user));
   return lead;
 }
-router.post("/interactions/save", wrap(async (req, res) => res.json({ success: true, data: await saveInteraction(req.body, req.colid) })));
+router.post("/interactions/save", wrap(async (req, res) => res.json({ success: true, data: await saveInteraction(req.body, req.colid, interactionOwner(req)) })));
 router.post("/interactions/delete", wrap(async (req, res) => {
   if (!validId(req.body.leadid)) throw error("Select a lead");
   const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
   if (!ids.length || !ids.every(validId)) throw error("Select valid interactions");
-  const result = await Lead.updateOne({ _id: req.body.leadid, colid: req.colid }, { $pull: { interactions: { _id: { $in: ids } } } });
+  const result = await Lead.updateOne({ _id: req.body.leadid, colid: req.colid, ...interactionOwner(req) }, { $pull: { interactions: { _id: { $in: ids } } } });
+  if (!(result.matchedCount ?? result.modifiedCount)) throw error('Lead not found or not assigned to you', 404);
+  await require('../services/crm2FollowupTask').closeFollowupTasks(req.colid, req.body.leadid, ids, text(req.body.user));
   res.json({ success: true, modified: result.modifiedCount });
 }));
 router.post("/interactions/bulk", wrap(async (req, res) => {
@@ -295,7 +400,7 @@ router.post("/interactions/bulk", wrap(async (req, res) => {
   if (!rows.length || rows.length > 1000) throw error("Upload between 1 and 1000 interactions");
   let saved = 0; const errors = [];
   for (const [index, row] of rows.entries()) {
-    try { await saveInteraction({ ...row, id: undefined, leadid: req.body.leadid, user: req.body.user }, req.colid); saved++; }
+    try { await saveInteraction({ ...row, id: undefined, leadid: req.body.leadid, user: req.body.user }, req.colid, interactionOwner(req)); saved++; }
     catch (err) { errors.push({ row: index + 2, message: err.message }); }
   }
   res.json({ success: true, saved, errors });
@@ -307,8 +412,8 @@ router.post("/bulk/:entity", wrap(async (req, res) => {
   let saved = 0; const errors = [];
   for (const [index, row] of rows.entries()) {
     try {
-      const input = { ...row, user: req.body.user }; delete input.id; delete input._id;
-      if (req.params.entity === "leads") await saveLead(input, req.colid);
+      const input = { ...row, user: req.body.user, ...(req.body.dashboardyear ? { dashboardyear: req.body.dashboardyear } : {}) }; delete input.id; delete input._id;
+      if (req.params.entity === "leads") await saveLead(input, req.colid, req.leadMode, req.leadOwner);
       else await saveMaster(req.params.entity, input, req.colid);
       saved++;
     } catch (err) { errors.push({ row: index + 2, message: err.code === 11000 ? "Duplicate email, phone or name" : err.message }); }
@@ -316,3 +421,4 @@ router.post("/bulk/:entity", wrap(async (req, res) => {
   res.json({ success: true, saved, errors });
 }));
 module.exports = router;
+module.exports.saveLead = saveLead;

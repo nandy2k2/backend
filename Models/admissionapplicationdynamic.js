@@ -21,6 +21,7 @@ const AdmissionDocumentSchema = new mongoose.Schema({
 
 const AdmissionApplicationDynamicSchema = new mongoose.Schema({
   colid: Number,
+  crmleadid: { type: mongoose.Schema.Types.ObjectId, index: true },
   formid: {
     type: String,
     default: 'default'
@@ -136,7 +137,9 @@ const AdmissionApplicationDynamicSchema = new mongoose.Schema({
   user: String
 }, { timestamps: true });
 
-AdmissionApplicationDynamicSchema.index({ colid: 1, email: 1 }, { unique: true, sparse: true });
-AdmissionApplicationDynamicSchema.index({ colid: 1, phone: 1 }, { unique: true, sparse: true });
+AdmissionApplicationDynamicSchema.index({ colid: 1, email: 1, academicyear: 1, programcode: 1, formid: 1 }, { unique: true, sparse: true });
+AdmissionApplicationDynamicSchema.index({ colid: 1, phone: 1, academicyear: 1, programcode: 1, formid: 1 }, { unique: true, sparse: true });
+AdmissionApplicationDynamicSchema.index({ colid: 1, email: 1, crmleadid: 1 }, { unique: true, partialFilterExpression: { crmleadid: null } });
+AdmissionApplicationDynamicSchema.index({ colid: 1, phone: 1, crmleadid: 1 }, { unique: true, partialFilterExpression: { crmleadid: null } });
 
 module.exports = mongoose.model('admissionapplicationdynamic', AdmissionApplicationDynamicSchema);

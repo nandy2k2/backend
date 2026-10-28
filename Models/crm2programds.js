@@ -2,9 +2,10 @@ const mongoose = require('mongoose');
 const mapping = new mongoose.Schema({
   colid: { type: Number, required: true }, program: { type: String, required: true }, programcode: { type: String, required: true },
   counsellorname: String, counselloremail: { type: String, required: true, lowercase: true, trim: true },
-  location: { type: String, default: '', trim: true }, createdby: String
+  location: { type: String, default: '', trim: true },
+  country: { type: String, default: '', trim: true }, state: { type: String, default: '', trim: true }, city: { type: String, default: '', trim: true }, createdby: String
 }, { timestamps: true });
-mapping.index({ colid: 1, programcode: 1, counselloremail: 1, location: 1 }, { unique: true });
+mapping.index({ colid: 1, programcode: 1, counselloremail: 1, location: 1, country: 1, state: 1, city: 1 }, { unique: true });
 const assignment = new mongoose.Schema({
   colid: { type: Number, required: true }, leadid: { type: mongoose.Schema.Types.ObjectId, required: true },
   academicyear: { type: String, trim: true },
