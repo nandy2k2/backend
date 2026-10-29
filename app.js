@@ -1044,6 +1044,8 @@ app.post('/api/v2/examination-model2/component-marks-savebulk', conductExamCompo
 app.post('/api/v2/examination-model2/component-marks-submit', conductExamComponentAllocationController.submitExaminerMarks);
 app.get('/api/v2/examination-model2/component-marks', conductExamComponentAllocationController.listMarks);
 app.get('/api/v2/student-internal-marks', require('./controllers/studentinternalmarksctlrds').list);
+app.get('/api/v2/student-internal-marks-2', require('./controllers/studentinternalmarksctlrds').list2);
+app.get('/api/v2/student-internal-marks-3', require('./controllers/studentinternalmarksctlrds').list3);
 app.post('/api/v2/examination-model2/component-marks', conductExamComponentAllocationController.saveMark);
 app.post('/api/v2/examination-model2/component-marks-delete', conductExamComponentAllocationController.deleteMark);
 app.post('/api/v2/examination-model2/component-marks-bulk', conductExamComponentAllocationController.bulkMarks);
