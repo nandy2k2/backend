@@ -24,6 +24,7 @@ User.schema.eachPath((field, schemaType) => {
 Object.assign(definitions, {
   active: { type: String, enum: ["Yes", "No"], default: "Yes" }, followupdate: Date,
   telecallername: String, telecalleremail: String, dateadded: { type: Date, default: Date.now },
+  stage: String, stagetime: Date,
   country: String,
   admitted: { type: String, enum: ['Yes', 'No'], default: 'No' },
   agentname: String, agentemail: String, admissionstatus: { type: String, enum: ["Admitted", "Not admitted"], default: "Not admitted" },
@@ -45,7 +46,7 @@ const groups = {
   "Additional Details": []
 };
 const managed = new Set(["colid", "user", "addedby", "authenticatordate", "authenticatorsetupdate", "crm2profileversion"]);
-managed.add('dateadded');
+for (const field of ['dateadded', 'stage', 'stagetime', 'wizardcompleted']) managed.add(field);
 const profileSchema = new mongoose.Schema(definitions);
 const fields = Object.keys(definitions).filter(field => !field.includes(".$") && !managed.has(field)).map(field => {
   const original = profileSchema.path(field);
@@ -64,7 +65,8 @@ Object.assign(definitions, {
   education: [{ level: { type: String, required: true }, institution: String, board: String, passingyear: String, marks: { type: Number, min: 0 }, grade: String, subjects: [{ subject: { type: String, required: true }, obtained: { type: Number, min: 0 }, total: { type: Number, min: 0 }, grade: String }] }],
   documents: [{ documentname: { type: String, required: true }, title: String, url: { type: String, required: true }, uploadedat: { type: Date, default: Date.now } }],
   interactions: [{ details: { type: String, required: true }, mode: { type: String, required: true }, pipeline: { type: String, required: true }, nextfollowupdate: Date, interactiondate: { type: Date, default: Date.now }, createdby: String, updatedby: String, createdAt: { type: Date, default: Date.now }, updatedAt: Date }],
-  createdby: String, updatedby: String
+  createdby: String, updatedby: String,
+  wizardcompleted: { type: [String], default: undefined }
 });
 const leadSchema = new mongoose.Schema(definitions, { timestamps: true });
 leadSchema.index({ colid: 1, emailkey: 1 }, { unique: true });

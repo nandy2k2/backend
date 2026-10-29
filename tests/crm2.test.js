@@ -5,6 +5,35 @@ const { createRequire } = require("node:module");
 const schema = require("../Models/crm2ds");
 const file = path.join(__dirname, "../controllers/crm2ctlrds.js"), actualRequire = createRequire(file);
 const leadData = { name: "Lead", email: "LEAD@example.com", phone: "+91 98765-43210" };
+test('wizard save persists authoritative stage/time and rejects skipping a stage', async () => {
+  const f = fixture();
+  const first = await f.invoke('post', '/leads/save', { colid: 42, ...leadData, wizardstep: 'CRM Details', stage: 'spoof', stagetime: '2000-01-01', wizardcompleted: ['Documents'] });
+  assert.equal(first.status, 200);
+  assert.equal(f.creates[0].stage, 'Family & Address');
+  assert.deepEqual(f.creates[0].wizardcompleted, ['Identity', 'CRM Details']);
+  assert.ok(f.creates[0].stagetime.getTime() > Date.parse('2020-01-01'));
+  const next = fixture({ existing: { ...f.creates[0], _id: 'lead1' } });
+  const invalid = await next.invoke('post', '/leads/save', { colid: 42, id: 'lead1', wizardstep: 'Documents' });
+  assert.equal(invalid.status, 400); assert.equal(next.updates.length, 0);
+});
+test('identity check accepts email and phone without creating a nameless lead', async () => {
+  const f = fixture();
+  const result = await f.invoke('post', '/leads/check', { colid: 42, email: leadData.email, phone: leadData.phone });
+  assert.equal(result.status, 200); assert.equal(result.data.available, true);
+  assert.equal(f.creates.length, 0); assert.equal(f.queries.at(-1).colid, 42);
+  const duplicate = await fixture({ duplicate: true }).invoke('post', '/leads/check', { colid: 42, ...leadData });
+  assert.equal(duplicate.status, 409);
+});
+test('agent identity check retains the 15 day lock and reclaims only old unadmitted leads', async () => {
+  const person = { name: 'Agent', email: 'agent@example.com' };
+  for (const [dateadded, admitted, expected] of [[new Date(), 'No', 409], ['2020-01-01', 'Yes', 409], ['2020-01-01', 'No', 200]]) {
+    const f = fixture({ counsellor: person, leadsRecords: [{ _id: 'lead1', dateadded, admitted }] });
+    const result = await f.invoke('post', '/leads/check', { colid: 42, email: leadData.email, phone: leadData.phone, leadmode: 'agent', user: person.email });
+    assert.equal(result.status, expected);
+    if (expected === 200) { assert.equal(result.data.reassigned, true); assert.equal(f.updates[0].$set.agentemail, person.email); }
+    assert.equal(f.creates.length, 0);
+  }
+});
 test('bulk telecaller assignment derives identity and email from the institution user master', async () => {
   const f = fixture({ counsellor: { name: 'Telecaller', email: 'tele@example.com' } });
   const result = await f.invoke('post', '/leads/bulk-update', { colid: 42, ids: ['111111111111111111111111'], field: 'telecalleremail', value: 'tele@example.com', telecallername: 'Spoof' });

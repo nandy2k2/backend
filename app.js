@@ -5768,6 +5768,7 @@ const specializationnewctlrds = require("./controllers/specializationnewctlrds")
 const conductexamctlrds = require("./controllers/conductexamctlrds");
 const conductexamdatesctlrds = require("./controllers/conductexamdatesctlrds");
 const conductexamformfillupdatesctlrds = require("./controllers/conductexamformfillupdatesctlrds");
+const conductexamfinectlrds = require("./controllers/conductexamfinectlrds");
 const conductexaminvigilationctlrds = require("./controllers/conductexaminvigilationctlrds");
 const conductexaminvigilatorallocationctlrds = require("./controllers/conductexaminvigilatorallocationctlrds");
 const conductexamflyingsquadctlrds = require("./controllers/conductexamflyingsquadctlrds");
@@ -6179,6 +6180,15 @@ app.post("/api/v2/conductexam/exam-dates", conductexamdatesctlrds.save);
 app.post("/api/v2/conductexam/exam-dates-delete", conductexamdatesctlrds.remove);
 app.post("/api/v2/conductexam/exam-dates-bulk", conductexamdatesctlrds.bulkUpload);
 app.get("/api/v2/conductexam/form-fillup-dates-options", conductexamformfillupdatesctlrds.options);
+app.get("/api/v2/conductexam/exam-fine-options", conductexamfinectlrds.options);
+app.get("/api/v2/conductexam/exam-fine", conductexamfinectlrds.list);
+app.post("/api/v2/conductexam/exam-fine", conductexamfinectlrds.save);
+app.post("/api/v2/conductexam/exam-fine-delete", conductexamfinectlrds.remove);
+app.post("/api/v2/conductexam/exam-fine-bulk", conductexamfinectlrds.bulk);
+app.post("/api/v2/conductexam/student-programwise-exam-form-2-submit", (req, res) => {
+  req.programwiseExamFine = true;
+  return conductexamformctlrds.submitStudentExamForm(req, res);
+});
 app.get("/api/v2/conductexam/form-fillup-dates", conductexamformfillupdatesctlrds.list);
 app.post("/api/v2/conductexam/form-fillup-dates", conductexamformfillupdatesctlrds.save);
 app.post("/api/v2/conductexam/form-fillup-dates-delete", conductexamformfillupdatesctlrds.remove);

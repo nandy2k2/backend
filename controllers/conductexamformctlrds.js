@@ -19,6 +19,8 @@ const User = require("../Models/user");
 const Awsconfig = require("../Models/awsconfig");
 const Institution = require("../Models/insdetails");
 const FormFillupDates = require("../Models/conductexamformfillupdatesds");
+const ExamFine = require('../Models/conductexamfineds');
+const { calculateExamFine, fineToday } = require('../utils/conductExamFine');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -557,7 +559,9 @@ exports.studentContext = async (req, res) => {
       ]);
       formOverview = { schedule, barredCourses, submission, checkedAt: new Date() };
     }
-    res.json({ data: { student, exam, forms, regularCourses, supplementaryCourses, atktCourses: atktMode ? supplementaryCourses : [], examFeeLedger, maxFee, atktDiagnostics, formOverview } });
+    const examFineRules = req.query.examFine === 'Yes' ? await ExamFine.find({ colid, academicyear, examcode, program: clean(student.program), programcode: clean(student.programcode) }).lean() : [];
+    const examScholarship = req.query.examFine === 'Yes' ? !!await ExamScholarship.findOne({ colid, academicyear, regulation, examcode, programcode: clean(student.programcode), semester, regno, status: { $not: /^Inactive$/i } }).lean() : false;
+    res.json({ data: { student, exam, forms, regularCourses, supplementaryCourses, atktCourses: atktMode ? supplementaryCourses : [], examFeeLedger, maxFee, atktDiagnostics, formOverview, examFineRules, fineDate: fineToday(), examScholarship } });
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to load student exam form context" });
   }
@@ -864,7 +868,11 @@ exports.submitStudentExamForm = async (req, res) => {
       status: { $not: /^Inactive$/i }
     }).lean();
     const maxFee = await examFeeMaxFor({ colid, academicyear, regulation, programcode: student.programcode, examcode });
-    const totalfee = scholarshipRow ? 0 : capExamFee(rawtotalfee, maxFee);
+    const basefee = scholarshipRow ? 0 : capExamFee(rawtotalfee, maxFee);
+    const fineRules = req.programwiseExamFine ? await ExamFine.find({ colid, academicyear, examcode, program: clean(student.program), programcode: clean(student.programcode) }).lean() : [];
+    const fine = calculateExamFine(fineRules, new Set(selectedCourses.map(row => clean(row.coursecode)).filter(Boolean)).size);
+    const fineamount = scholarshipRow ? 0 : fine.total;
+    const totalfee = Math.round((basefee + fineamount) * 100) / 100;
     if (scholarshipRow) {
       deficiencies.push(`Exam scholarship applied. Exam fee set to zero${clean(scholarshipRow.note) ? ` (${clean(scholarshipRow.note)})` : ""}.`);
     }
@@ -889,6 +897,9 @@ exports.submitStudentExamForm = async (req, res) => {
       documents,
       courses: selectedCourses.map((row) => ({ ...row, fee: num(row.fee), examtype })),
       totalfee,
+      basefee,
+      fineamount,
+      finerules: scholarshipRow ? [] : fine.applied,
       validationstatus: deficiencies.length ? "Review" : "Pass",
       validationcomments: deficiencies.join("\n"),
       deficiencies,
@@ -1039,7 +1050,7 @@ exports.submitStudentExamForm = async (req, res) => {
       }
       examRollCreated += 1;
     }
-    res.json({ data: submission, ledgerCreated, examRollCreated, barred: barredRows, scholarship: scholarshipRow, scholarshipApplied: !!scholarshipRow, deficiencies, examFeeLedger, rawtotalfee, maxFee, totalfee });
+    res.json({ data: submission, ledgerCreated, examRollCreated, barred: barredRows, scholarship: scholarshipRow, scholarshipApplied: !!scholarshipRow, deficiencies, examFeeLedger, rawtotalfee, maxFee, totalfee, basefee, fineamount, fine });
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to submit exam form" });
   }

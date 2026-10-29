@@ -135,6 +135,7 @@ async function saveLead(body, colid, mode = '', owner = null, feedback = {}) {
   const duplicate = await Lead.exists({ colid, ...(body.id ? { _id: { $ne: body.id } } : {}), $or: [{ emailkey }, { phonekey }] });
   if (duplicate) throw error("Duplicate found: email or phone already exists. Cannot proceed.", 409);
   const payload = { colid, emailkey, phonekey, updatedby: text(body.user), crm2profileversion: 2 };
+  Object.assign(payload, require('../utils/crm2LeadStages').stageProgress(existing, text(body.wizardstep) || undefined));
   for (const field of writable) {
     if (managed.has(field) || body[field] === undefined) continue;
     const value = body[field];
@@ -257,19 +258,32 @@ async function saveLead(body, colid, mode = '', owner = null, feedback = {}) {
   if (payload.telecalleremail && (!existing || emailKey(payload.telecalleremail) !== emailKey(existing.telecalleremail))) payload.telecallerassignedat = new Date();
   return existing ? Lead.findOneAndUpdate({ _id: body.id, colid, ...(ownedField ? { [ownedField]: exactEmail(owner.email) } : {}) }, payload, { new: true, runValidators: true }) : Lead.create(payload);
 }
-router.post("/leads/save", wrap(async (req, res) => {
+async function agentDuplicate(req) {
   if (req.leadMode === 'agent' && !req.body.id) {
     const email = emailKey(req.body.email), phone = phoneKey(req.body.phone);
-    if (!text(req.body.name) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || phone.length < 7 || phone.length > 15) throw error('Enter name, valid email and phone');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || phone.length < 7 || phone.length > 15) throw error('Enter valid email and phone');
     const matches = await Lead.find({ colid: req.colid, $or: [{ emailkey: email }, { phonekey: phone }, { email: exactEmail(email) }] }).limit(2).lean();
     if (matches.length) {
       if (matches.length !== 1 || !reclaimable(matches[0])) throw error('Lead exists', 409);
       const lead = matches[0];
       const saved = await Lead.findOneAndUpdate({ _id: lead._id, colid: req.colid, admitted: { $nin: ['Yes', 'YES', 'yes'] }, admissionstatus: { $nin: ['Admitted', 'ADMITTED', 'admitted'] }, ...(lead.dateadded ? { dateadded: lead.dateadded } : { dateadded: null, createdAt: lead.createdAt }), agentemail: lead.agentemail || { $in: ['', null] } }, { $set: { agentname: req.leadOwner.name, agentemail: emailKey(req.leadOwner.email), updatedby: req.leadOwner.email } }, { new: true, runValidators: true });
       if (!saved) throw error('Lead exists; its details changed. Please check again.', 409);
-      return res.json({ success: true, reassigned: true, message: 'Lead exists and assigned to You.', data: publicLead(saved) });
+      return { success: true, reassigned: true, message: 'Lead exists and assigned to You.', data: publicLead(saved) };
     }
   }
+  return null;
+}
+router.post('/leads/check', wrap(async (req, res) => {
+  const email = emailKey(req.body.email), phone = phoneKey(req.body.phone);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !/^[+\d\s().-]+$/.test(text(req.body.phone)) || phone.length < 7 || phone.length > 15) throw error('Enter valid email and phone number (7–15 digits)');
+  const reclaimed = await agentDuplicate(req);
+  if (reclaimed) return res.json(reclaimed);
+  if (await Lead.exists({ colid: req.colid, $or: [{ emailkey: email }, { phonekey: phone }, { email: exactEmail(email) }] })) throw error('Duplicate found: email or phone already exists. Cannot proceed.', 409);
+  res.json({ success: true, available: true });
+}));
+router.post("/leads/save", wrap(async (req, res) => {
+  const reclaimed = await agentDuplicate(req);
+  if (reclaimed) return res.json(reclaimed);
   const feedback = {};
   const saved = await saveLead(req.body, req.colid, req.leadMode, req.leadOwner, feedback);
   res.json({ success: true, ...feedback, data: publicLead(saved) });
