@@ -4,6 +4,7 @@ const StudentOnlinePayment = require("../Models/studentonlinepaymentds");
 const IciciPayment = require("../Models/icicipaymentds");
 const User = require("../Models/user");
 const CashfreeConfig = require("../Models/cashfreeconfigds");
+const lateFeePayment = require('../services/lateFeePayment');
 
 function text(value) {
   return String(value || "").trim();
@@ -40,7 +41,8 @@ function feeItemSnapshot(row, payingAmount) {
   };
 }
 
-async function getStudentUser(colid, regno, source = {}) {
+async function getStudentUser(colid, regno, source = {}, strict = false) {
+  if (strict) return User.findOne({ colid: Number(colid), regno: text(regno), role: /^student$/i }).select('name email phone regno program programcode regulation academicyear semester section admissionyear').lean();
   const candidates = [regno, source.regno, source.email, source.studentemail, source.user]
     .map(text)
     .filter(Boolean);
@@ -91,14 +93,15 @@ exports.getPendingStudentFees = async (req, res) => {
     await exports.reconcileSuccessfulStudentOnlinePayments({ colid, regno });
     const [rows, studentuser] = await Promise.all([
       Ledgerstud.find({ colid, regno, balance: { $gt: 0 } }).sort({ academicyear: 1, feegroup: 1, feeitem: 1 }).lean(),
-      getStudentUser(colid, regno, req.query)
+      getStudentUser(colid, regno, req.query, req.onlineFees3)
     ]);
     const enrichedRows = rows.map((row) => ({
       ...row,
       program: text(row.program) || text(studentuser?.program),
       programcode: text(row.programcode) || text(studentuser?.programcode)
     }));
-    res.json({ success: true, data: enrichedRows, studentuser });
+    const latefine = req.onlineFees3 ? await lateFeePayment.quote(colid, enrichedRows, studentuser || {}) : undefined;
+    res.json({ success: true, data: enrichedRows, studentuser, latefine });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -130,14 +133,18 @@ exports.createStudentPaymentSession = async (req, res) => {
     }
     if (!gateway) return res.status(404).json({ success: false, message: "Active payment gateway not found" });
 
-    const [ledgerRows, studentuser] = await Promise.all([
+    const [selectedLedgerRows, studentuser] = await Promise.all([
       Ledgerstud.find({ _id: { $in: ledgerids }, colid, regno, balance: { $gt: 0 } }).lean(),
-      getStudentUser(colid, regno, req.body)
+      getStudentUser(colid, regno, req.body, req.onlineFees3)
     ]);
+    const today = req.onlineFees3 ? require('../utils/conductExamFine').fineToday() : '';
+    const ledgerRows = req.onlineFees3 ? selectedLedgerRows.filter(row => row.duedate && require('../utils/conductExamFine').fineToday(row.duedate) <= today) : selectedLedgerRows;
     if (ledgerRows.length === 0) return res.status(400).json({ success: false, message: "No pending fee items found for payment" });
 
     const ledgeritems = ledgerRows.map((row) => feeItemSnapshot(row, row.balance));
-    const totalamount = ledgeritems.reduce((sum, item) => sum + number(item.payingamount), 0);
+    const baseamount = ledgeritems.reduce((sum, item) => sum + number(item.payingamount), 0);
+    const latefine = req.onlineFees3 ? await lateFeePayment.quote(colid, ledgerRows, studentuser || {}) : { total: 0, applied: [] };
+    const totalamount = Math.round((baseamount + latefine.total) * 100) / 100;
     if (totalamount <= 0) return res.status(400).json({ success: false, message: "Total payable amount must be greater than zero" });
 
     const first = ledgerRows[0] || {};
@@ -166,6 +173,7 @@ exports.createStudentPaymentSession = async (req, res) => {
       gatewaytype: text(gateway.type),
       refno,
       totalamount,
+      ...(req.onlineFees3 ? { paymentsource: 'OnlineFees3', baseamount, latefineamount: latefine.total, latefinerules: latefine.applied } : {}),
       description: text(req.body.description) || `Online student fee payment for ${regno}`,
       ledgeritems
     });
@@ -176,6 +184,7 @@ exports.createStudentPaymentSession = async (req, res) => {
         payment,
         gateway,
         studentuser,
+        latefine,
         gatewayPayload: {
           colid,
           student: payment.student || regno,
@@ -207,10 +216,12 @@ exports.settleSuccessfulStudentOnlinePayment = async (payment, gatewayParams = {
     _id: sourceId,
     colid: Number(payment.colid)
   });
-  if (!onlinePayment || isSettledOnlineStatus(onlinePayment.paymentstatus)) return onlinePayment;
+  if (!onlinePayment) return onlinePayment;
 
   const gatewayPaidDate = payment?.paiddate ? new Date(payment.paiddate) : null;
   const paiddate = gatewayPaidDate && !Number.isNaN(gatewayPaidDate.getTime()) ? gatewayPaidDate : new Date();
+  await lateFeePayment.recordPaid(onlinePayment, payment, paiddate);
+  if (isSettledOnlineStatus(onlinePayment.paymentstatus)) return onlinePayment;
   const updatedItems = [];
   for (const item of onlinePayment.ledgeritems || []) {
     const ledger = await Ledgerstud.findOne({ _id: item.ledgerid, colid: onlinePayment.colid, regno: onlinePayment.regno });
