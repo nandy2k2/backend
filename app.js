@@ -7358,6 +7358,7 @@ app.post("/api/v2/repair-maintenance/user-to-counter-fee/update", repairmaintena
 app.get("/api/v2/repair-maintenance/program-change/options", repairmaintenancectlrds.programChangeOptions);
 app.use("/api/v2/question-paper-indent", require("./controllers/questionpaperindentctlrds"));
 app.use("/api/v2/crm2", require("./controllers/crm2ctlrds"));
+app.use('/api/v2/crm2', require('./controllers/crm2leadreportctlrds'));
 app.use('/api/v2/crm2/config', require('./controllers/crm2configurationctlrds').router);
 app.use('/api/v2/crm2/lead-records', require('./controllers/crm2leadrecordsctlrds').router);
 app.use('/api/v2/crm2/applications', require('./controllers/crm2applicationsctlrds').router);
