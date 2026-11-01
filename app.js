@@ -788,6 +788,12 @@ app.post('/api/v2/admission-application-management/bulk-status', admissionApplic
 app.post('/api/v2/admission-application-management/bulk-comments-status', admissionApplicationManagementController.bulkUpdateApplicationCommentsStatus);
 app.post('/api/v2/admission-application-management/general-admit', admissionApplicationManagementController.generalAdmissionBulkAdmit);
 app.post('/api/v2/admission-application-management/send-email', admissionApplicationManagementController.sendEmail);
+const admissionUserMapping = require('./controllers/admissionusermappingctlrds');
+app.get('/api/v2/admission-user-mapping/options', admissionUserMapping.options);
+app.post('/api/v2/admission-user-mapping', admissionUserMapping.save);
+app.post('/api/v2/admission-user-mapping/delete', admissionUserMapping.remove);
+app.post('/api/v2/admission-application-management-2/transfer', admissionUserMapping.transfer);
+app.post('/api/v2/admission-application-management-2/send-ping', admissionUserMapping.sendPing);
 app.post('/admission-dynamic/application-document-upload', admissionDynamicController.uploadDocumentMiddleware, admissionDynamicController.uploadApplicationDocument);
 app.get('/admission-address-configuration', admissionAddressConfigurationController.getAddressConfigurations);
 app.post('/admission-address-configuration', admissionAddressConfigurationController.createAddressConfiguration);
