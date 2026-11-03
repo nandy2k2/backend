@@ -173,7 +173,7 @@ function fixture({ duplicate = false, existing = null, counsellor = null, create
   vm.runInNewContext(fs.readFileSync(file, "utf8"), { module, exports: module.exports, require(name) {
     if (name === "../Models/crm2ds") return { ...schema, Lead, masterModels: Object.fromEntries(Object.keys(schema.masters).map(key => [key, { create: async payload => { masterCreates.push(payload); return payload; }, exists: async query => { queries.push(query); return masterExists; }, findOne: query => { queries.push(query); return lean(key === "admissionoffice" ? office : key === "agent" ? agent : key === 'publisher' ? publisher : null); } }])) };
     if (name === "../Models/user") return { schema: require("../Models/user").schema, findOne: query => { queries.push(query); return lean(counsellor); } };
-    if (name === '../Models/crm2configurationds') return { Address: { exists: async query => { queries.push(query); return addressExists; } } };
+    if (name === '../Models/crm2configurationds') return { Address: { exists: async query => { queries.push(query); return addressExists; }, findOne: query => { queries.push(query); return lean(addressExists ? { country: 'India', state: 'Gujarat', city: 'Ahmedabad' } : null); } } };
     if (name === '../Models/mprograms') return { findOne: query => { queries.push(query); return lean(masterExists ? { program: 'Master program', programcode: query.programcode } : null); } };
     if (name === '../Models/crm2programds') return { Mapping: { find: query => { queries.push(query); return lean(autoMappings); } } };
     if (name === '../services/crm2FollowupTask') return { syncFollowupTask: async (...args) => taskEvents.push(['sync', ...args]), closeFollowupTasks: async (...args) => taskEvents.push(['close', ...args]) };
@@ -212,6 +212,16 @@ test('lead master active tab is applied after dynamic filters and cannot be over
   const f = fixture();
   await f.invoke('get', '/leads', {}, { colid: 42, active: 'No', filters: JSON.stringify([{ field: 'active', value: 'Yes' }]) });
   assert.ok(f.queries.every(query => query.colid === 42 && query.active === 'No'));
+});
+test('admission office stores a canonical Address Master location and coordinates', async () => {
+  const f = fixture();
+  const result = await f.invoke('post', '/masters/:kind/save', { colid: 42, name: 'Central Office', address: 'Main Road', country: 'india', state: 'gujarat', city: 'ahmedabad', pincode: '380001', latitude: '23.0225', longitude: '72.5714' }, {}, { kind: 'admissionoffice' });
+  assert.equal(result.status, 200);
+  assert.deepEqual({ country: f.masterCreates[0].country, state: f.masterCreates[0].state, city: f.masterCreates[0].city }, { country: 'India', state: 'Gujarat', city: 'Ahmedabad' });
+  assert.equal(f.masterCreates[0].pincode, '380001'); assert.equal(f.masterCreates[0].latitude, 23.0225);
+  assert.equal(f.queries.find(query => query.country)?.colid, 42);
+  const invalid = fixture();
+  assert.equal((await invalid.invoke('post', '/masters/:kind/save', { colid: 42, name: 'Bad Office', latitude: 91 }, {}, { kind: 'admissionoffice' })).status, 400);
 });
 test("removed lead fields are absent from metadata and cannot be saved", async () => {
   const removed = ["abcid", "rollno", "dob", "birthdate", "dateofbirth", "customFields", "admissionapplicationid"];

@@ -82,6 +82,9 @@ const masterModels = Object.fromEntries(Object.keys(masters).map(key => {
     schema.add({ userid: { type: mongoose.Schema.Types.ObjectId, ref: 'Users', required: true }, email: { type: String, required: true, lowercase: true, trim: true } });
     schema.index({ colid: 1, email: 1 }, { unique: true });
   }
+  if (key === 'admissionoffice') {
+    schema.add({ address: String, country: String, state: String, city: String, pincode: String, latitude: Number, longitude: Number });
+  }
   schema.index({ colid: 1, namekey: 1 }, { unique: key !== 'publisher' });
   const modelName = `crm2${key}masterds`;
   return [key, mongoose.models[modelName] || mongoose.model(modelName, schema)];

@@ -6176,6 +6176,7 @@ app.post("/api/v2/conductexam/examforms", conductexamformctlrds.saveForm);
 app.post("/api/v2/conductexam/examforms-delete", conductexamformctlrds.deleteForm);
 app.post("/api/v2/conductexam/examform-upload-document", conductexamformctlrds.uploadDocumentMiddleware, conductexamformctlrds.uploadDocument);
 app.get("/api/v2/conductexam/student-exam-form-context", conductexamformctlrds.studentContext);
+app.get("/api/v2/conductexam/student-exam-form-print-eligibility", conductexamformctlrds.studentExamFormPrintEligibility);
 app.get("/api/v2/conductexam/student-exam-form-report-options", conductexamformctlrds.studentExamFormReportOptions);
 app.get("/api/v2/conductexam/student-exam-form-report", conductexamformctlrds.studentExamFormReport);
 app.post("/api/v2/conductexam/student-exam-form-submit", conductexamformctlrds.submitStudentExamForm);
@@ -7382,6 +7383,7 @@ app.use('/api/v2/crm2-counselor-dashboard', require('./controllers/crm2counselor
 app.use('/api/v2/crm2-telecaller-dashboard', (req, res, next) => { req.telecallerDashboard = true; next(); }, require('./controllers/crm2counselordashboardctlrds').router);
 app.use('/api/v2/admission-scholarships', require('./controllers/admissionscholarshipctlrds'));
 app.use('/api/v2/admission-scholarship-apply', require('./controllers/admissionscholarshipapplyctlrds').router);
+app.use('/api/v2/admission-scholarship-adhoc', require('./controllers/adhocscholarshipctlrds'));
 app.use('/api/v2/crm2-admissions', require('./controllers/crm2admissionctlrds'));
 app.use('/api/v2/crm2-partner-payments', require('./controllers/crm2partnerpaymentsctlrds'));
 app.use("/api/v2/crm2-programs", require("./controllers/crm2programctlrds"));

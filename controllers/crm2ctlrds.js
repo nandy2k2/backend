@@ -5,6 +5,7 @@ const multer = require("multer");
 const AWS = require("aws-sdk");
 const Awsconfig = require("../Models/awsconfig");
 const User = require("../Models/user");
+const { Address } = require('../Models/crm2configurationds');
 const { reclaimable, ownerField } = require('../utils/crm2LeadOwnership');
 const { randomBytes, scrypt } = require("node:crypto");
 const deriveKey = require("node:util").promisify(scrypt);
@@ -12,6 +13,7 @@ const text = value => String(value ?? "").trim();
 const regex = value => new RegExp(text(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
 const emailKey = value => text(value).toLowerCase();
 const exactEmail = value => new RegExp(`^${regex(value).source}$`, "i");
+const exactText = value => new RegExp(`^${regex(value).source}$`, 'i');
 const phoneKey = value => text(value).replace(/\D/g, "");
 const demographicCategories = ["SC", "ST", "General", "OBC"];
 function publicLead(saved) {
@@ -101,6 +103,25 @@ async function saveMaster(kind, body, colid) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) throw error("Enter a valid agent email");
     for (const field of ["phone", "pan", "gst", "address", "state", "country"]) payload[field] = text(body[field]);
   }
+  if (kind === 'admissionoffice') {
+    const country = text(body.country), state = text(body.state), city = text(body.city);
+    if ([country, state, city].some(Boolean) && ![country, state, city].every(Boolean)) throw error('Select Country, State and City from Address Master');
+    if (country) {
+      const location = await Address.findOne({ colid, country: exactText(country), state: exactText(state), city: exactText(city) }).lean();
+      if (!location) throw error('Select a valid Country, State and City combination from Address Master');
+      payload.country = location.country; payload.state = location.state; payload.city = location.city;
+    } else { payload.country = ''; payload.state = ''; payload.city = ''; }
+    payload.address = text(body.address); payload.pincode = text(body.pincode);
+    for (const field of ['latitude', 'longitude']) {
+      const raw = text(body[field]);
+      if (!raw) payload[field] = undefined;
+      else {
+        const value = Number(raw), limit = field === 'latitude' ? 90 : 180;
+        if (!Number.isFinite(value) || value < -limit || value > limit) throw error(`${field === 'latitude' ? 'Latitude' : 'Longitude'} must be between ${-limit} and ${limit}`);
+        payload[field] = value;
+      }
+    }
+  }
   const data = body.id ? await Model.findOneAndUpdate({ _id: body.id, colid }, payload, { new: true, runValidators: true }) : await Model.create(payload);
   if (!data) throw error("Record not found", 404);
   if (kind === "agent" && existing) await Lead.updateMany({ colid, agentemail: existing.email }, { $set: { agentname: payload.name, agentemail: payload.email } });
@@ -114,7 +135,7 @@ async function saveMaster(kind, body, colid) {
 }
 router.get("/masters/:kind", wrap(async (req, res) => {
   const Model = masterModel(req.params.kind), query = { colid: req.colid };
-  if (text(req.query.search)) query.$or = (req.params.kind === "agent" ? ["name", "email", "phone", "pan", "gst", "state", "country"] : req.params.kind === 'publisher' ? ['name','email'] : ["name", "description"]).map(field => ({ [field]: regex(req.query.search) }));
+  if (text(req.query.search)) query.$or = (req.params.kind === "agent" ? ["name", "email", "phone", "pan", "gst", "state", "country"] : req.params.kind === 'publisher' ? ['name','email'] : req.params.kind === 'admissionoffice' ? ['name','description','address','country','state','city','pincode'] : ["name", "description"]).map(field => ({ [field]: regex(req.query.search) }));
   if (req.query.status) query.status = req.query.status;
   const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100), skip = Math.max(Number(req.query.skip) || 0, 0);
   const [data, total] = await Promise.all([Model.find(query).sort({ order: 1, name: 1 }).skip(skip).limit(limit).lean(), Model.countDocuments(query)]);
@@ -453,3 +474,4 @@ router.post("/bulk/:entity", wrap(async (req, res) => {
 }));
 module.exports = router;
 module.exports.saveLead = saveLead;
+module.exports.saveMaster = saveMaster;

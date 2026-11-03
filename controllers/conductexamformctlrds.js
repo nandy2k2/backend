@@ -21,6 +21,7 @@ const Institution = require("../Models/insdetails");
 const FormFillupDates = require("../Models/conductexamformfillupdatesds");
 const ExamFine = require('../Models/conductexamfineds');
 const { calculateExamFine, fineToday } = require('../utils/conductExamFine');
+const { examFormPrintEligibility } = require('../utils/examFormPrintEligibility');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -552,12 +553,13 @@ exports.studentContext = async (req, res) => {
     } : null;
     let formOverview;
     if (req.query.overview === "Yes") {
-      const [schedule, barredCourses, submission] = await Promise.all([
+      const [schedule, barredCourses, submission, feeStatusRows] = await Promise.all([
         FormFillupDates.findOne({ colid, academicyear, examcode, program: student.program, programcode: student.programcode }).lean(),
         PreExamEligibility.find({ colid, regno, academicyear, examcode, regulation: student.regulation, programcode: student.programcode, semester: student.semester, status: { $ne: "Inactive" } }).select("course coursecode attendance fees note").lean(),
-        ConductExamFormSubmission.findOne({ colid, regno, academicyear, examcode, examtype }).select("status updatedAt").sort({ updatedAt: -1 }).lean()
+        ConductExamFormSubmission.findOne({ colid, regno, academicyear, examcode, examtype }).select("status updatedAt").sort({ updatedAt: -1 }).lean(),
+        ConductExamRoll.find({ colid, regno, academicyear, examcode, programcode: student.programcode }).select('course coursecode fees').lean()
       ]);
-      formOverview = { schedule, barredCourses, submission, checkedAt: new Date() };
+      formOverview = { schedule, barredCourses, submission, printEligibility: examFormPrintEligibility(feeStatusRows), checkedAt: new Date() };
     }
     const examFineRules = req.query.examFine === 'Yes' ? await ExamFine.find({ colid, academicyear, examcode, program: clean(student.program), programcode: clean(student.programcode) }).lean() : [];
     const examScholarship = req.query.examFine === 'Yes' ? !!await ExamScholarship.findOne({ colid, academicyear, regulation, examcode, programcode: clean(student.programcode), semester, regno, status: { $not: /^Inactive$/i } }).lean() : false;
@@ -565,6 +567,15 @@ exports.studentContext = async (req, res) => {
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to load student exam form context" });
   }
+};
+
+exports.studentExamFormPrintEligibility = async (req, res) => {
+  try {
+    const colid = num(req.query.colid), regno = clean(req.query.regno), academicyear = clean(req.query.academicyear), examcode = clean(req.query.examcode);
+    if (!colid || !regno || !academicyear || !examcode) return res.status(400).json({ message: 'colid, regno, academic year and exam code are required' });
+    const rows = await ConductExamRoll.find({ colid, regno, academicyear, examcode }).select('course coursecode fees').lean();
+    res.json({ data: examFormPrintEligibility(rows) });
+  } catch (err) { res.status(500).json({ message: err.message || 'Unable to verify Exam Roll fee status' }); }
 };
 
 const distinctFromRows = (rows, field) => uniqueSorted(rows.map((row) => row[field]));
