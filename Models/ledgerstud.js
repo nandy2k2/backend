@@ -42,6 +42,7 @@ const ledgerstudschema = new mongoose.Schema({
      balance: {
         type: Number
     },
+    scholarshiprevision: { type: Number },
      Latefinedue: {
         type: Number
     },
@@ -93,6 +94,10 @@ const ledgerstudschema = new mongoose.Schema({
     doclink: {
         type: String
     },
+    careofname: String,
+    careofemail: String,
+    reference: String,
+    documentlink: String,
     feebook: {
         type: String
     },

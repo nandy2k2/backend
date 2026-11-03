@@ -7381,7 +7381,9 @@ app.use('/api/v2/lead-portal', require('./controllers/crm2leadportalctlrds').rou
 app.use('/api/v2/crm2-counselor-dashboard', require('./controllers/crm2counselordashboardctlrds').router);
 app.use('/api/v2/crm2-telecaller-dashboard', (req, res, next) => { req.telecallerDashboard = true; next(); }, require('./controllers/crm2counselordashboardctlrds').router);
 app.use('/api/v2/admission-scholarships', require('./controllers/admissionscholarshipctlrds'));
+app.use('/api/v2/admission-scholarship-apply', require('./controllers/admissionscholarshipapplyctlrds').router);
 app.use('/api/v2/crm2-admissions', require('./controllers/crm2admissionctlrds'));
+app.use('/api/v2/crm2-partner-payments', require('./controllers/crm2partnerpaymentsctlrds'));
 app.use("/api/v2/crm2-programs", require("./controllers/crm2programctlrds"));
 app.post("/api/v2/repair-maintenance/program-change/apply", repairmaintenancectlrds.applyProgramChange);
 app.get("/api/v2/repair-maintenance/selected-program-change/options", repairmaintenancectlrds.selectedProgramChangeOptions);

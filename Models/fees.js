@@ -1,6 +1,7 @@
 const mongoose=require('mongoose');
 
 const feesschema = new mongoose.Schema({
+    scholarshiprevision: Number,
     name: {
         type: String,
         required: [true,'Please enter name']

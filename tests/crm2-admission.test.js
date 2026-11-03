@@ -6,7 +6,8 @@ const assignment = { _id: A, leadid: L, academicyear: '2026-27', program: 'Scien
 const lead = { _id: L, name: 'One', email: 'student@test.com', phone: '123', gender: 'Female', category: 'SC', photo: 'https://image', fathername: 'Father', password: 'scrypt:secret', authenticatorsecret: 'secret' };
 function fixture({ owned = true, duplicateEmail = false, existingRegno = false } = {}) {
   let record, student, serial = 0;
-  const writes = [], ledgers = [];
+  const writes = [], ledgers = [], scholarshipApplications=[];
+  const realScholarships=actual('../services/admissionScholarshipApply');
   const query = value => ({ session() { return this; }, select() { return this; }, lean: async () => value, then(resolve) { resolve(value); } });
   const fee = { _id: F, colid: 42, academicyear: '2026-27', program: 'Science', programcode: 'P1', feecategory: 'SC', gender: 'Female', amount: 10000, semester: '1', feegroup: 'Tuition', feeeitem: 'Tuition', classdate: new Date('2026-10-24') };
   const scholarship = { _id: S, colid: 42, scholarship: 'Merit', program: 'Science', programcode: 'P1', category: 'All', gender: 'All', active: 'Yes', type: 'Percentage', value: 10, merit: 'Yes', meritpercentage: 80 };
@@ -32,11 +33,19 @@ function fixture({ owned = true, duplicateEmail = false, existingRegno = false }
     '../Models/crm2ds': { Lead: { findOne: () => query(lead), updateOne: async (q, update) => writes.push({ model: 'Lead', q, update }) } },
     '../Models/crm2admissionds': { Admission, Counter: { init: async () => {}, findOneAndUpdate: async () => {} } },
     '../Models/user': User,
-    '../Models/mprograms': { findOne: () => query({ institution: 'College', department: 'Science' }) },
+    '../Models/mprograms': { findOne: match => query(match.colid===42&&['P1','P2'].includes(match.programcode)?{program:match.programcode==='P2'?'Arts':'Science',programcode:match.programcode,institution:'College',department:'Science'}:null) },
     '../Models/fees': { find: () => query([fee]) },
     '../Models/admissionscholarshipds': { find: () => query([scholarship]) },
     '../Models/ledgerstud': { create: async ([row]) => { const ledger = { _id: String(++serial).padStart(24, '0'), ...row }; ledgers.push(ledger); return [ledger]; } }
   };
+  const scholarshipPreview=async()=>realScholarships.buildItems({students:student?[student]:[],scholarships:[scholarship],fees:ledgers.filter(row=>row.amount>0),configurations:[fee],applications:scholarshipApplications,admissions:record?[record]:[]});
+  deps['./admissionScholarshipApply']={Application:{init:async()=>{}},preview:scholarshipPreview,applyInSession:async({selections,actor})=>{
+    const preview=await scholarshipPreview(),applied=[];let skipped=0;
+    for(const selected of selections){const row=preview.rows.find(item=>item.studentid===selected.studentid&&item.scholarshipid===selected.scholarshipid&&item.sourceledgerid===selected.sourceledgerid);if(row.alreadyapplied){skipped++;continue;}
+      const [ledger]=await deps['../Models/ledgerstud'].create([realScholarships.ledgerPayload(student,row,actor,new Date())]);
+      scholarshipApplications.push({regno:student.regno,scholarshipid:row.scholarshipid,sourceledgerid:row.sourceledgerid,amount:row.calculatedamount});applied.push({...row,ledgerid:ledger._id});
+    }return {saved:applied.length,skipped,applied};
+  }};
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(file, 'utf8'), { module, Date, require: name => deps[name] || actual(name) });
   return { ...module.exports, writes, ledgers, fee, scholarship, student: () => student };
@@ -56,6 +65,19 @@ test('unowned lead, existing email and duplicate manual regno cannot create stud
   await assert.rejects(() => fixture({ owned: false }).admit(request), /not assigned/);
   await assert.rejects(() => fixture({ duplicateEmail: true }).admit(request), /email already exists/);
   await assert.rejects(() => fixture({ existingRegno: true }).admit({ ...request, autoregnumber: false, regno: 'USED' }), /already exists/);
+});
+test('admission program defaults to applied program but can select a canonical program from same institution/year',async()=>{
+  const f=fixture();const result=await f.admit({...request,programcode:'P2',program:'Forged name'});
+  assert.equal(result.regno,'42-2026-27-P2-1');assert.equal(f.student().program,'Arts');assert.equal(f.student().programcode,'P2');
+  await assert.rejects(()=>f.admit({...request,programcode:'P1'}),/saved program/);
+  await assert.rejects(()=>fixture().admit({...request,programcode:'NOT-IN-MASTER'}),/not available/);
+});
+test('scholarships can explicitly be skipped without creating credits',async()=>{
+  const f=fixture(),{admissionid}=await f.admit(request);
+  await f.apply({colid:42,actor:request.actor,admissionid,kind:'fees',ids:[]});
+  const result=await f.apply({colid:42,actor:request.actor,admissionid,kind:'scholarships',ids:[],skipscholarships:true});
+  assert.equal(result.scholarshipsskipped,true);assert.equal(f.ledgers.length,0);
+  const data=await f.choices(42,request.actor,admissionid,null);assert.equal(data.admission.scholarshipsdone,true);assert.equal(data.admission.scholarshipsskipped,true);
 });
 test('matches exact program/year and demographic All rules, including merit threshold', () => {
   const f = fixture(), student = { ...lead, ...assignment };
@@ -86,4 +108,25 @@ test('invalid IDs and out-of-scope selections are rejected; skipping steps still
   await f.apply({ colid: 42, actor: request.actor, admissionid, kind: 'fees', ids: [] });
   await f.apply({ colid: 42, actor: request.actor, admissionid, kind: 'scholarships', ids: [] });
   const data = await f.choices(42, request.actor, admissionid, null); assert.equal(data.admission.scholarshipsdone, true); assert.equal(f.ledgers.length, 0);
+});
+test('semester fee-item scholarship uses only matching applied fee base and preserves fee-item ledger details',async()=>{
+  const f=fixture();Object.assign(f.scholarship,{semester:'1',feeitem:'Tuition',feecategory:'SC',feeconfigurationid:F});
+  assert.equal(f.scholarshipMatches({...f.scholarship,semester:'2'},{...lead,...assignment,semester:'1'},85),false);
+  const {admissionid}=await f.admit(request);
+  await f.apply({colid:42,actor:request.actor,admissionid,kind:'fees',ids:[F]});
+  const data=await f.choices(42,request.actor,admissionid,null);assert.equal(data.scholarships[0].feebase,10000);assert.equal(data.scholarships[0].calculatedamount,1000);
+  await f.apply({colid:42,actor:request.actor,admissionid,kind:'scholarships',ids:[S]});
+  assert.equal(f.ledgers[1].semester,'1');assert.equal(f.ledgers[1].feeitem,'Merit');assert.equal(f.ledgers[1].feecategory,'Scholarship');assert.equal(f.ledgers[1].amount,-1000);assert.match(f.ledgers[1].comments,/Scholarship Merit/);
+  assert.equal(data.scholarshipitems[0].sourcefeeitem,'Tuition');assert.equal(data.scholarshipitems[0].base,10000);
+});
+test('Confirm admission uses current Total, Balance and Paid ledger values and applies only chosen fee-item rows',async()=>{
+  const f=fixture();Object.assign(f.scholarship,{semester:'1',feeitem:'Tuition',feecategory:'SC'});
+  const {admissionid}=await f.admit(request);await f.apply({colid:42,actor:request.actor,admissionid,kind:'fees',ids:[F]});
+  f.ledgers[0].paid=4000;f.ledgers[0].balance=6000;
+  for(const [type,base,amount]of[['Total',10000,1000],['Balance',6000,600],['Paid',4000,400]]){
+    f.scholarship.scholarshiptype=type;const data=await f.choices(42,request.actor,admissionid,null);assert.equal(data.scholarshipitems[0].base,base);assert.equal(data.scholarshipitems[0].calculatedamount,amount);
+  }
+  const data=await f.choices(42,request.actor,admissionid,null),selected=data.scholarshipitems[0];
+  await f.apply({colid:42,actor:request.actor,admissionid,kind:'scholarships',ids:[selected._id],items:[selected]});assert.equal(f.ledgers[1].amount,-400);assert.equal(f.ledgers[1].feeitem,'Merit');assert.equal(f.ledgers[1].feecategory,'Scholarship');
+  await assert.rejects(()=>f.apply({colid:42,actor:request.actor,admissionid,kind:'scholarships',items:[{...selected,studentid:'777777777777777777777777'}]}),/belong to this admitted student/);
 });

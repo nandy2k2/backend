@@ -5,9 +5,9 @@ const masters = {
   source: "Source", pipeline: "Pipeline", type: "Type", category: "Category",
   leadrating: "Lead rating", case: "Case", distributiontype: "Distribution type",
   mediumofinstruction: "Medium of Instruction", quota: "Quota", document: "Document",
-  admissionoffice: "Admission office", interactionmode: "Interaction mode", agent: "Agent"
+  admissionoffice: "Admission office", interactionmode: "Interaction mode", agent: "Agent", publisher: "Publisher"
 };
-const masterLeadFields = { category: "crmcategory", mediumofinstruction: "Mediumofinstruction", document: "documents.documentname", interactionmode: "interactions.mode", agent: "agentname" };
+const masterLeadFields = { category: "crmcategory", mediumofinstruction: "Mediumofinstruction", document: "documents.documentname", interactionmode: "interactions.mode", agent: "agentname", publisher: "publisher" };
 const excluded = new Set(["_id", "__v", "program", "programcode", "semester", "Major", "Minor", "MDC", "IDC", "VAC", "SEC", "major", "minor", "mdc", "idc", "vac", "sec", "minorsub", "mdcsub", "vocationalsub", "authenticatorsecret"]);
 const definitions = {};
 excluded.add("srno"); excluded.add("expotoken");
@@ -28,6 +28,7 @@ Object.assign(definitions, {
   country: String,
   admitted: { type: String, enum: ['Yes', 'No'], default: 'No' },
   agentname: String, agentemail: String, admissionstatus: { type: String, enum: ["Admitted", "Not admitted"], default: "Not admitted" },
+  publisher: String, publisheremail: String,
   admissionofficeid: String, admissionoffice: String, campusvisitdate: Date, campuscounsellor: String, campuscounseloremail: String,
   gender: { type: String, enum: ["Male", "Female", "Not specified"] },
   category: { type: String, enum: ["SC", "ST", "General", "OBC"] },
@@ -42,7 +43,7 @@ const groups = {
   Identity: ["name", "email", "phone", "googleemail", "regno", "scholarnumber", "abcid", "rollno", "gender", "dob", "birthdate", "nationality", "photo"],
   "Family & Address": ["fathername", "mothername", "guardianname", "guardianmobile", "guardianemail", "address", "country", "state", "city", "district", "pincode", "category", "quota", "annualincome", "freeshipcardholder", "samestate"],
   "Education & Work": ["academicyear", "degree", "department", "joiningdate", "skills", "Mediumofinstruction", "admissionapplicationid", "isdisabled", "scholarship", ...educationFields],
-  "CRM Details": ["telecallername", "telecalleremail", "dateadded", "active", "admitted", "followupdate", "agentname", "agentemail", "admissionstatus", "admissionofficeid", "admissionoffice", "campusvisitdate", "campuscounsellor", "campuscounseloremail"],
+  "CRM Details": ["publisher", "publisheremail", "telecallername", "telecalleremail", "dateadded", "active", "admitted", "followupdate", "agentname", "agentemail", "admissionstatus", "admissionofficeid", "admissionoffice", "campusvisitdate", "campuscounsellor", "campuscounseloremail"],
   "Additional Details": []
 };
 const managed = new Set(["colid", "user", "addedby", "authenticatordate", "authenticatorsetupdate", "crm2profileversion"]);
@@ -77,7 +78,11 @@ const masterModels = Object.fromEntries(Object.keys(masters).map(key => {
     schema.add({ email: { type: String, required: true, trim: true, lowercase: true }, phone: String, pan: String, gst: String, address: String, state: String, country: String });
     schema.index({ colid: 1, email: 1 }, { unique: true });
   }
-  schema.index({ colid: 1, namekey: 1 }, { unique: true });
+  if (key === 'publisher') {
+    schema.add({ userid: { type: mongoose.Schema.Types.ObjectId, ref: 'Users', required: true }, email: { type: String, required: true, lowercase: true, trim: true } });
+    schema.index({ colid: 1, email: 1 }, { unique: true });
+  }
+  schema.index({ colid: 1, namekey: 1 }, { unique: key !== 'publisher' });
   const modelName = `crm2${key}masterds`;
   return [key, mongoose.models[modelName] || mongoose.model(modelName, schema)];
 }));

@@ -1,6 +1,7 @@
 const mongoose=require('mongoose');
 
 const userschema = new mongoose.Schema({
+    scholarshipapplicationrevision: Number,
     email: {
         type: String,
         required: [true,'Please enter email'],

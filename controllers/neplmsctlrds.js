@@ -772,7 +772,7 @@ exports.gradeAssignmentSubmission = async (req, res) => {
 
 exports.aiEvaluateAssignmentSubmission = async (req, res) => {
   try {
-    const colid = Number(req.body.colid);
+    const colid = Number(req.user?.colid || req.body.colid);
     const id = text(req.body.id);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
     if (!id) return res.status(400).json({ success: false, message: "Submission is required" });
@@ -798,6 +798,14 @@ exports.aiEvaluateAssignmentSubmission = async (req, res) => {
       parsed.strengths ? `Strengths: ${parsed.strengths}` : "",
       parsed.improvements ? `Improvements: ${parsed.improvements}` : ""
     ].filter(Boolean).join("\n\n");
+
+    if (req.body.checkAiContent === true) {
+      submission.aicontentreview = await require('../utils/assignmentAiContentReview').reviewSubmission({
+        submission, colid, provider: req.body.provider || 'Gemini', model: req.body.model,
+        checkedby: text(req.body.gradedby || req.body.user),
+        callAi: prompt => callEvaluationAi({ colid, provider: req.body.provider || 'Gemini', model: req.body.model, ollamaConfigId: req.body.ollamaConfigId, prompt })
+      });
+    }
 
     submission.fullmarks = fullmarks;
     submission.marks = marks;

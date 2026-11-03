@@ -4,6 +4,7 @@ const schema = new mongoose.Schema({
   leadid: mongoose.Schema.Types.ObjectId, studentid: mongoose.Schema.Types.ObjectId,
   regno: String, academicyear: String, program: String, programcode: String,
   meritpercentage: Number, createdby: String, feesdone: { type: Boolean, default: false }, scholarshipsdone: { type: Boolean, default: false },
+  scholarshipsskipped:{type:Boolean,default:false},
   feeapplications: [{ sourceid: String, ledgerid: mongoose.Schema.Types.ObjectId, amount: Number }],
   scholarshipapplications: [{ sourceid: String, ledgerid: mongoose.Schema.Types.ObjectId, amount: Number }]
 }, { timestamps: true });

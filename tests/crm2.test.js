@@ -154,7 +154,7 @@ test("education retains missing numeric marks and cannot carry managed fields", 
   assert.equal(f.creates[0].education[0].subjects[0].obtained, null);
 });
 const lean = value => ({ select() { return this; }, sort() { return this; }, skip() { return this; }, limit() { return this; }, lean: async () => value });
-function fixture({ duplicate = false, existing = null, counsellor = null, createError = null, awsConfig = null, office = null, masterExists = true, agent = null, leadsRecords = [], addressExists = true, autoMappings = [] } = {}) {
+function fixture({ duplicate = false, existing = null, counsellor = null, createError = null, awsConfig = null, office = null, masterExists = true, agent = null, publisher = null, leadsRecords = [], addressExists = true, autoMappings = [] } = {}) {
   const queries = [], creates = [], updates = [], uploads = [], aggregations = [], masterCreates = [], taskEvents = [];
   const Lead = {
     find: query => { queries.push(query); return lean(leadsRecords); },
@@ -171,7 +171,7 @@ function fixture({ duplicate = false, existing = null, counsellor = null, create
   };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(file, "utf8"), { module, exports: module.exports, require(name) {
-    if (name === "../Models/crm2ds") return { ...schema, Lead, masterModels: Object.fromEntries(Object.keys(schema.masters).map(key => [key, { create: async payload => { masterCreates.push(payload); return payload; }, exists: async query => { queries.push(query); return masterExists; }, findOne: query => { queries.push(query); return lean(key === "admissionoffice" ? office : key === "agent" ? agent : null); } }])) };
+    if (name === "../Models/crm2ds") return { ...schema, Lead, masterModels: Object.fromEntries(Object.keys(schema.masters).map(key => [key, { create: async payload => { masterCreates.push(payload); return payload; }, exists: async query => { queries.push(query); return masterExists; }, findOne: query => { queries.push(query); return lean(key === "admissionoffice" ? office : key === "agent" ? agent : key === 'publisher' ? publisher : null); } }])) };
     if (name === "../Models/user") return { schema: require("../Models/user").schema, findOne: query => { queries.push(query); return lean(counsellor); } };
     if (name === '../Models/crm2configurationds') return { Address: { exists: async query => { queries.push(query); return addressExists; } } };
     if (name === '../Models/mprograms') return { findOne: query => { queries.push(query); return lean(masterExists ? { program: 'Master program', programcode: query.programcode } : null); } };
@@ -233,6 +233,19 @@ test("lead agent name and email are resolved from the scoped master, not client 
   assert.equal(f.creates[0].agentname, "Real agent"); assert.equal(f.creates[0].agentemail, "agent@example.com");
   assert.equal(f.queries.at(-1).colid, 42);
   const invalid = fixture(); assert.equal((await invalid.invoke("post", "/leads/save", { colid: 42, ...leadData, agentemail: "foreign@example.com" })).status, 400);
+});
+test('Publisher master links only a Publisher-role User and never duplicates its password',async()=>{
+  const f=fixture({counsellor:{_id:'user1',name:'Canonical Publisher',email:'pub@example.com'}});
+  const result=await f.invoke('post','/masters/:kind/save',{colid:42,name:'Spoof',email:'PUB@example.com',password:'must-not-copy'}, {}, {kind:'publisher'});
+  assert.equal(result.status,200);assert.equal(f.masterCreates[0].name,'Canonical Publisher');assert.equal(f.masterCreates[0].userid,'user1');assert.equal(f.masterCreates[0].password,undefined);
+  assert.equal(f.queries.find(row=>row.role)?.role.source,'^Publisher$');assert.ok(f.queries.every(row=>row.colid===42));
+  const denied=await fixture().invoke('post','/masters/:kind/save',{colid:42,name:'Publisher',email:'foreign@example.com'},{},{kind:'publisher'});assert.equal(denied.status,400);
+});
+test('lead publisher identity is resolved from the institution master and retained in public lead metadata',async()=>{
+  const f=fixture({publisher:{name:'Real Publisher',email:'pub@example.com'}});
+  assert.equal((await f.invoke('post','/leads/save',{colid:42,...leadData,publisher:'Spoof',publisheremail:'PUB@example.com'})).status,200);
+  assert.equal(f.creates[0].publisher,'Real Publisher');assert.equal(f.creates[0].publisheremail,'pub@example.com');
+  assert.equal((await fixture().invoke('post','/leads/save',{colid:42,...leadData,publisheremail:'foreign@example.com'})).status,400);
 });
 test("education records retain overall marks and grade with subjectwise marks", async () => {
   const f = fixture();

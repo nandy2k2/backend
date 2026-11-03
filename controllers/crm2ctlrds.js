@@ -67,6 +67,11 @@ router.get("/counsellors", wrap(async (req, res) => {
   if (text(req.query.search)) query.$or = ["name", "email"].map(field => ({ [field]: regex(req.query.search) }));
   res.json({ success: true, data: await User.find(query).select("name email designation department").sort({ name: 1 }).limit(30).lean() });
 }));
+router.get('/publisher-users', wrap(async (req,res) => {
+  const query = { colid: req.colid, role: /^Publisher$/i };
+  if (text(req.query.search)) query.$or = ['name','email'].map(field => ({ [field]: regex(req.query.search) }));
+  res.json({ data: await User.find(query).select('name email').sort({name:1}).limit(100).lean() });
+}));
 router.get("/field-options", wrap(async (req, res) => {
   const field = text(req.query.field);
   if (field === "password" || !fields.some(item => item.field === field && item.type === "String")) throw error("Invalid dropdown field");
@@ -86,6 +91,11 @@ async function saveMaster(kind, body, colid) {
   const existing = body.id ? await Model.findOne({ _id: body.id, colid }).lean() : null;
   if (body.id && !existing) throw error("Record not found", 404);
   const payload = { colid, name: text(body.name), namekey: text(body.name).toLowerCase(), description: text(body.description), status: body.status || "Active", order: Number(body.order || 0), createdby: text(body.user) };
+  if (kind === 'publisher') {
+    const publisher = await User.findOne({ colid, email: exactEmail(body.email), role: /^Publisher$/i }).select('name email').lean();
+    if (!publisher) throw error('Select a User with role Publisher from this institution');
+    Object.assign(payload,{ userid: publisher._id, name: publisher.name, namekey: text(publisher.name).toLowerCase(), email: emailKey(publisher.email) });
+  }
   if (kind === "agent") {
     payload.email = emailKey(body.email);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) throw error("Enter a valid agent email");
@@ -94,7 +104,8 @@ async function saveMaster(kind, body, colid) {
   const data = body.id ? await Model.findOneAndUpdate({ _id: body.id, colid }, payload, { new: true, runValidators: true }) : await Model.create(payload);
   if (!data) throw error("Record not found", 404);
   if (kind === "agent" && existing) await Lead.updateMany({ colid, agentemail: existing.email }, { $set: { agentname: payload.name, agentemail: payload.email } });
-  if (existing && existing.name !== payload.name) {
+  if (kind === 'publisher' && existing) await Lead.updateMany({ colid, publisheremail: existing.email }, { $set: { publisher: payload.name, publisheremail: payload.email } });
+  if (existing && existing.name !== payload.name && kind !== 'publisher') {
     if (kind === "document") await Lead.updateMany({ colid, "documents.documentname": existing.name }, { $set: { "documents.$[doc].documentname": payload.name } }, { arrayFilters: [{ "doc.documentname": existing.name }] });
     else if (kind === "interactionmode") await Lead.updateMany({ colid, "interactions.mode": existing.name }, { $set: { "interactions.$[entry].mode": payload.name } }, { arrayFilters: [{ "entry.mode": existing.name }] });
     else { const field = masterLeadFields[kind] || kind; await Lead.updateMany({ colid, [field]: existing.name }, { $set: { [field]: payload.name } }); }
@@ -103,7 +114,7 @@ async function saveMaster(kind, body, colid) {
 }
 router.get("/masters/:kind", wrap(async (req, res) => {
   const Model = masterModel(req.params.kind), query = { colid: req.colid };
-  if (text(req.query.search)) query.$or = (req.params.kind === "agent" ? ["name", "email", "phone", "pan", "gst", "state", "country"] : ["name", "description"]).map(field => ({ [field]: regex(req.query.search) }));
+  if (text(req.query.search)) query.$or = (req.params.kind === "agent" ? ["name", "email", "phone", "pan", "gst", "state", "country"] : req.params.kind === 'publisher' ? ['name','email'] : ["name", "description"]).map(field => ({ [field]: regex(req.query.search) }));
   if (req.query.status) query.status = req.query.status;
   const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100), skip = Math.max(Number(req.query.skip) || 0, 0);
   const [data, total] = await Promise.all([Model.find(query).sort({ order: 1, name: 1 }).skip(skip).limit(limit).lean(), Model.countDocuments(query)]);
@@ -114,7 +125,7 @@ router.post("/masters/:kind/delete", wrap(async (req, res) => {
   const Model = masterModel(req.params.kind);
   const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
   const rows = await Model.find({ colid: req.colid, _id: { $in: ids } }).lean();
-  if (await Lead.exists({ colid: req.colid, [masterLeadFields[req.params.kind] || req.params.kind]: { $in: rows.map(row => row.name) } })) throw error("A selected value is used by leads. Set it to Inactive instead of deleting it.");
+  if (await Lead.exists({ colid: req.colid, [req.params.kind === 'publisher' ? 'publisheremail' : masterLeadFields[req.params.kind] || req.params.kind]: { $in: rows.map(row => req.params.kind === 'publisher' ? row.email : row.name) } })) throw error("A selected value is used by leads. Set it to Inactive instead of deleting it.");
   const result = await Model.deleteMany({ colid: req.colid, _id: { $in: ids } });
   res.json({ success: true, deleted: result.deletedCount });
 }));
@@ -201,7 +212,7 @@ async function saveLead(body, colid, mode = '', owner = null, feedback = {}) {
     if (body.category === undefined || (body.category === existing.category && (!body.crmcategory || !demographicCategories.includes(body.category)))) payload.category = null;
   }
   for (const kind of Object.keys(masters)) {
-    if (["document", "interactionmode", "admissionoffice", "agent"].includes(kind)) continue;
+    if (["document", "interactionmode", "admissionoffice", "agent", "publisher"].includes(kind)) continue;
     const field = masterLeadFields[kind] || kind;
     if (payload[field] && !await masterModels[kind].exists({ colid, name: payload[field] })) throw error(`Select ${masters[kind]} from its CRM 2 master`);
   }
@@ -211,6 +222,12 @@ async function saveLead(body, colid, mode = '', owner = null, feedback = {}) {
     if (email && !agent) throw error("Select an agent from this institution's Agent master");
     payload.agentname = agent?.name || ""; payload.agentemail = agent?.email || "";
   } else delete payload.agentname;
+  if (body.publisheremail !== undefined) {
+    const email = emailKey(body.publisheremail);
+    const publisher = email ? await masterModels.publisher.findOne({ colid, email, status: 'Active' }).lean() : null;
+    if (email && !publisher) throw error('Select a publisher from this institution’s Publisher master');
+    payload.publisher = publisher?.name || ''; payload.publisheremail = publisher?.email || '';
+  } else delete payload.publisher;
   if (body.admissionofficeid !== undefined || body.admissionoffice !== undefined) {
     const id = text(body.admissionofficeid), name = text(body.admissionoffice);
     const office = id || name ? await masterModels.admissionoffice.findOne({ colid, ...(id ? { _id: id } : { name }) }).lean() : null;

@@ -22,6 +22,7 @@ const nepLmsAssignmentSubmissionSchema = new mongoose.Schema(
     fullmarks: { type: Number, default: 0 },
     marks: { type: Number, default: 0 },
     facultycomments: { type: String, trim: true },
+    aicontentreview: { type: mongoose.Schema.Types.Mixed },
     gradedby: { type: String, trim: true },
     gradeddate: { type: Date },
     submitteddate: { type: Date, default: Date.now },
