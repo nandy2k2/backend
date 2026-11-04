@@ -402,10 +402,12 @@ test("a foreign admission office cannot be assigned", async () => {
 });
 test("interaction history and current pipeline/follow-up are updated atomically", async () => {
   const f = fixture();
-  const result = await f.invoke("post", "/interactions/save", { colid: 42, leadid, details: "Discussed admission", mode: "Phone", pipeline: "Interested", nextfollowupdate: "2026-10-22", user: "staff@example.com" });
+  const result = await f.invoke("post", "/interactions/save", { colid: 42, leadid, details: "Discussed admission", interactiontype: 'Incoming', reachable: 'Yes', rating: 'Warm', mode: "Phone", contact: '9876543210', pipeline: "Interested", nextfollowupdate: "2026-10-22", user: "staff@example.com" });
   assert.equal(result.status, 200);
   assert.equal(f.updates.length, 1);
   assert.equal(f.updates[0].$push.interactions.details, "Discussed admission");
+  assert.equal(f.updates[0].$push.interactions.interactiontype, 'Incoming');
+  assert.equal(f.updates[0].$push.interactions.contact, '9876543210');
   assert.equal(f.updates[0].$set.pipeline, "Interested");
   assert.equal(f.updates[0].$set.followupdate.toISOString(), "2026-10-22T00:00:00.000Z");
   assert.equal(f.taskEvents[0][0], 'sync');

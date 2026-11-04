@@ -102,6 +102,12 @@ async function saveMaster(kind, body, colid) {
     payload.email = emailKey(body.email);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) throw error("Enter a valid agent email");
     for (const field of ["phone", "pan", "gst", "address", "state", "country"]) payload[field] = text(body[field]);
+    payload.source = text(body.source);
+    if (payload.source && !await masterModels.source.exists({ colid, name: payload.source })) throw error('Select a source from Source master');
+    const counselorEmail = emailKey(body.counselloremail);
+    const counselor = counselorEmail ? await User.findOne({ colid, email: exactEmail(counselorEmail), role: { $not: /^Student$/i } }).select('name email').lean() : null;
+    if (counselorEmail && !counselor) throw error('Select a valid counselor');
+    payload.counsellorname = counselor?.name || ''; payload.counselloremail = counselor?.email || '';
   }
   if (kind === 'admissionoffice') {
     const country = text(body.country), state = text(body.state), city = text(body.city);
@@ -281,6 +287,14 @@ async function saveLead(body, colid, mode = '', owner = null, feedback = {}) {
     payload.telecallername = person?.name || ''; payload.telecalleremail = person?.email || '';
   } else delete payload.telecallername;
   if (mode === 'agent') { payload.agentname = owner.name; payload.agentemail = emailKey(owner.email); }
+  if (mode === 'agent' && !existing) {
+    const defaults = await masterModels.agent.findOne({ colid, email: emailKey(owner.email) }).lean();
+    if (defaults?.source) payload.source = defaults.source;
+    if (defaults?.counselloremail) {
+      const counselor = await User.findOne({ colid, email: exactEmail(defaults.counselloremail), role: { $not: /^Student$/i } }).select('name email').lean();
+      if (counselor) { payload.counsellorname = counselor.name; payload.counselloremail = counselor.email; }
+    }
+  }
   if (body.autoassign === true && !mode) {
     const { Mapping } = require('../Models/crm2programds');
     const { findAutoCounselor } = require('../utils/crm2AutoCounselor');
@@ -421,12 +435,19 @@ router.get("/interactions", wrap(async (req, res) => {
 async function saveInteraction(body, colid, ownership = {}) {
   if (!validId(body.leadid) || (body.id && !validId(body.id))) throw error("Select a valid lead and interaction");
   if (!text(body.details)) throw error("Interaction details are required");
-  if (!text(body.mode) || !await masterModels.interactionmode.exists({ colid, name: text(body.mode) })) throw error("Select a mode from Interaction master");
+  const interactiontype = text(body.interactiontype) || 'Incoming';
+  const reachable = text(body.reachable) || (interactiontype === 'Incoming' ? 'Yes' : 'No');
+  const mode = text(body.mode), contact = text(body.contact), rating = text(body.rating);
+  if (!['Incoming', 'Outgoing'].includes(interactiontype)) throw error('Select Incoming or Outgoing interaction type');
+  if (!['Yes', 'No'].includes(reachable)) throw error('Select whether the lead was reachable');
+  if (!['Phone', 'Whatsapp', 'SMS', 'Email', 'RCS'].includes(mode)) throw error('Select Phone, Whatsapp, SMS, Email or RCS mode');
+  if (!contact) throw error('Contact is required for the selected interaction mode');
+  if (rating && !await masterModels.leadrating.exists({ colid, name: rating })) throw error('Select a rating from Lead Rating master');
   if (!text(body.pipeline) || !await masterModels.pipeline.exists({ colid, name: text(body.pipeline) })) throw error("Select a pipeline stage");
   const nextfollowupdate = body.nextfollowupdate ? new Date(body.nextfollowupdate) : null;
   const interactiondate = body.interactiondate ? new Date(body.interactiondate) : new Date();
   if ((nextfollowupdate && Number.isNaN(nextfollowupdate.getTime())) || Number.isNaN(interactiondate.getTime())) throw error("Enter valid interaction and follow-up dates");
-  const values = { details: text(body.details), mode: text(body.mode), pipeline: text(body.pipeline), nextfollowupdate, interactiondate, updatedby: text(body.user), updatedAt: new Date() };
+  const values = { details: text(body.details), interactiontype, reachable, rating, mode, contact, pipeline: text(body.pipeline), nextfollowupdate, interactiondate, updatedby: text(body.user), updatedAt: new Date() };
   if (body.dashboardyear) values.academicyear = text(body.dashboardyear);
   const update = { $set: { pipeline: values.pipeline, followupdate: nextfollowupdate, updatedby: text(body.user) } };
   const interactionid = body.id || new mongoose.Types.ObjectId();
@@ -471,6 +492,61 @@ router.post("/bulk/:entity", wrap(async (req, res) => {
     } catch (err) { errors.push({ row: index + 2, message: err.code === 11000 ? "Duplicate email, phone or name" : err.message }); }
   }
   res.json({ success: true, saved, errors });
+}));
+const maskContact = value => { const s = text(value); return s ? '*'.repeat(Math.max(0, s.length - 4)) + s.slice(-4) : ''; };
+const updateInteractionIdentity = async req => {
+  const token = text(req.get('authorization') || req.body?.token || req.query.token).replace(/^Bearer\s+/i, '');
+  const identity = require('jsonwebtoken').verify(token, process.env.JWT_SECRET);
+  const actor = await User.findOne({ colid: Number(identity.colid), email: exactEmail(identity.user), role: { $not: /^Student$/i } }).select('name email').lean();
+  if (!actor) throw error('User session is required', 403);
+  return { colid: Number(identity.colid), actor };
+};
+router.get('/update-interaction/search', wrap(async (req, res) => {
+  const { colid, actor } = await updateInteractionIdentity(req);
+  const query = { colid }, allowed = new Set(['name','email','phone','academicyear','pipeline','source','active','admitted','type','crmcategory','counsellorname']);
+  const filters = JSON.parse(req.query.filters || '[]');
+  for (const filter of filters) if (allowed.has(filter.field) && text(filter.value)) (query.$and ||= []).push({ [filter.field]: regex(filter.value) });
+  const leads = await Lead.find(query).select('-password').sort({ createdAt: -1 }).limit(100).lean();
+  res.json({ success: true, data: leads.map(lead => {
+    const owned = emailKey(lead.counselloremail) === emailKey(actor.email);
+    return owned ? { ...publicLead(lead), owned } : { _id: lead._id, name: lead.name, academicyear: lead.academicyear, pipeline: lead.pipeline, owned, phone: maskContact(lead.phone), email: maskContact(lead.email) };
+  }) });
+}));
+router.get('/update-interaction/history', wrap(async (req, res) => {
+  const { colid, actor } = await updateInteractionIdentity(req);
+  if (!validId(req.query.leadid)) throw error('Select a lead');
+  const lead = await Lead.findOne({ colid, _id: req.query.leadid }).select('counselloremail email phone interactions').lean();
+  if (!lead) throw error('Lead not found', 404);
+  const owned = emailKey(lead.counselloremail) === emailKey(actor.email);
+  const notes = await require('../Models/crm2leadrecordsds').Note.find({ colid, leadid: lead._id }).select('note createdAt createdby').sort({ createdAt: -1 }).lean();
+  const interactions = (lead.interactions || []).map(row => ({ _id: row._id, details: row.details, interactiontype: row.interactiontype, reachable: row.reachable, rating: row.rating, mode: row.mode, contact: owned ? row.contact : maskContact(row.contact), pipeline: row.pipeline, nextfollowupdate: row.nextfollowupdate, interactiondate: row.interactiondate, createdby: row.createdby }));
+  const redact = value => {
+    let result = text(value);
+    if (!owned) for (const contact of [lead.email, lead.phone]) if (text(contact)) result = result.split(text(contact)).join(maskContact(contact));
+    return result;
+  };
+  res.json({ success: true, interactions: interactions.reverse().map(row => ({ ...row, details: redact(row.details) })), notes: notes.map(row => ({ ...row, note: redact(row.note) })) });
+}));
+router.post('/update-interaction/save', wrap(async (req, res) => {
+  const { colid, actor } = await updateInteractionIdentity(req);
+  if (!validId(req.body.leadid)) throw error('Select a lead');
+  const lead = await Lead.findOne({ colid, _id: req.body.leadid }).lean();
+  if (!lead) throw error('Lead not found', 404);
+  if (emailKey(lead.counselloremail) === emailKey(actor.email)) throw error('Use the counselor workspace for assigned leads');
+  if (req.body.kind === 'note') {
+    if (!text(req.body.note)) throw error('Enter a note');
+    await require('../Models/crm2leadrecordsds').Note.create({ colid, leadid: lead._id, lead: lead.name, leademail: lead.email, leadphone: lead.phone, academicyear: lead.academicyear, note: text(req.body.note), createdby: actor.email, updatedby: actor.email });
+  } else {
+    const input = req.body;
+    if (!text(input.details) || !['Incoming','Outgoing'].includes(input.interactiontype) || !['Yes','No'].includes(input.reachable) || !['Phone','Whatsapp','SMS','Email','RCS'].includes(input.mode)) throw error('Enter valid interaction details');
+    if (input.rating && !await masterModels.leadrating.exists({ colid, name: text(input.rating) })) throw error('Select a valid rating');
+    if (!text(input.pipeline) || !await masterModels.pipeline.exists({ colid, name: text(input.pipeline) })) throw error('Select a pipeline stage');
+    const interactiondate = input.interactiondate ? new Date(input.interactiondate) : new Date();
+    const nextfollowupdate = input.nextfollowupdate ? new Date(input.nextfollowupdate) : null;
+    if (Number.isNaN(interactiondate.getTime()) || (nextfollowupdate && Number.isNaN(nextfollowupdate.getTime()))) throw error('Enter valid dates');
+    await Lead.updateOne({ colid, _id: lead._id }, { $push: { interactions: { details: text(input.details), interactiontype: input.interactiontype, reachable: input.reachable, rating: text(input.rating), mode: input.mode, pipeline: text(input.pipeline), nextfollowupdate, contact: input.mode === 'Email' ? lead.email : lead.phone, interactiondate, createdby: actor.email, updatedby: actor.email, createdAt: new Date() } } }, { runValidators: true });
+  }
+  res.json({ success: true });
 }));
 module.exports = router;
 module.exports.saveLead = saveLead;

@@ -65,7 +65,7 @@ Object.assign(definitions, {
   source: String, pipeline: String, type: String, leadrating: String, case: String, distributiontype: String, crmcategory: String,
   education: [{ level: { type: String, required: true }, institution: String, board: String, passingyear: String, marks: { type: Number, min: 0 }, grade: String, subjects: [{ subject: { type: String, required: true }, obtained: { type: Number, min: 0 }, total: { type: Number, min: 0 }, grade: String }] }],
   documents: [{ documentname: { type: String, required: true }, title: String, url: { type: String, required: true }, uploadedat: { type: Date, default: Date.now } }],
-  interactions: [{ details: { type: String, required: true }, mode: { type: String, required: true }, pipeline: { type: String, required: true }, nextfollowupdate: Date, interactiondate: { type: Date, default: Date.now }, createdby: String, updatedby: String, createdAt: { type: Date, default: Date.now }, updatedAt: Date }],
+  interactions: [{ details: { type: String, required: true }, interactiontype: { type: String, enum: ['Incoming', 'Outgoing'], default: 'Incoming' }, reachable: { type: String, enum: ['Yes', 'No'], default: 'Yes' }, rating: String, mode: { type: String, enum: ['Phone', 'Whatsapp', 'SMS', 'Email', 'RCS'], required: true }, contact: String, pipeline: { type: String, required: true }, nextfollowupdate: Date, interactiondate: { type: Date, default: Date.now }, createdby: String, updatedby: String, createdAt: { type: Date, default: Date.now }, updatedAt: Date }],
   createdby: String, updatedby: String,
   wizardcompleted: { type: [String], default: undefined }
 });
@@ -75,7 +75,7 @@ leadSchema.index({ colid: 1, phonekey: 1 }, { unique: true });
 const masterModels = Object.fromEntries(Object.keys(masters).map(key => {
   const schema = new mongoose.Schema({ colid: { type: Number, required: true, index: true }, name: { type: String, required: true, trim: true }, namekey: { type: String, required: true }, description: String, status: { type: String, enum: ["Active", "Inactive"], default: "Active" }, order: { type: Number, default: 0 }, createdby: String }, { timestamps: true });
   if (key === "agent") {
-    schema.add({ email: { type: String, required: true, trim: true, lowercase: true }, phone: String, pan: String, gst: String, address: String, state: String, country: String });
+    schema.add({ email: { type: String, required: true, trim: true, lowercase: true }, phone: String, pan: String, gst: String, address: String, state: String, country: String, source: String, counsellorname: String, counselloremail: String });
     schema.index({ colid: 1, email: 1 }, { unique: true });
   }
   if (key === 'publisher') {
