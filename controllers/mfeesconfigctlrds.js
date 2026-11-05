@@ -121,7 +121,7 @@ exports.getMFeesOptions = async (req, res) => {
       feeMediums,
       feeSemesters,
       feeStatuses
-      ,feeCategories, feeItemOptions
+      ,feeCategories, feeItemOptions, institutions
     ] = await Promise.all([
       FeeBook.find({ colid }).sort({ feebook: 1 }).lean(),
       CashBook.find({ colid }).sort({ cashnook: 1, cashbook: 1 }).lean(),
@@ -142,7 +142,8 @@ exports.getMFeesOptions = async (req, res) => {
       Fees.distinct("semester", { colid }),
       Fees.distinct("status", { colid }),
       Fees.distinct("feecategory", { colid }),
-      Fees.aggregate([{ $match: { colid } }, { $group: { _id: { feecategory: '$feecategory', feeitem: '$feeeitem' } } }, { $project: { _id: 0, feecategory: '$_id.feecategory', feeitem: '$_id.feeitem' } }])
+      Fees.aggregate([{ $match: { colid } }, { $group: { _id: { feecategory: '$feecategory', feeitem: '$feeeitem' } } }, { $project: { _id: 0, feecategory: '$_id.feecategory', feeitem: '$_id.feeitem' } }]),
+      require('../Models/academicmasterinstitutionds').distinct('institution',{colid})
     ]);
 
     const regulationNames = Array.from(new Set([
@@ -155,6 +156,7 @@ exports.getMFeesOptions = async (req, res) => {
       academicYears,
       feeCategories: feeCategories.filter(Boolean).sort(),
       feeItemOptions,
+      institutions: institutions.filter(Boolean).sort(),
       feebooks: feebooks.map((item) => item.feebook).filter(Boolean),
       cashbooks: cashbooks.map((item) => item.cashbook || item.cashnook).filter(Boolean),
       programs: programs.map((item) => ({
@@ -163,7 +165,7 @@ exports.getMFeesOptions = async (req, res) => {
         programcode: item.programcode || "",
         year: item.year || "",
         type: item.type || ""
-        ,semestertype: item.semestertype || '', noofsemesters: item.noofsemesters, noofyears: item.noofyears
+        ,institution: item.institution || '', semestertype: item.semestertype || '', noofsemesters: item.noofsemesters, noofyears: item.noofyears
       })),
       regulations: regulationNames,
       majors: majors.map((item) => item.subject).filter(Boolean),

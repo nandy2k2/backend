@@ -100,7 +100,7 @@ exports.getPendingStudentFees = async (req, res) => {
       program: text(row.program) || text(studentuser?.program),
       programcode: text(row.programcode) || text(studentuser?.programcode)
     }));
-    const latefine = req.onlineFees3 ? await lateFeePayment.quote(colid, enrichedRows, studentuser || {}) : undefined;
+    const latefine = req.onlineFees3 ? await lateFeePayment.quote(colid, enrichedRows, studentuser || {}, undefined, !!req.onlineFees3a) : undefined;
     res.json({ success: true, data: enrichedRows, studentuser, latefine });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -143,7 +143,7 @@ exports.createStudentPaymentSession = async (req, res) => {
 
     const ledgeritems = ledgerRows.map((row) => feeItemSnapshot(row, row.balance));
     const baseamount = ledgeritems.reduce((sum, item) => sum + number(item.payingamount), 0);
-    const latefine = req.onlineFees3 ? await lateFeePayment.quote(colid, ledgerRows, studentuser || {}) : { total: 0, applied: [] };
+    const latefine = req.onlineFees3 ? await lateFeePayment.quote(colid, ledgerRows, studentuser || {}, undefined, !!req.onlineFees3a) : { total: 0, applied: [] };
     const totalamount = Math.round((baseamount + latefine.total) * 100) / 100;
     if (totalamount <= 0) return res.status(400).json({ success: false, message: "Total payable amount must be greater than zero" });
 

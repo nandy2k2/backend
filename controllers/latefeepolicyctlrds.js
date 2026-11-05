@@ -2,7 +2,7 @@ const Policy = require('../Models/latefeepolicyds');
 const Ledger = require('../Models/latefeesledgerds');
 const Program = require('../Models/mprograms');
 const text = value => String(value ?? '').trim();
-const fields = ['academicyear','program','programcode','startdate','enddate','amount','finetype'];
+const fields = ['academicyear','program','programcode','semester','startdate','enddate','amount','finetype'];
 const wrap = callback => async (req, res) => {
   try {
     req.colid = Number(req.body?.colid || req.query.colid);
@@ -14,6 +14,8 @@ const date = value => value instanceof Date ? value.toISOString().slice(0,10) : 
 const validDate = value => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0,10) === value;
 async function payload(body, colid, user) {
   const row = Object.fromEntries(fields.map(field => [field, text(body[field])]));
+  row.semester = [...new Set((Array.isArray(body.semester)?body.semester:text(body.semester).split(',')).map(text).filter(Boolean))];
+  if(row.semester.some(s=>!/^\d+$/.test(s)||Number(s)<1))throw new Error('Select valid semesters');
   Object.assign(row, { colid, user: text(user), startdate: date(body.startdate), enddate: date(body.enddate), amount: Number(body.amount) });
   if (!row.academicyear || !row.programcode) throw new Error('Select academic year and program');
   if (!validDate(row.startdate) || !validDate(row.enddate) || row.startdate > row.enddate) throw new Error('Enter a valid start and end date range');

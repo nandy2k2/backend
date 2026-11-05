@@ -4,6 +4,7 @@ const schema = new mongoose.Schema({
   academicyear: { type: String, required: true, trim: true },
   program: { type: String, required: true, trim: true },
   programcode: { type: String, required: true, trim: true },
+  semester: { type: [String], default: [] },
   startdate: { type: String, required: true }, enddate: { type: String, required: true },
   amount: { type: Number, required: true, min: 0 },
   finetype: { type: String, enum: ['per day','flat'], required: true }, user: String

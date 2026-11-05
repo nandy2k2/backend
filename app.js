@@ -7608,6 +7608,8 @@ app.post('/api/v2/late-fee-policy-delete', latefeepolicyctlrds.remove);
 app.post('/api/v2/late-fee-policy-bulk', latefeepolicyctlrds.bulk);
 app.get('/api/v2/late-fees-ledger', latefeepolicyctlrds.ledger);
 app.get('/api/v2/studentonlinepayment3/pending', (req, res) => { req.onlineFees3 = true; return studentonlinepaymentctlrds.getPendingStudentFees(req, res); });
+app.get('/api/v2/studentonlinepayment3a/pending', (req,res)=>{req.onlineFees3=true;req.onlineFees3a=true;return studentonlinepaymentctlrds.getPendingStudentFees(req,res);});
+app.post('/api/v2/studentonlinepayment3a/session', (req,res)=>{req.onlineFees3=true;req.onlineFees3a=true;return studentonlinepaymentctlrds.createStudentPaymentSession(req,res);});
 app.post('/api/v2/studentonlinepayment3/session', (req, res) => { req.onlineFees3 = true; return studentonlinepaymentctlrds.createStudentPaymentSession(req, res); });
 app.post("/api/v2/studentonlinepayment/session", studentonlinepaymentctlrds.createStudentPaymentSession);
 app.get("/api/v2/studentonlinepayment", studentonlinepaymentctlrds.getStudentOnlinePayments);

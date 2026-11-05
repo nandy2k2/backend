@@ -3,11 +3,13 @@ const Ledger = require('../Models/latefeesledgerds');
 const { fineToday, calculateExamFine } = require('../utils/conductExamFine');
 const text = value => String(value ?? '').trim();
 const money = value => Math.round(Number(value || 0) * 100) / 100;
-async function quote(colid, ledgerRows, student, today = fineToday()) {
+async function quote(colid, ledgerRows, student, today = fineToday(), semesterMatch = false) {
   const due = ledgerRows.filter(row => row.duedate && fineToday(row.duedate) <= today && Number(row.balance) > 0);
   const groups = new Map();
   for (const row of due) {
     const scope = { academicyear: text(row.academicyear || student.academicyear), program: text(row.program || student.program), programcode: text(row.programcode || student.programcode) };
+    if(semesterMatch)Object.assign(scope,{academicyear:text(student.academicyear),program:text(student.program),programcode:text(student.programcode),semester:text(student.semester)});
+    if(semesterMatch&&!scope.semester)continue;
     if (!scope.academicyear || !scope.programcode || !scope.program) continue;
     const key = JSON.stringify(scope);
     if (!groups.has(key)) groups.set(key, { scope, rows: [] });

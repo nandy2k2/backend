@@ -13,7 +13,7 @@ function serviceFixture(rules = [policy]) {
   const records = new Map(), queries = [], writes = [];
   const file = path.join(__dirname, '../services/lateFeePayment.js'), actual = createRequire(file), module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(file, 'utf8'), { module, exports: module.exports, require(name) {
-    if (name.endsWith('latefeepolicyds')) return { find: query => { queries.push(query); return chain(rules.filter(row => Object.entries(query).every(([key,value]) => row[key] === value))); } };
+    if (name.endsWith('latefeepolicyds')) return { find: query => { queries.push(query); return chain(rules.filter(row => Object.entries(query).every(([key,value]) => (Array.isArray(row[key]) ? row[key].includes(value) : row[key] === value)))); } };
     if (name.endsWith('latefeesledgerds')) return { updateOne: async (query, update) => { writes.push(query); const key = JSON.stringify(query); if (!records.has(key)) records.set(key, { ...query, ...update.$setOnInsert }); } };
     return actual(name);
   } });
@@ -35,6 +35,12 @@ test('policies match each ledger academic year instead of incorrectly reusing th
   const f = serviceFixture([policy, { ...policy, _id: 'old', academicyear: '2025-26', amount: 5 }]);
   const result = await f.quote(42, [fees[0], { ...fees[1], academicyear: '2025-26' }], student, today);
   assert.equal(result.total, 45); assert.equal(result.applied.length, 2);
+});
+test('Online fees 3a matches current student year, program and semester only', async () => {
+  const f=serviceFixture([{...policy,semester:['1','2']},{...policy,_id:'wrong-semester',semester:['3']},{...policy,_id:'old-year',academicyear:'2025-26',semester:['1']}]);
+  const result=await f.quote(42,[{...fees[0],academicyear:'2025-26'}],student,today,true);
+  assert.equal(result.total,30); assert.equal(result.applied.length,1);
+  assert.equal(f.queries[0].semester,'1'); assert.equal(f.queries[0].academicyear,student.academicyear);
 });
 function controllerFixture({ fine = true, rules = [policy] } = {}) {
   const service = serviceFixture(rules), sessions = [], queries = [], basePayments = [];
