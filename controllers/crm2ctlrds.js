@@ -53,6 +53,12 @@ const wrap = handler => async (req, res) => {
 const masterModel = kind => { if (!masterModels[kind]) throw error("Unknown CRM 2 master"); return masterModels[kind]; };
 
 router.get("/metadata", wrap(async (req, res) => res.json({ success: true, masters, fields })));
+router.post('/auto-counselor-preview', wrap(async(req,res)=>{
+  if(req.leadMode==='agent')throw error('Not available for Agent workspace',403);
+  const { Mapping }=require('../Models/crm2programds');
+  const counselor=await require('../utils/crm2AutoCounselor').findAutoCounselor({Mapping,User},req.colid,req.body.lead||{});
+  res.json({data:counselor,message:counselor?'Counselor assigned':'No matching counselor found. Select a counselor manually.'});
+}));
 router.post("/upload", multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } }).single("file"), wrap(async (req, res) => {
   if (!req.file) throw error("Select a file");
   if (req.body.kind === "photo" && !/^image\/(jpeg|png|webp|gif)$/.test(req.file.mimetype)) throw error("Choose a JPG, PNG, WebP or GIF photo");
@@ -185,7 +191,7 @@ async function saveLead(body, colid, mode = '', owner = null, feedback = {}) {
   if (existing && ownedField && emailKey(existing[ownedField]) !== emailKey(owner.email)) throw error('This lead is not assigned to you', 403);
   body = { ...body };
   delete body.dateadded; delete body.addedby;
-  if (mode === 'my') { body.counsellorname = owner.name; body.counselloremail = owner.email; }
+  if (mode === 'my' && body.autoassign !== true) { body.counsellorname = owner.name; body.counselloremail = owner.email; }
   if (mode === 'agent') { delete body.agentname; delete body.agentemail; }
   const input = { ...existing, ...body };
   if (!text(input.name) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text(input.email)) || !/^[+\d\s().-]+$/.test(text(input.phone)) || phoneKey(input.phone).length < 7 || phoneKey(input.phone).length > 15) throw error("Enter a name, valid email and phone number (7–15 digits)");
@@ -315,14 +321,13 @@ async function saveLead(body, colid, mode = '', owner = null, feedback = {}) {
       if (counselor) { payload.counsellorname = counselor.name; payload.counselloremail = counselor.email; }
     }
   }
-  if (body.autoassign === true && !mode) {
+  if (body.autoassign === true && mode !== 'agent') {
     const { Mapping } = require('../Models/crm2programds');
     const { findAutoCounselor } = require('../utils/crm2AutoCounselor');
     const counselor = await findAutoCounselor({ Mapping, User }, colid, { ...existing, ...payload });
     if (counselor) Object.assign(payload, counselor);
     else {
-      delete payload.counsellorname; delete payload.counselloremail;
-      feedback.assignmentwarning = 'No matching counselor found. Lead saved without changing counselor.';
+      feedback.assignmentwarning = 'No matching counselor found. Manual counselor selection has been retained.';
     }
   }
   if (!existing) { payload.createdby = text(body.user); payload.user = text(body.user); payload.addedby = mode === 'agent' ? 'Agent' : 'Counselor'; payload.dateadded = new Date(); }
@@ -378,6 +383,13 @@ router.post('/leads/merge', wrap(async (req, res) => {
   const others = ids.filter(value => value !== primaryid);
   const result = await Lead.updateMany({ ...query, _id: { $in: others } }, { $set: { active: 'No', updatedby: text(req.body.user) } }, { runValidators: true });
   res.json({ primaryid, deactivated: result.modifiedCount, message: 'Primary lead retained; other selected leads marked Active No' });
+}));
+router.get('/lead-editor/:id', wrap(async(req,res)=>{
+  if(!/^[a-f\d]{24}$/i.test(req.params.id))throw error('Invalid lead');
+  const owner=req.leadMode ? {[ownerField(req.leadMode)]:exactEmail(req.leadOwner.email)} : {};
+  const lead=await Lead.findOne({_id:req.params.id,colid:req.colid,...owner,...require('../utils/crm2DashboardScope').yearScope(req.query.dashboardyear)}).lean();
+  if(!lead)throw error('Lead not found or not assigned to you',404);
+  res.json({data:publicLead(lead)});
 }));
 router.get("/leads", wrap(async (req, res) => {
   const query = { colid: req.colid };

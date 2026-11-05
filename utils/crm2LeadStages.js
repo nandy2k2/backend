@@ -1,9 +1,9 @@
-const stages = ['Identity', 'CRM Details', 'Family & Address', 'Education & Work', 'Additional Details', 'Subjectwise Education', 'Documents', 'Programs interested', 'Applications', 'Interactions', 'Lead tasks', 'Lead notes'];
+const stages = ['Identity', 'Family & Address', 'CRM Details', 'Education & Work', 'Additional Details', 'Subjectwise Education', 'Documents', 'Programs interested', 'Applications', 'Interactions', 'Lead tasks', 'Lead notes'];
 function stageProgress(existing, requested) {
   const stage = requested || existing?.stage || 'CRM Details';
   if (!stages.includes(stage)) throw Object.assign(new Error('Invalid lead wizard stage'), { status: 400 });
   // Existing leads without wizard progress stay accessible after this upgrade.
-  const completed = existing ? (Array.isArray(existing.wizardcompleted) && existing.wizardcompleted.length ? existing.wizardcompleted : stages) : ['Identity'];
+  const completed = existing ? (Array.isArray(existing.wizardcompleted) && existing.wizardcompleted.length ? existing.wizardcompleted : stages) : ['Identity', 'Family & Address'];
   const index = stages.indexOf(stage);
   const savedLeadSection = !!existing && index >= 7;
   if ((!existing && stage !== 'CRM Details') || (!savedLeadSection && !stages.slice(0, index).every(step => completed.includes(step)))) throw Object.assign(new Error('Save the previous lead stage before continuing'), { status: 400 });
