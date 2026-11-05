@@ -6176,6 +6176,7 @@ app.post("/api/v2/conductexam/examforms", conductexamformctlrds.saveForm);
 app.post("/api/v2/conductexam/examforms-delete", conductexamformctlrds.deleteForm);
 app.post("/api/v2/conductexam/examform-upload-document", conductexamformctlrds.uploadDocumentMiddleware, conductexamformctlrds.uploadDocument);
 app.get("/api/v2/conductexam/student-exam-form-context", conductexamformctlrds.studentContext);
+app.get('/api/v2/conductexam/student-form-dynamic-options', conductexamformctlrds.studentFormDynamicOptions);
 app.get("/api/v2/conductexam/student-exam-form-print-eligibility", conductexamformctlrds.studentExamFormPrintEligibility);
 app.get("/api/v2/conductexam/student-exam-form-report-options", conductexamformctlrds.studentExamFormReportOptions);
 app.get("/api/v2/conductexam/student-exam-form-report", conductexamformctlrds.studentExamFormReport);
@@ -7388,6 +7389,7 @@ app.use('/api/v2/crm2-admissions', require('./controllers/crm2admissionctlrds'))
 app.use('/api/v2/crm2-partner-payments', require('./controllers/crm2partnerpaymentsctlrds'));
 app.use('/api/v2/crm2-admin', require('./controllers/crm2admindashboard'));
 app.use('/api/v2/rolewise-dashboard', require('./controllers/rolewisedashboard'));
+app.use('/api/v2/practical-scheduling', require('./controllers/practicalScheduling'));
 app.use('/api/v2/exam-form-3', require('./controllers/examform3lifecycle'));
 app.use("/api/v2/crm2-programs", require("./controllers/crm2programctlrds"));
 app.post("/api/v2/repair-maintenance/program-change/apply", repairmaintenancectlrds.applyProgramChange);

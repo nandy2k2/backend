@@ -673,6 +673,18 @@ exports.studentExamFormReportOptions = async (req, res) => {
   }
 };
 
+const reportFilterFields = () => Object.keys(ConductExamRoll.schema.paths).filter(key=>!['colid','__v','answerbooklink'].includes(key));
+exports.studentFormDynamicOptions = async(req,res)=>{
+  try {
+    const colid=num(req.query.colid);if(!colid)return res.status(400).json({message:'colid is required'});
+    const fields=reportFilterFields(),field=clean(req.query.field);
+    if(!field)return res.json({fields});
+    if(!fields.includes(field))return res.status(400).json({message:'Invalid filter field'});
+    const query={colid,...queryFrom(req.query,['academicyear','examcode','programcode'])};
+    const values=await ConductExamRoll.distinct(field,query);
+    res.json({fields,values:values.filter(v=>v!==null&&v!=='').map(String).sort()});
+  }catch(err){res.status(400).json({message:err.message});}
+};
 exports.studentExamFormReport = async (req, res) => {
   try {
     const colid = num(req.query.colid);
@@ -680,6 +692,23 @@ exports.studentExamFormReport = async (req, res) => {
     const filter = { colid, ...queryFrom(req.query, ["academicyear", "regulation", "exam", "examcode", "program", "programcode", "semester", "regno"]) };
     if (!filter.academicyear || !filter.examcode || !filter.programcode) {
       return res.status(400).json({ message: "Academic year, exam code and program code are required" });
+    }
+    if(!atktModeFrom(req.query) && req.query.dynamicfilters){
+      const rows=JSON.parse(req.query.dynamicfilters);
+      if(!Array.isArray(rows))throw Error('Invalid dynamic filters');
+      const clauses=[];
+      for(const row of rows){
+        if(!reportFilterFields().includes(row.field))throw Error('Invalid filter field');
+        const value=String(row.value??'').trim();if(!value)continue;
+        const type=ConductExamRoll.schema.path(row.field)?.instance;
+        let match;
+        if(type==='Number'){match=Number(value);if(!Number.isFinite(match))throw Error('Enter a valid number');}
+        else if(type==='Date'){match=new Date(value);if(Number.isNaN(match.getTime()))throw Error('Enter a valid date');}
+        else if(type==='ObjectId'){if(!require('mongoose').isValidObjectId(value))throw Error('Enter a valid record ID');match=value;}
+        else {const escaped=value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');match=new RegExp(row.operator==='contains'?escaped:`^${escaped}$`,'i');}
+        clauses.push({[row.field]:match});
+      }
+      if(clauses.length)filter.$and=clauses;
     }
     if (atktModeFrom(req.query)) {
       const rows = await ExamVivaMarks.find(atktMarksQuery(filter)).sort({ regno: 1, semester: 1, coursecode: 1, course: 1 }).lean();

@@ -17,6 +17,8 @@ const conductExamCourseSchema = new mongoose.Schema({
   deliverytype: { type: String, trim: true, default: "" },
   coursemastercode: { type: String, trim: true, default: "" },
   examdate: { type: String, trim: true },
+  batch: { type: String, trim: true },
+  fees: { type: Number, min: 0 },
   examslot: { type: String, trim: true },
   user: { type: String, trim: true }
 }, { timestamps: true });
