@@ -7386,6 +7386,9 @@ app.use('/api/v2/admission-scholarship-apply', require('./controllers/admissions
 app.use('/api/v2/admission-scholarship-adhoc', require('./controllers/adhocscholarshipctlrds'));
 app.use('/api/v2/crm2-admissions', require('./controllers/crm2admissionctlrds'));
 app.use('/api/v2/crm2-partner-payments', require('./controllers/crm2partnerpaymentsctlrds'));
+app.use('/api/v2/crm2-admin', require('./controllers/crm2admindashboard'));
+app.use('/api/v2/rolewise-dashboard', require('./controllers/rolewisedashboard'));
+app.use('/api/v2/exam-form-3', require('./controllers/examform3lifecycle'));
 app.use("/api/v2/crm2-programs", require("./controllers/crm2programctlrds"));
 app.post("/api/v2/repair-maintenance/program-change/apply", repairmaintenancectlrds.applyProgramChange);
 app.get("/api/v2/repair-maintenance/selected-program-change/options", repairmaintenancectlrds.selectedProgramChangeOptions);

@@ -1,6 +1,8 @@
 const mongoose=require('mongoose');
 
 const feesschema = new mongoose.Schema({
+    category: String,
+    quota: String,
     scholarshiprevision: Number,
     name: {
         type: String,

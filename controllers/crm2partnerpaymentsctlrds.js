@@ -59,6 +59,8 @@ router.get('/:kind/report',wrap(async(req,res)=>{
   if(mine)partner=await masterModels[req.kind].findOne({colid:req.colid,email:req.actor.email.toLowerCase()}).lean();
   else{if(!id(req.query.partnerid))throw Error('Select partner');partner=await masterModels[req.kind].findOne({colid:req.colid,_id:req.query.partnerid}).lean();}
   const email=mine?req.actor.email:partner?.email;if(!email)throw Error('Partner not found');
-  res.json({...await service.report({colid:req.colid,kind:req.kind,email,academicyear:year,partnerid:partner?._id}),partner:partner?{name:partner.name,email:partner.email}:{name:req.actor.name,email},academicyear:year});
+  const programcodes = req.query.programcodes ? JSON.parse(req.query.programcodes) : [];
+  if (!Array.isArray(programcodes) || programcodes.some(code=>typeof code!=='string')) throw Error('Invalid program selection');
+  res.json({...await service.report({colid:req.colid,kind:req.kind,email,academicyear:year,partnerid:partner?._id,programcodes}),partner:partner?{name:partner.name,email:partner.email}:{name:req.actor.name,email},academicyear:year});
 }));
 module.exports=router;

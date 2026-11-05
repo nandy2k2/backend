@@ -1,0 +1,12 @@
+const router=require('express').Router(),mongoose=require('mongoose');
+const User=require('../Models/user'),Menu=require('../Models/menuaccessds');
+const schema=new mongoose.Schema({colid:{type:Number,required:true},role:{type:String,required:true},pagelink:{type:String,required:true}},{timestamps:true});schema.index({colid:1,role:1},{unique:true});
+const Config=mongoose.models.rolewisedashboard || mongoose.model('rolewisedashboard',schema);
+const path=value=>/^\/(?!\/)[^\s\\]*$/.test(value) && !/[\r\n]/.test(value);
+const wrap=fn=>async(req,res)=>{try{const token=String(req.get('authorization')||req.body?.token||req.query.token||'').replace(/^Bearer\s+/i,'');const identity=require('jsonwebtoken').verify(token,process.env.JWT_SECRET);req.colid=Number(identity.colid);req.actor=await User.findOne({colid:req.colid,email:String(identity.user||identity.email).toLowerCase()}).select('role').lean();if(!req.actor)throw Error('Login required');await fn(req,res);}catch(e){res.status(400).json({message:e.message});}};
+const staff=req=>{if(/^(Student|Agent|Publisher)$/i.test(req.actor.role))throw Error('Staff access required');};
+router.get('/landing',wrap(async(req,res)=>{const row=await Config.findOne({colid:req.colid,role:String(req.actor.role).trim().toLowerCase()}).lean();res.json({pagelink:row&&path(row.pagelink)?row.pagelink:null});}));
+router.get('/',wrap(async(req,res)=>{staff(req);const [data,roles,pages]=await Promise.all([Config.find({colid:req.colid}).sort({role:1}).lean(),User.distinct('role',{colid:req.colid}),Menu.find({colid:req.colid}).select('title path').lean()]);res.json({data,roles:roles.filter(Boolean),pages});}));
+router.post('/save',wrap(async(req,res)=>{staff(req);const role=String(req.body.role||'').trim().toLowerCase(),pagelink=String(req.body.pagelink||'').trim();if(!role||!path(pagelink))throw Error('Select a role and a valid local page path, for example /crm2-admin-dashboard');if(!await User.exists({colid:req.colid,role:new RegExp('^'+role.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'$','i')}))throw Error('Select an existing role');await Config.findOneAndUpdate({colid:req.colid,role},{$set:{pagelink}},{upsert:true,runValidators:true});res.json({success:true});}));
+router.post('/delete',wrap(async(req,res)=>{staff(req);if(!Array.isArray(req.body.ids)||req.body.ids.some(id=>!mongoose.isValidObjectId(id)))throw Error('Select records');await Config.deleteMany({colid:req.colid,_id:{$in:req.body.ids}});res.json({success:true});}));
+module.exports=router;

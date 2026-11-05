@@ -19,16 +19,18 @@ function summarize(leads, assignments, rates) {
   const admitted=leads.filter(row=>row.admitted==='Yes').length;
   return {programs:rows,summary:{totalLeads:leads.length,admitted,unallocatedAdmissions:Math.max(0,admitted-converted.size),conversionPercentage:leads.length?round(admitted/leads.length*100):0,totalPayment:round(rows.reduce((sum,row)=>sum+row.amount,0)),unconfiguredAdmissions:rows.filter(row=>row.rate===null).reduce((sum,row)=>sum+row.admitted,0)}};
 }
-async function report({colid,kind,email,academicyear,partnerid}) {
+async function report({colid,kind,email,academicyear,partnerid,programcodes=[]}) {
   const owner=kind==='publisher'?'publisheremail':'agentemail';
   const match={colid,[owner]:new RegExp(`^${email.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}$`,'i')};
   const owned=await Lead.find(match).select('-password -emailkey -phonekey -interactions -documents -education').sort({createdAt:-1}).lean();
   const assignments=await Assignment.find({colid,leadid:{$in:owned.map(row=>row._id)},...(academicyear?{academicyear}:{}),admitted:'Yes'}).select('leadid academicyear program programcode admitted').lean();
   const assigned=new Set(assignments.map(row=>String(row.leadid)));
   // An admitted program's year can differ from the original lead profile year.
-  const leads=owned.filter(row=>!academicyear || row.academicyear===academicyear || row.programsinterested?.some(item=>item.academicyear===academicyear) || assigned.has(String(row._id)));
+  const programAssignments = programcodes.length ? await Assignment.distinct('leadid', { colid, leadid: { $in: owned.map(row=>row._id) }, ...(academicyear?{academicyear}:{}), programcode: { $in: programcodes } }) : [];
+  const matchingIds = new Set(programAssignments.map(String));
+  const leads=owned.filter(row=>(!academicyear || row.academicyear===academicyear || row.programsinterested?.some(item=>item.academicyear===academicyear) || assigned.has(String(row._id))) && (!programcodes.length || matchingIds.has(String(row._id)) || row.programsinterested?.some(item=>(!academicyear || item.academicyear===academicyear) && programcodes.includes(String(item.programcode)))));
   const rates=partnerid?await Rate.find({colid,kind,partnerid,...(academicyear?{academicyear}:{})}).lean():[];
-  const result=summarize(leads,assignments,rates);
+  const result=summarize(leads,programcodes.length?assignments.filter(row=>programcodes.includes(String(row.programcode))):assignments,rates);
   const byLead=new Map();
   for(const row of assignments) byLead.set(String(row.leadid),[...(byLead.get(String(row.leadid)) || []),`${row.program} (${row.programcode})`]);
   return {...result,leads:leads.map(row=>({...row,admittedPrograms:(byLead.get(String(row._id)) || []).join(', ')}))};

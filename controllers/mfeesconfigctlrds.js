@@ -40,6 +40,8 @@ function cleanPayload(input = {}) {
     feeeitem: text(input.feeeitem || input.feeitem),
     feecategory: text(input.feecategory),
     studtype: text(input.studtype),
+    category: text(input.category),
+    quota: text(input.quota),
     domicile: text(input.domicile),
     feetype: text(input.feetype),
     classdate: input.classdate || new Date(),
@@ -119,6 +121,7 @@ exports.getMFeesOptions = async (req, res) => {
       feeMediums,
       feeSemesters,
       feeStatuses
+      ,feeCategories, feeItemOptions
     ] = await Promise.all([
       FeeBook.find({ colid }).sort({ feebook: 1 }).lean(),
       CashBook.find({ colid }).sort({ cashnook: 1, cashbook: 1 }).lean(),
@@ -137,7 +140,9 @@ exports.getMFeesOptions = async (req, res) => {
       Fees.distinct("gender", { colid }),
       Fees.distinct("Medium", { colid }),
       Fees.distinct("semester", { colid }),
-      Fees.distinct("status", { colid })
+      Fees.distinct("status", { colid }),
+      Fees.distinct("feecategory", { colid }),
+      Fees.aggregate([{ $match: { colid } }, { $group: { _id: { feecategory: '$feecategory', feeitem: '$feeeitem' } } }, { $project: { _id: 0, feecategory: '$_id.feecategory', feeitem: '$_id.feeitem' } }])
     ]);
 
     const regulationNames = Array.from(new Set([
@@ -148,6 +153,8 @@ exports.getMFeesOptions = async (req, res) => {
     res.json({
       success: true,
       academicYears,
+      feeCategories: feeCategories.filter(Boolean).sort(),
+      feeItemOptions,
       feebooks: feebooks.map((item) => item.feebook).filter(Boolean),
       cashbooks: cashbooks.map((item) => item.cashbook || item.cashnook).filter(Boolean),
       programs: programs.map((item) => ({
@@ -156,6 +163,7 @@ exports.getMFeesOptions = async (req, res) => {
         programcode: item.programcode || "",
         year: item.year || "",
         type: item.type || ""
+        ,semestertype: item.semestertype || '', noofsemesters: item.noofsemesters, noofyears: item.noofyears
       })),
       regulations: regulationNames,
       majors: majors.map((item) => item.subject).filter(Boolean),

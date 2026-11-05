@@ -93,6 +93,8 @@ async function saveMaster(kind, body, colid) {
   const existing = body.id ? await Model.findOne({ _id: body.id, colid }).lean() : null;
   if (body.id && !existing) throw error("Record not found", 404);
   const payload = { colid, name: text(body.name), namekey: text(body.name).toLowerCase(), description: text(body.description), status: body.status || "Active", order: Number(body.order || 0), createdby: text(body.user) };
+  let agentAccount = null;
+  let createdAgentAccount = null;
   if (kind === 'publisher') {
     const publisher = await User.findOne({ colid, email: exactEmail(body.email), role: /^Publisher$/i }).select('name email').lean();
     if (!publisher) throw error('Select a User with role Publisher from this institution');
@@ -108,6 +110,17 @@ async function saveMaster(kind, body, colid) {
     const counselor = counselorEmail ? await User.findOne({ colid, email: exactEmail(counselorEmail), role: { $not: /^Student$/i } }).select('name email').lean() : null;
     if (counselorEmail && !counselor) throw error('Select a valid counselor');
     payload.counsellorname = counselor?.name || ''; payload.counselloremail = counselor?.email || '';
+    agentAccount = existing?.userid ? await User.findOne({ _id: existing.userid, colid }).lean() : await User.findOne({ email: exactEmail(payload.email) }).lean();
+    if (agentAccount && (Number(agentAccount.colid) !== Number(colid) || !/^Agent$/i.test(agentAccount.role))) throw error('This email belongs to another user account', 409);
+    if (!agentAccount && !text(body.password)) throw error('Password is required to create the Agent login');
+    if (!payload.phone) throw error('Phone is required for the Agent login');
+    const emailOwner = await User.findOne({ email: exactEmail(payload.email) }).select('_id').lean();
+    if (emailOwner && String(emailOwner._id) !== String(agentAccount?._id)) throw error('Email is already in use', 409);
+    if (!agentAccount) {
+      createdAgentAccount = await User.create({ colid, name: payload.name, email: payload.email, phone: payload.phone, password: text(body.password), role: 'Agent', regno: `AGENT-${colid}-${randomBytes(8).toString('hex')}`, programcode: 'NA', admissionyear: 'NA', semester: 'NA', section: 'NA', department: 'NA', status: 1, user: text(body.user), lastlogin: new Date(Date.now() + 3 * 86400000) });
+      agentAccount = createdAgentAccount;
+    }
+    payload.userid = agentAccount._id;
   }
   if (kind === 'admissionoffice') {
     const country = text(body.country), state = text(body.state), city = text(body.city);
@@ -128,8 +141,15 @@ async function saveMaster(kind, body, colid) {
       }
     }
   }
-  const data = body.id ? await Model.findOneAndUpdate({ _id: body.id, colid }, payload, { new: true, runValidators: true }) : await Model.create(payload);
+  let data;
+  try {
+    data = body.id ? await Model.findOneAndUpdate({ _id: body.id, colid }, payload, { new: true, runValidators: true }) : await Model.create(payload);
+  } catch (err) {
+    if (createdAgentAccount) await User.deleteOne({ _id: createdAgentAccount._id, colid, role: 'Agent' });
+    throw err;
+  }
   if (!data) throw error("Record not found", 404);
+  if (kind === 'agent' && !createdAgentAccount) await User.updateOne({ _id: agentAccount._id, colid, role: /^Agent$/i }, { $set: { name: payload.name, email: payload.email, phone: payload.phone, ...(text(body.password) ? { password: text(body.password) } : {}) } });
   if (kind === "agent" && existing) await Lead.updateMany({ colid, agentemail: existing.email }, { $set: { agentname: payload.name, agentemail: payload.email } });
   if (kind === 'publisher' && existing) await Lead.updateMany({ colid, publisheremail: existing.email }, { $set: { publisher: payload.name, publisheremail: payload.email } });
   if (existing && existing.name !== payload.name && kind !== 'publisher') {
