@@ -54,6 +54,7 @@ function fixture() {
     if (name.endsWith('purchase2Amounts')) return amounts;
     if (name.endsWith('purchase2PrAvailability')) return require('../utils/purchase2PrAvailability');
     if (name.endsWith('purchase2PoRules')) return rules;
+    if (name.endsWith('verifyVendorSellsItems')) return {verifyVendorSellsItems:async()=>true};
     if (name === './purchase2PrPo') return prModule.exports;
     if (name === './purchase2PoDraft') return draftModule.exports;
     if (name === './purchase2PoAccess') return { canEdit: () => {}, canApprove: async () => ({ current: { level: 1 } }) };

@@ -63,6 +63,7 @@ async function save(actor, body) {
         if (old) payload._id = old._id;
         return payload;
       });
+      await require('./verifyVendorSellsItems').verifyVendorSellsItems(actor.colid,vendor._id,items,session);
       const fields = { vendorid: String(vendor._id), vendor: vendor.vendorname || vendor.name, vendoraddress: vendor.address || vendor.vendoraddress || '', vendorcontact: vendor.phone || vendor.mobile || '', vendorgst: vendor.gst || vendor.gstin || '', ...store, ...summarizePo(items, true) };
       for (const field of ['terms','warranty','remarks','deliveryinstructions','deliverydate','deliveryType']) if (body.header?.[field] !== undefined) fields[field] = body.header[field];
       let saved;
@@ -89,6 +90,7 @@ async function action(actor, body) {
         canEdit(actor, header); if (!draft(header)) throw new Error('Only a draft PO can be submitted');
         const lines = await Item.find({ colid: actor.colid, poid: header.poid }).session(session).lean();
         if (!lines.length) throw new Error('Add PO items before submitting');
+        await require('./verifyVendorSellsItems').verifyVendorSellsItems(actor.colid,header.vendorid,lines,session);
         const levels = await Workflow.find({ colid: actor.colid, status: /^Active$/i }).sort({ level: 1 }).session(session).lean();
         Object.assign(patch, summarizePo(lines, true), { postatus: 'Submitted', approvalStatus: 'Pending', currentStep: levels[0]?.level || 1, submittedtime: new Date().toISOString() });
       } else if (['approve','reject'].includes(body.action)) {

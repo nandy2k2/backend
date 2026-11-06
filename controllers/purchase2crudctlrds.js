@@ -71,6 +71,7 @@ async function normalizePoPayload(model, payload, existing = {}) {
     if (!merged.poid || !await models.storepoorderds2.exists({ colid: payload.colid, poid: merged.poid })) throw new Error("Select an existing PO before adding items");
     const header = await models.storepoorderds2.findOne({ colid: payload.colid, poid: merged.poid }).lean();
     if (header && !require('../utils/purchase2PoRules').draft(header)) throw new Error('Submitted or approved PO items are locked');
+    await require('../services/verifyVendorSellsItems').verifyVendorSellsItems(payload.colid,header.vendorid,[merged]);
     if (header?.prnumber) {
       if (!existing._id) throw new Error('Add PR items using Create PO from PR to prevent duplicate allocations');
       if (Number(merged.quantity) > Number(existing.quantity)) throw new Error('PR-linked quantity cannot increase here. Create a PO for the remaining PR quantity');
@@ -92,7 +93,9 @@ async function normalizePoPayload(model, payload, existing = {}) {
     payload.poid = payload.poid || existing.poid;
     if (!payload.poid) throw new Error("PO number is required");
     if (existing.poid && existing.poid !== payload.poid && await models.storepoitemsds2.exists({ colid: payload.colid, poid: existing.poid })) throw new Error("PO number cannot change after items are added");
-    Object.assign(payload, summarizePo(await models.storepoitemsds2.find({ colid: payload.colid, poid: payload.poid }).lean(), true));
+    const lines=await models.storepoitemsds2.find({ colid: payload.colid, poid: payload.poid }).lean();
+    if(lines.length)await require('../services/verifyVendorSellsItems').verifyVendorSellsItems(payload.colid,payload.vendorid||existing.vendorid,lines);
+    Object.assign(payload, summarizePo(lines, true));
     delete payload.calculationrevision;
   }
 }
@@ -233,7 +236,11 @@ exports.getPurchase2Rows = async (req, res) => {
     if (!Model) return res.status(404).json({ success: false, message: "Purchase 2 model not found" });
     const colid = Number(req.query.colid);
     if (!colid) return res.status(400).json({ success: false, message: "colid is required" });
-    const data = await Model.find(queryFrom(Model, req.query)).sort({ createdAt: -1, _id: -1 }).lean();
+    const storesModel=['storeitemds2','storeitemsds2','storerequisitionds2','storerequisationds2','storeprrequestds2','storepoorderds2','storegrnds2','grnds2','storegatepassds2'].includes(req.params.model);
+    const stores=storesModel?require('../services/purchase2Stores'):null;
+    const query=stores?await stores.readQuery(Model,req.query,queryFrom(Model,req.query)):queryFrom(Model,req.query);
+    let data = await Model.find(query).sort({ createdAt: -1, _id: -1 }).lean();
+    if(stores)data=await stores.canonicalRows(colid,data);
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -274,8 +281,11 @@ exports.savePurchase2Row = async (req, res) => {
     const existing = isPo && req.body.id ? await Model.findOne({ _id: req.body.id, colid: payload.colid }).lean() : null;
     if (isPo && req.body.id && !existing) return res.status(404).json({ success: false, message: "Record not found" });
     await normalizePoPayload(req.params.model, payload, existing || {});
+    if((payload.storeid||payload.storeId||payload.storename||payload.store)&&!['storemasterds2','storeuserds2','storeusersds2'].includes(req.params.model))await require('../services/purchase2Stores').normalize(payload);
+    if(['storeitemds2','storeitemsds2'].includes(req.params.model)&&payload.quantity!==undefined&&(!Number.isFinite(Number(payload.quantity))||Number(payload.quantity)<0))throw new Error('Inventory quantity cannot be negative');
     await validatePurchase2Payload(Model, req.params.model, payload, req.body.id);
-    const data = req.body.id
+    const prHeader=['storeprrequestds2','storerequisitionds2','storerequisationds2'].includes(req.params.model);
+    const data = prHeader ? await require('../services/purchase2PrCreation').save(Model,req.params.model,payload,req.body.id) : req.body.id
       ? await Model.findOneAndUpdate({ _id: req.body.id, colid: payload.colid }, payload, { new: true, runValidators: true })
       : await Model.create(payload);
     if (!data) return res.status(404).json({ success: false, message: "Record not found" });
@@ -353,9 +363,15 @@ exports.bulkPurchase2Rows = async (req, res) => {
     }
     for (const row of prepared) {
       await normalizePoPayload(req.params.model, row);
+      if((row.storeid||row.storeId||row.storename||row.store)&&!['storemasterds2','storeuserds2','storeusersds2'].includes(req.params.model))await require('../services/purchase2Stores').normalize(row);
+      if(['storeitemds2','storeitemsds2'].includes(req.params.model)&&row.quantity!==undefined&&(!Number.isFinite(Number(row.quantity))||Number(row.quantity)<0))throw new Error('Inventory quantity cannot be negative');
       await validatePurchase2Payload(Model, req.params.model, row);
     }
     let data;
+    if(['storeprrequestds2','storerequisitionds2','storerequisationds2'].includes(req.params.model)){
+      data=[];for(const row of prepared){const service=require('../services/purchase2PrCreation');row.prnumber=await service.next(colid);row.reqid=row.prnumber;data.push(await service.save(Model,req.params.model,row));}
+      return res.json({success:true,inserted:data.length});
+    }
     try { data = await Model.insertMany(prepared, { ordered: false }); }
     finally {
       if (["storepoitemsds2", "storepoorderds2"].includes(req.params.model)) {

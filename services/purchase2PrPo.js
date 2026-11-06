@@ -55,6 +55,7 @@ async function create(colid, body) {
         const calculated = calculatePoLine({ quantity, price: input.price ?? line.estimatedprice ?? 0, gst: input.gst ?? 0, tax: input.tax, discount: input.discount ?? 0, discounttype: input.discounttype || 'Amount', sgst: input.sgst, cgst: input.cgst, igst: input.igst }, true);
         return { ...calculated, colid, user, name: text(body.name) || user, poid, pritemid: line.pritemid, prallocation: true, prnumber, itemid: line.itemid, itemcode: line.itemcode, itemname: line.itemname, unit: line.unit, category: line.category, make: input.make || '', vendorid: String(vendor._id), vendor: vendor.vendorname || vendor.name, postatus: 'Draft', storereqid: text(body.assignmentid || pr._id) };
       });
+      await require('./verifyVendorSellsItems').verifyVendorSellsItems(colid,vendor._id,items,session);
       const headerData = { colid, user, name: text(body.name) || user, poid, prnumber, vendorid: String(vendor._id), vendor: vendor.vendorname || vendor.name, ...summarizePo(items, true), creatorEmail: user, creatorName: text(body.name), postatus: 'Draft', approvalStatus: 'Draft', poType: 'Standard' };
       const storeid = body.header?.storeid || pr.storeid;
       if (storeid) Object.assign(headerData, await require('./purchase2PoDraft').delivery(colid, storeid, session));

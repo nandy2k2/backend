@@ -7,6 +7,9 @@ const vendoritemdsschema = new mongoose.Schema({
 
     vendorname: { type: String },
     vendorid: { type: String },
+    itemcode: String,
+    mappingtype: {type:String,enum:['Item','Category'],default:'Item'},
+    verified: {type:String,enum:['Yes','No'],default:'No'},
     itemid: { type: String },
     item: { type: String }, // itemname
     price: { type: Number },

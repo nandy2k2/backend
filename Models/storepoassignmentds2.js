@@ -8,6 +8,9 @@ module.exports = createModel("storepoassignmentds2", {
   assignedby: { type: String, trim: true },
   assignedbyemail: { type: String, trim: true },
   assigneddate: { type: Date },
+  deadline: { type: Date },
+  departmentname: String,
+  priority: String,
   status: { type: String, trim: true, default: "Assigned" },
   remarks: { type: String, trim: true }
 });

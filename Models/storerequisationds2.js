@@ -6,6 +6,12 @@ const storerequisationschema = new mongoose.Schema({
     colid: { type: Number, required: true },
 
     year: { type: String },
+    attachments: [{filename:String,url:String}],
+    priority: String,
+    priorityjustification: String,
+    priorityoverride: String,
+    priorityquotaweek: String,
+    requesttime: String,
     itemcode: { type: String },
     itemname: { type: String },
     store: { type: String },
