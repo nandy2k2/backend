@@ -6,9 +6,12 @@ test('counselor dashboard access is upserted for the exact institution and role,
   await module.exports({ colid: 42, role: 'counselor', email: 'me@example.com' });
   assert.equal(calls[0][0].colid, 42); assert.equal(calls[0][0].role, 'counselor'); assert.equal(calls[0][0].path, '/counsellor-dashboard');
   assert.equal(calls[0][1].$set.access, 'Allow'); assert.equal(calls[0][2].upsert, true);
-  await module.exports({ colid: 42, role: 'Student' }); assert.equal(calls.length, 1);
+  assert.equal(calls[1][0].path, '/crm2-my-campaigns'); assert.equal(calls[2][0].path, '/crm2-campaign-report');
+  assert.equal(calls[1][1].$setOnInsert.access, 'Allow');
+  await module.exports({ colid: 42, role: 'Student' }); assert.equal(calls.length, 3);
   await module.exports({ colid: 42, role: 'telecaller', email: 'tele@example.com' });
-  assert.equal(calls[1][0].path, '/telecaller-dashboard'); assert.equal(calls[1][0].role, 'telecaller');
+  assert.equal(calls[3][0].path, '/telecaller-dashboard'); assert.equal(calls[3][0].role, 'telecaller');
+  assert.equal(calls.length, 4);
 });
 test('year filter includes only truly undated legacy records in addition to matching years', () => {
   const { yearScope } = require('../utils/crm2DashboardScope');

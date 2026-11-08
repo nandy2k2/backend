@@ -6,12 +6,21 @@ function fixture({ validUser = true, ownLead = null, telecaller = false } = {}) 
   const queries = [], writes = [], module = { exports: {} };
   const chain = value => ({ select() { return this; }, sort() { return this; }, skip() { return this; }, limit() { return this; }, lean: async () => value });
   vm.runInNewContext(fs.readFileSync(file, 'utf8'), { module, process, Date, require(name) {
+    if (name === '../Models/crm2ds') {
+      const model = actual(name);
+      return { masterModels: { pipeline: { exists: async query => { queries.push(['pipeline',query]); return query.name === 'Interested'; } } }, Lead: {
+        schema: model.Lead.schema,
+        aggregate: async stages => { queries.push(['pipeline-summary', stages]); return [{ _id: 'Interested', count: 2 }]; },
+        findOneAndUpdate: (query, update) => { queries.push(['pipelineupdate',query]); writes.push(update); return chain(ownLead); },
+        find: query => { queries.push(['report',query]); return chain([]); }, findOne: query => { queries.push(['lead',query]); return chain(ownLead); },
+        distinct: async (_, query) => { queries.push(['leads',query]); return ['own-lead']; }, countDocuments: async query => { queries.push(['count',query]); return 2; }
+      } };
+    }
     if (name === 'jsonwebtoken') return { verify: () => ({ colid: '42', user: 'me@example.com' }) };
     if (name === '../Models/user') return { exists: async query => { queries.push(['user',query]); return validUser; }, findOne: () => chain(null) };
     if (name === '../Models/mprograms') return { distinct: async (_, query) => { queries.push(['programs',query]); return ['2026-27']; } };
     if (name === '../Models/crm2staffloginds') return { updateOne: async (...args) => writes.push(args), find: query => { queries.push(['logins',query]); return { sort() { return this; }, limit() { return this; }, lean: async () => [{ loggedAt: new Date('2026-10-28') }, { loggedAt: new Date('2026-10-25') }] }; } };
-    if (name === '../Models/crm2ds') return { masterModels: { pipeline: { exists: async query => { queries.push(['pipeline',query]); return query.name === 'Interested'; } } }, Lead: { schema: actual('../Models/crm2ds').Lead.schema, findOneAndUpdate: (query, update) => { queries.push(['pipelineupdate',query]); writes.push(update); return chain(ownLead); }, find: query => { queries.push(['report',query]); return chain([]); }, findOne: query => { queries.push(['lead',query]); return chain(ownLead); }, distinct: async (_, query) => { queries.push(['leads',query]); return ['own-lead']; }, countDocuments: async query => { queries.push(['count',query]); return 2; } } };
-    if (name === '../Models/crm2leadrecordsds') return { Note: { create: async row => { writes.push(row); return row; }, find: query => { queries.push(['notes',query]); return chain([]); }, findOneAndUpdate: async (query, update) => { queries.push(['noteupdate',query]); writes.push(update); return update; } }, Task: { find: query => { queries.push(['tasklist',query]); return chain([]); }, findOneAndUpdate: async (query, update) => { queries.push(['status',query]); writes.push(update); return { status: update.$set.status }; }, countDocuments: async query => { queries.push(['tasks',query]); return 3; } } };
+    if (name === '../Models/crm2leadrecordsds') return { Note: { create: async row => { writes.push(row); return row; }, find: query => { queries.push(['notes',query]); return chain([]); }, findOneAndUpdate: async (query, update) => { queries.push(['noteupdate',query]); writes.push(update); return update; } }, Task: { distinct: async (_, query) => { queries.push(['followup-tasks',query]); return ['own-lead']; }, find: query => { queries.push(['tasklist',query]); return chain([]); }, findOneAndUpdate: async (query, update) => { queries.push(['status',query]); writes.push(update); return { status: update.$set.status }; }, countDocuments: async query => { queries.push(['tasks',query]); return 3; } } };
     return actual(name);
   } });
   const invoke = async (method, route, input = {}, params = {}) => {
@@ -37,6 +46,32 @@ test('no year only loads master years and an unknown staff user cannot read the 
   const f = fixture(), result = await f.invoke('get', '/');
   assert.equal(result.data.years[0], '2026-27'); assert.equal(f.queries.some(([kind]) => kind === 'leads'), false);
   assert.equal((await fixture({ validUser: false }).invoke('get', '/', { academicyear: '2026-27' })).status, 400);
+});
+test('pipeline and follow-up summaries use the same owned scope as their drilldowns', async () => {
+  const f = fixture();
+  const result = await f.invoke('get', '/', { academicyear: '2026-27' });
+  assert.equal(result.data.data.pipelines[0]._id, 'Interested');
+  assert.equal(result.data.data.followupsToday, 2);
+  assert.equal(result.data.data.followupsTomorrow, 2);
+  assert.equal(f.queries.find(([kind]) => kind === 'pipeline-summary')[1][0].$match.colid, 42);
+  const taskQueries = f.queries.filter(([kind]) => kind === 'followup-tasks').map(([, query]) => query);
+  assert.equal(taskQueries[0].leadid.$in[0], 'own-lead');
+  assert.equal(taskQueries[0].status.$in.join(','), 'Open,Pending');
+  assert.equal(+taskQueries[0].duedate.$lt, +taskQueries[1].duedate.$gte);
+  await f.invoke('get', '/leads', { academicyear: '2026-27', view: 'pipeline', pipeline: 'Interested' });
+  assert.equal(f.queries.filter(([kind]) => kind === 'report').at(-1)[1].$and[0].pipeline, 'Interested');
+  await f.invoke('get', '/leads', { academicyear: '2026-27', view: 'followup', day: 'tomorrow' });
+  const query = f.queries.filter(([kind]) => kind === 'report').at(-1)[1];
+  assert.equal(query.colid, 42);
+  assert.equal(+query.$and[0].$or[0].followupdate.$gte, +taskQueries[1].duedate.$gte);
+  assert.equal(query.$and[0].$or[1]._id.$in[0], 'own-lead');
+});
+test('follow-up days start at midnight in India across a month boundary', () => {
+  const { followupRanges } = actual('../utils/crm2FollowupDays');
+  const { today, tomorrow } = followupRanges(new Date('2026-10-31T19:00:00Z'));
+  assert.equal(today.$gte.toISOString(), '2026-10-31T18:30:00.000Z');
+  assert.equal(today.$lt.toISOString(), '2026-11-01T18:30:00.000Z');
+  assert.equal(tomorrow.$gte.toISOString(), today.$lt.toISOString());
 });
 test('sign-in recording uses verified token identity and never changes account expiry', async () => {
   const f = fixture(); await f.invoke('post', '/login', { token: 'signed-token', colid: 999, user: 'spoof@example.com' });

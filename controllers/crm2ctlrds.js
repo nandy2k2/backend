@@ -184,7 +184,7 @@ router.post("/masters/:kind/delete", wrap(async (req, res) => {
 }));
 
 const writable = new Set([...fields.map(item => item.field), ...Object.keys(masters).filter(kind => !["document", "interactionmode"].includes(kind)).map(kind => masterLeadFields[kind] || kind), "education", "documents", "counsellorname", "counselloremail", 'programsinterested']);
-async function saveLead(body, colid, mode = '', owner = null, feedback = {}) {
+async function saveLead(body, colid, mode = '', owner = null, feedback = {}, { creationMode } = {}) {
   const existing = body.id ? await Lead.findOne({ _id: body.id, colid, ...require('../utils/crm2DashboardScope').yearScope(body.dashboardyear) }).select("-interactions").lean() : null;
   if (body.id && !existing) throw error("Lead not found", 404);
   const ownedField = ownerField(mode);
@@ -196,8 +196,11 @@ async function saveLead(body, colid, mode = '', owner = null, feedback = {}) {
   const input = { ...existing, ...body };
   if (!text(input.name) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text(input.email)) || !/^[+\d\s().-]+$/.test(text(input.phone)) || phoneKey(input.phone).length < 7 || phoneKey(input.phone).length > 15) throw error("Enter a name, valid email and phone number (7–15 digits)");
   const emailkey = emailKey(input.email), phonekey = phoneKey(input.phone);
-  const duplicate = await Lead.exists({ colid, ...(body.id ? { _id: { $ne: body.id } } : {}), $or: [{ emailkey }, { phonekey }] });
-  if (duplicate) throw error("Duplicate found: email or phone already exists. Cannot proceed.", 409);
+  const duplicates = await Lead.find({ colid, ...(body.id ? { _id: { $ne: body.id } } : {}), $or: [{ emailkey }, { phonekey }, { email: exactEmail(input.email) }] }).lean();
+  if (duplicates.length) {
+    if (!body.id) for (const lead of duplicates) await require('../services/crm2LeadHistory').recordDuplicate(lead, input, owner || body.user, mode === 'agent' ? 'Agent' : body.inputsource || 'Counselor/API');
+    throw error("Duplicate found: email or phone already exists. Cannot proceed.", 409);
+  }
   const payload = { colid, emailkey, phonekey, updatedby: text(body.user), crm2profileversion: 2 };
   Object.assign(payload, require('../utils/crm2LeadStages').stageProgress(existing, text(body.wizardstep) || undefined));
   for (const field of writable) {
@@ -330,10 +333,18 @@ async function saveLead(body, colid, mode = '', owner = null, feedback = {}) {
       feedback.assignmentwarning = 'No matching counselor found. Manual counselor selection has been retained.';
     }
   }
-  if (!existing) { payload.createdby = text(body.user); payload.user = text(body.user); payload.addedby = mode === 'agent' ? 'Agent' : 'Counselor'; payload.dateadded = new Date(); }
+  if (!existing) { payload.createdby = text(body.user); payload.user = text(body.user); payload.addedby = creationMode || (mode === 'agent' ? 'Agent' : 'Counselor'); payload.dateadded = new Date(); }
   if (payload.counselloremail && (!existing || emailKey(payload.counselloremail) !== emailKey(existing.counselloremail))) payload.counsellorassignedat = new Date();
   if (payload.telecalleremail && (!existing || emailKey(payload.telecalleremail) !== emailKey(existing.telecalleremail))) payload.telecallerassignedat = new Date();
-  return existing ? Lead.findOneAndUpdate({ _id: body.id, colid, ...(ownedField ? { [ownedField]: exactEmail(owner.email) } : {}) }, payload, { new: true, runValidators: true }) : Lead.create(payload);
+  try {
+    return await (existing ? Lead.findOneAndUpdate({ _id: body.id, colid, ...(ownedField ? { [ownedField]: exactEmail(owner.email) } : {}) }, payload, { new: true, runValidators: true }) : Lead.create(payload));
+  } catch (err) {
+    if (!existing && err.code === 11000) {
+      const raced = await Lead.find({ colid, $or: [{ emailkey }, { phonekey }, { email: exactEmail(input.email) }] }).lean();
+      for (const lead of raced) await require('../services/crm2LeadHistory').recordDuplicate(lead, input, owner || body.user, mode === 'agent' ? 'Agent' : body.inputsource || 'Counselor/API');
+    }
+    throw err;
+  }
 }
 async function agentDuplicate(req) {
   if (req.leadMode === 'agent' && !req.body.id) {
@@ -341,6 +352,7 @@ async function agentDuplicate(req) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || phone.length < 7 || phone.length > 15) throw error('Enter valid email and phone');
     const matches = await Lead.find({ colid: req.colid, $or: [{ emailkey: email }, { phonekey: phone }, { email: exactEmail(email) }] }).limit(2).lean();
     if (matches.length) {
+      for (const lead of matches) await require('../services/crm2LeadHistory').recordDuplicate(lead, req.body, req.leadOwner, 'Agent');
       if (matches.length !== 1 || !reclaimable(matches[0])) throw error('Lead exists', 409);
       const lead = matches[0];
       const saved = await Lead.findOneAndUpdate({ _id: lead._id, colid: req.colid, admitted: { $nin: ['Yes', 'YES', 'yes'] }, admissionstatus: { $nin: ['Admitted', 'ADMITTED', 'admitted'] }, ...(lead.dateadded ? { dateadded: lead.dateadded } : { dateadded: null, createdAt: lead.createdAt }), agentemail: lead.agentemail || { $in: ['', null] } }, { $set: { agentname: req.leadOwner.name, agentemail: emailKey(req.leadOwner.email), updatedby: req.leadOwner.email } }, { new: true, runValidators: true });
@@ -355,7 +367,11 @@ router.post('/leads/check', wrap(async (req, res) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !/^[+\d\s().-]+$/.test(text(req.body.phone)) || phone.length < 7 || phone.length > 15) throw error('Enter valid email and phone number (7–15 digits)');
   const reclaimed = await agentDuplicate(req);
   if (reclaimed) return res.json(reclaimed);
-  if (await Lead.exists({ colid: req.colid, $or: [{ emailkey: email }, { phonekey: phone }, { email: exactEmail(email) }] })) throw error('Duplicate found: email or phone already exists. Cannot proceed.', 409);
+  const matches = req.leadMode === 'agent' ? [] : await Lead.find({ colid: req.colid, $or: [{ emailkey: email }, { phonekey: phone }, { email: exactEmail(email) }] }).lean();
+  if (matches.length) {
+    for (const lead of matches) await require('../services/crm2LeadHistory').recordDuplicate(lead, req.body, req.leadOwner || req.body.user, 'Counselor/API');
+    throw error('Duplicate found: email or phone already exists. Cannot proceed.', 409);
+  }
   res.json({ success: true, available: true });
 }));
 router.post("/leads/save", wrap(async (req, res) => {
@@ -397,6 +413,7 @@ router.get("/leads", wrap(async (req, res) => {
   let filters = [];
   try { filters = JSON.parse(req.query.filters || "[]"); } catch { throw error("Invalid filters"); }
   for (const filter of req.query.dashboardyear ? [] : Array.isArray(filters) ? filters : []) {
+    if (filter.field === 'addedby' && text(filter.value)) { query.addedby = exactText(filter.value); continue; }
     if (!writable.has(filter.field) || filter.field === "password" || !text(filter.value)) continue;
     const type = Lead.schema.path(filter.field)?.instance;
     query[filter.field] = type === "Number" ? Number(filter.value) : type === "Date" ? new Date(filter.value) : regex(filter.value);

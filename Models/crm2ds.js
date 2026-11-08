@@ -3,7 +3,7 @@ const User = require("./user");
 
 const masters = {
   source: "Source", pipeline: "Pipeline", type: "Type", category: "Category",
-  leadrating: "Lead rating", case: "Case", distributiontype: "Distribution type",
+  leadrating: "Lead rating", leadgroup: "Lead group", case: "Case", distributiontype: "Distribution type",
   mediumofinstruction: "Medium of Instruction", quota: "Quota", document: "Document",
   admissionoffice: "Admission office", interactionmode: "Interaction mode", agent: "Agent", publisher: "Publisher"
 };
@@ -35,6 +35,7 @@ Object.assign(definitions, {
   samestate: { type: String, enum: ["Yes", "No"] }, isdisabled: { type: String, enum: ["Yes", "No"] }
 });
 definitions.crm2profileversion = { type: Number, default: 2 };
+definitions.leadgroup = { type: String };
 const educationFields = [];
 for (const level of ["12th", "10th"]) for (const suffix of ["institution", "passingyear", "grade", "marks", "board"]) {
   const field = `${level}${suffix}`; educationFields.push(field); definitions[field] = { type: suffix === "marks" ? Number : String };
@@ -43,7 +44,7 @@ const groups = {
   Identity: ["name", "email", "phone", "googleemail", "regno", "scholarnumber", "abcid", "rollno", "gender", "dob", "birthdate", "nationality", "photo"],
   "Family & Address": ["fathername", "mothername", "guardianname", "guardianmobile", "guardianemail", "address", "country", "state", "city", "district", "pincode", "category", "quota", "annualincome", "freeshipcardholder", "samestate"],
   "Education & Work": ["academicyear", "degree", "department", "joiningdate", "skills", "Mediumofinstruction", "admissionapplicationid", "isdisabled", "scholarship", ...educationFields],
-  "CRM Details": ["publisher", "publisheremail", "telecallername", "telecalleremail", "dateadded", "active", "admitted", "followupdate", "agentname", "agentemail", "admissionstatus", "admissionofficeid", "admissionoffice", "campusvisitdate", "campuscounsellor", "campuscounseloremail"],
+  "CRM Details": ["leadgroup", "publisher", "publisheremail", "telecallername", "telecalleremail", "dateadded", "active", "admitted", "followupdate", "agentname", "agentemail", "admissionstatus", "admissionofficeid", "admissionoffice", "campusvisitdate", "campuscounsellor", "campuscounseloremail"],
   "Additional Details": []
 };
 const managed = new Set(["colid", "user", "addedby", "authenticatordate", "authenticatorsetupdate", "crm2profileversion"]);
@@ -52,7 +53,7 @@ const profileSchema = new mongoose.Schema(definitions);
 const fields = Object.keys(definitions).filter(field => !field.includes(".$") && !managed.has(field)).map(field => {
   const original = profileSchema.path(field);
   const group = Object.keys(groups).find(key => groups[key].includes(field)) || "Additional Details";
-  return { field, label: field.replace(/([a-z])([A-Z])/g, "$1 $2"), type: original.instance, options: original.enumValues || [], group };
+  return { field, label: field === 'leadgroup' ? 'Lead group' : field.replace(/([a-z])([A-Z])/g, "$1 $2"), type: original.instance, options: original.enumValues || [], group };
 });
 Object.assign(definitions, {
   colid: { type: Number, required: true, index: true }, name: { type: String, required: true, trim: true },

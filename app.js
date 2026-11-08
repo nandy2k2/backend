@@ -7374,6 +7374,7 @@ app.post("/api/v2/repair-maintenance/user-to-counter-fee/list", repairmaintenanc
 app.post("/api/v2/repair-maintenance/user-to-counter-fee/update", repairmaintenancectlrds.updateUserToCounterFee);
 app.get("/api/v2/repair-maintenance/program-change/options", repairmaintenancectlrds.programChangeOptions);
 app.use("/api/v2/question-paper-indent", require("./controllers/questionpaperindentctlrds"));
+app.use('/api/v2/crm2-mail', require('./controllers/crm2MailIntake'));
 app.use("/api/v2/crm2", require("./controllers/crm2ctlrds"));
 app.use('/api/v2/crm2', require('./controllers/crm2leadreportctlrds'));
 app.use('/api/v2/crm2/config', require('./controllers/crm2configurationctlrds').router);
@@ -7388,6 +7389,7 @@ app.use('/api/v2/admission-scholarship-adhoc', require('./controllers/adhocschol
 app.use('/api/v2/crm2-admissions', require('./controllers/crm2admissionctlrds'));
 app.use('/api/v2/crm2-partner-payments', require('./controllers/crm2partnerpaymentsctlrds'));
 app.use('/api/v2/crm2-admin', require('./controllers/crm2admindashboard'));
+app.use('/api/v2/crm2-campaigns', require('./controllers/crm2campaignctlrds'));
 app.use('/api/v2/rolewise-dashboard', require('./controllers/rolewisedashboard'));
 app.use('/api/v2/practical-scheduling', require('./controllers/practicalScheduling'));
 app.use('/api/v2/exam-form-3', require('./controllers/examform3lifecycle'));

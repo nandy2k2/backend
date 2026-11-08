@@ -8,6 +8,7 @@ const { Task, Note } = require('../Models/crm2leadrecordsds');
 const { applyFilters } = require('../utils/crm2LeadFilters');
 const Program = require('../Models/mprograms');
 const { yearScope, newAssignedScope, admittedScope } = require('../utils/crm2DashboardScope');
+const { followupRanges } = require('../utils/crm2FollowupDays');
 const text = value => String(value || '').trim();
 const exact = value => new RegExp(`^${text(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
 const wrap = fn => async (req, res) => { try { await fn(req, res); } catch (error) { res.status(400).json({ success: false, message: error.message }); } };
@@ -27,6 +28,17 @@ async function ownLead(req) {
 }
 router.get('/leads', wrap(async (req, res) => {
   const context = await staffScope(req), query = context.query;
+  if (!req.telecallerDashboard && req.query.view === 'pipeline') {
+    const stage = String(req.query.pipeline || '');
+    query.$and = [...(query.$and || []), { pipeline: stage || { $in: ['', null] } }];
+  }
+  if (!req.telecallerDashboard && req.query.view === 'followup') {
+    const day = req.query.day;
+    if (!['today', 'tomorrow'].includes(day)) throw new Error('Select Today or Tomorrow');
+    const range = followupRanges()[day];
+    const condition = await followupCondition(await taskQuery(context), range);
+    query.$and = [...(query.$and || []), condition];
+  }
   if (req.query.view === 'new') {
     const logins = await Logins.find({ colid: context.colid, email: context.email }).sort({ loggedAt: -1, _id: -1 }).limit(2).lean();
     const since = logins[1]?.loggedAt;
@@ -45,7 +57,7 @@ router.get('/filter-options', wrap(async (req, res) => {
   const context = await staffScope(req), field = text(req.query.field), schema = Lead.schema.path(field);
   if (!schema || schema.instance !== 'String' || /password|token|secret|emailkey|phonekey|^colid$|^_|\./i.test(field)) throw new Error('Invalid filter field');
   const search = new RegExp(text(req.query.search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-  const kind = ({ crmcategory: 'category', source: 'source', pipeline: 'pipeline', type: 'type', case: 'case' }[field]);
+  const kind = ({ crmcategory: 'category', source: 'source', pipeline: 'pipeline', type: 'type', case: 'case', leadgroup: 'leadgroup' }[field]);
   const data = kind ? await masterModels[kind].find({ colid: context.colid, name: search, status: 'Active' }).select('name').limit(100).lean() : (await Lead.distinct(field, { ...context.query, [field]: search })).filter(Boolean).slice(0,100).map(name => ({ name }));
   res.json({ success: true, data });
 }));
@@ -77,7 +89,14 @@ router.post('/lead/:id/notes', wrap(async (req, res) => {
 }));
 async function taskQuery(context, leadid) {
   const ids = await Lead.distinct('_id', context.query);
-  return { colid: context.colid, leadid: { $in: leadid ? ids.filter(id => String(id) === String(leadid)) : ids }, status: { $in: ['Open','Pending'] }, $or: [{ academicyear: context.year }, { academicyear: { $in: [null, ''] } }] };
+  return scopedTasks(context.colid, context.year, leadid ? ids.filter(id => String(id) === String(leadid)) : ids);
+}
+function scopedTasks(colid, academicyear, ids) {
+  return { colid, leadid: { $in: ids }, status: { $in: ['Open','Pending'] }, $or: [{ academicyear }, { academicyear: { $in: [null, ''] } }] };
+}
+async function followupCondition(tasks, range) {
+  const leadids = await Task.distinct('leadid', { ...tasks, duedate: range });
+  return { $or: [{ followupdate: range }, { _id: { $in: leadids } }] };
 }
 router.get('/admitted', wrap(async (req, res) => {
   const context = await staffScope(req), clauses = [context.query, admittedScope];
@@ -129,7 +148,20 @@ router.get('/', wrap(async (req, res) => {
     Lead.countDocuments({ $and: [query, fresh] }),
     Lead.countDocuments({ $and: [query, admittedScope] })
   ]);
-  const pending = await Task.countDocuments({ colid, leadid: { $in: leadids }, status: { $in: ['Open','Pending'] }, $or: [{ academicyear }, { academicyear: { $in: [null, ''] } }] });
-  res.json({ success: true, data: { academicyear, newleads, pending, admitted, total: leadids.length, since } });
+  const tasks = scopedTasks(colid, academicyear, leadids);
+  const data = { academicyear, newleads, pending: 0, admitted, total: leadids.length, since };
+  const pending = Task.countDocuments(tasks);
+  if (req.telecallerDashboard) data.pending = await pending;
+  else {
+    const { today, tomorrow } = followupRanges();
+    const countFollowups = async range => Lead.countDocuments({ $and: [query, await followupCondition(tasks, range)] });
+    const [pendingCount, pipelines, followupsToday, followupsTomorrow] = await Promise.all([
+      pending,
+      Lead.aggregate([{ $match: query }, { $group: { _id: { $ifNull: ['$pipeline', ''] }, count: { $sum: 1 } } }, { $sort: { count: -1, _id: 1 } }]),
+      countFollowups(today), countFollowups(tomorrow)
+    ]);
+    Object.assign(data, { pending: pendingCount, pipelines, followupsToday, followupsTomorrow });
+  }
+  res.json({ success: true, data });
 }));
 module.exports = { router };

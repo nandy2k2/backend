@@ -30,7 +30,7 @@ function applyFilters(query, input) {
     if (schema.instance === 'Number') { if (!Number.isFinite(Number(value))) throw new Error('Enter a numeric filter value'); clauses.push({ [field]: Number(value) }); }
     else if (schema.instance === 'Date') clauses.push({ [field]: { $gte: day(value), $lt: new Date(day(value).getTime() + 86400000) } });
     else if (schema.instance === 'Boolean') { if (!['true','false','yes','no','1','0'].includes(value.toLowerCase())) throw new Error('Select Yes or No'); clauses.push({ [field]: ['true','yes','1'].includes(value.toLowerCase()) }); }
-    else clauses.push({ [field]: new RegExp(escape(value), 'i') });
+    else clauses.push({ [field]: new RegExp(field === 'addedby' ? `^${escape(value)}$` : escape(value), 'i') });
   }
   if (clauses.length) query.$and = clauses;
   return query;

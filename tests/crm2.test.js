@@ -5,6 +5,21 @@ const { createRequire } = require("node:module");
 const schema = require("../Models/crm2ds");
 const file = path.join(__dirname, "../controllers/crm2ctlrds.js"), actualRequire = createRequire(file);
 const leadData = { name: "Lead", email: "LEAD@example.com", phone: "+91 98765-43210" };
+test('lead group uses a scoped master and can be saved and filtered', async () => {
+  const f = fixture();
+  const master = await f.invoke('post', '/masters/:kind/save', { colid: 42, name: 'Priority inquiries' }, {}, { kind: 'leadgroup' });
+  assert.equal(master.status, 200);
+  assert.equal(master.data.data.colid, 42);
+  assert.equal(master.data.data.namekey, 'priority inquiries');
+  const result = await f.invoke('post', '/leads/save', { ...leadData, colid: 42, leadgroup: 'Priority inquiries' });
+  assert.equal(result.status, 200);
+  assert.equal(f.creates[0].leadgroup, 'Priority inquiries');
+  assert.ok(f.queries.some(query => query.colid === 42 && query.name === 'Priority inquiries'));
+  await f.invoke('get', '/leads', {}, { colid: 42, filters: JSON.stringify([{ field: 'leadgroup', value: 'Priority inquiries' }]) });
+  assert.equal(f.queries.at(-1).leadgroup.source, 'Priority inquiries');
+  const invalid = await fixture({ masterExists: false }).invoke('post', '/leads/save', { ...leadData, colid: 42, leadgroup: 'Unknown' });
+  assert.equal(invalid.status, 400);
+});
 test('wizard save persists authoritative stage/time and rejects skipping a stage', async () => {
   const f = fixture();
   const first = await f.invoke('post', '/leads/save', { colid: 42, ...leadData, wizardstep: 'CRM Details', stage: 'spoof', stagetime: '2000-01-01', wizardcompleted: ['Documents'] });
@@ -157,7 +172,7 @@ const lean = value => ({ select() { return this; }, sort() { return this; }, ski
 function fixture({ duplicate = false, existing = null, counsellor = null, createError = null, awsConfig = null, office = null, masterExists = true, agent = null, publisher = null, leadsRecords = [], addressExists = true, autoMappings = [] } = {}) {
   const queries = [], creates = [], updates = [], uploads = [], aggregations = [], masterCreates = [], taskEvents = [];
   const Lead = {
-    find: query => { queries.push(query); return lean(leadsRecords); },
+    find: query => { queries.push(query); return lean(duplicate ? [{ _id: '111111111111111111111111', colid: 42, ...leadData }] : leadsRecords); },
     countDocuments: async query => { queries.push(query); return leadsRecords.length; },
     schema: schema.Lead.schema,
     exists: async query => { queries.push(query); return duplicate; },
@@ -177,6 +192,7 @@ function fixture({ duplicate = false, existing = null, counsellor = null, create
     if (name === '../Models/mprograms') return { findOne: query => { queries.push(query); return lean(masterExists ? { program: 'Master program', programcode: query.programcode } : null); } };
     if (name === '../Models/crm2programds') return { Mapping: { find: query => { queries.push(query); return lean(autoMappings); } } };
     if (name === '../services/crm2FollowupTask') return { syncFollowupTask: async (...args) => taskEvents.push(['sync', ...args]), closeFollowupTasks: async (...args) => taskEvents.push(['close', ...args]) };
+    if (name === '../services/crm2LeadHistory') return { recordDuplicate: async (...args) => taskEvents.push(['duplicate', ...args]) };
     if (name === "../Models/awsconfig") return { findOne: query => { queries.push(query); return lean(awsConfig); } };
     if (name === "aws-sdk") return { S3: class { putObject(payload) { uploads.push(payload); return { promise: async () => ({}) }; } } };
     return actualRequire(name);
@@ -284,7 +300,8 @@ test("duplicate email OR phone stops creation with 409", async () => {
   assert.equal(result.status, 409);
   assert.match(result.data.message, /Duplicate found/);
   assert.equal(f.creates.length, 0);
-  assert.equal(f.queries[0].$or.length, 2);
+  assert.equal(f.queries[0].$or.length, 3);
+  assert.equal(f.taskEvents.filter(event => event[0] === 'duplicate').length, 1);
 });
 test("counsellor name is derived server-side from scoped email", async () => {
   const f = fixture({ counsellor: { name: "Real counsellor", email: "c@example.com" } });
