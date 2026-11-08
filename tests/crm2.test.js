@@ -229,6 +229,26 @@ test('lead master active tab is applied after dynamic filters and cannot be over
   await f.invoke('get', '/leads', {}, { colid: 42, active: 'No', filters: JSON.stringify([{ field: 'active', value: 'Yes' }]) });
   assert.ok(f.queries.every(query => query.colid === 42 && query.active === 'No'));
 });
+test('all leads search matches normalized phone numbers without excluding inactive or legacy leads', async () => {
+  const f = fixture();
+  const result = await f.invoke('get', '/leads', {}, { colid: 42, active: 'All', search: '98765 43210' });
+  assert.equal(result.status, 200);
+  const query = f.queries.at(-1);
+  assert.equal(query.colid, 42);
+  assert.equal(query.active, undefined);
+  assert.ok(query.$or.find(row => row.phonekey).phonekey.test('919876543210'));
+});
+test('lead duplicate warning identifies the matched field and uses institution-scoped indexes', async () => {
+  const f = fixture({ leadsRecords: [{ ...leadData, colid: 42, email: 'other@example.com', active: 'No' }] });
+  const result = await f.invoke('post', '/leads/check', { ...leadData, colid: 42 });
+  assert.equal(result.status, 409);
+  assert.match(result.data.message, /phone already exists in this institution/);
+  const query = f.queries.find(entry => entry.$or);
+  assert.equal(query.colid, 42);
+  assert.equal(query.active, undefined);
+  const unique = schema.Lead.schema.indexes().filter(([, options]) => options.unique).map(([keys]) => keys);
+  assert.deepEqual(unique, [{ colid: 1, emailkey: 1 }, { colid: 1, phonekey: 1 }]);
+});
 test('admission office stores a canonical Address Master location and coordinates', async () => {
   const f = fixture();
   const result = await f.invoke('post', '/masters/:kind/save', { colid: 42, name: 'Central Office', address: 'Main Road', country: 'india', state: 'gujarat', city: 'ahmedabad', pincode: '380001', latitude: '23.0225', longitude: '72.5714' }, {}, { kind: 'admissionoffice' });

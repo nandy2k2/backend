@@ -7390,6 +7390,7 @@ app.use('/api/v2/crm2-admissions', require('./controllers/crm2admissionctlrds'))
 app.use('/api/v2/crm2-partner-payments', require('./controllers/crm2partnerpaymentsctlrds'));
 app.use('/api/v2/crm2-admin', require('./controllers/crm2admindashboard'));
 app.use('/api/v2/crm2-campaigns', require('./controllers/crm2campaignctlrds'));
+app.use('/api/v2/crm2-merge-wizard', require('./controllers/crm2mergewizard'));
 app.use('/api/v2/rolewise-dashboard', require('./controllers/rolewisedashboard'));
 app.use('/api/v2/practical-scheduling', require('./controllers/practicalScheduling'));
 app.use('/api/v2/exam-form-3', require('./controllers/examform3lifecycle'));
