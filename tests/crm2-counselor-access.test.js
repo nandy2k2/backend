@@ -8,10 +8,14 @@ test('counselor dashboard access is upserted for the exact institution and role,
   assert.equal(calls[0][1].$set.access, 'Allow'); assert.equal(calls[0][2].upsert, true);
   assert.equal(calls[1][0].path, '/crm2-my-campaigns'); assert.equal(calls[2][0].path, '/crm2-campaign-report');
   assert.equal(calls[1][1].$setOnInsert.access, 'Allow');
-  await module.exports({ colid: 42, role: 'Student' }); assert.equal(calls.length, 3);
+  assert.equal(calls[3][0].path, '/crm2-select-queue-counter'); assert.equal(calls[4][0].path, '/crm2-queue-counsellor');
+  await module.exports({ colid: 42, role: 'Student' }); assert.equal(calls.length, 5);
   await module.exports({ colid: 42, role: 'telecaller', email: 'tele@example.com' });
-  assert.equal(calls[3][0].path, '/telecaller-dashboard'); assert.equal(calls[3][0].role, 'telecaller');
-  assert.equal(calls.length, 4);
+  assert.equal(calls[5][0].path, '/telecaller-dashboard'); assert.equal(calls[5][0].role, 'telecaller');
+  assert.equal(calls.length, 6);
+  await module.exports({ colid: 42, role: 'campusvisit', email: 'campus@example.com' });
+  assert.equal(calls[6][1].$setOnInsert.menugroup, 'CRM 2 Campus Queue');
+  assert.equal(calls.length, 8);
 });
 test('year filter includes only truly undated legacy records in addition to matching years', () => {
   const { yearScope } = require('../utils/crm2DashboardScope');
