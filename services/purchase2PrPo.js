@@ -27,7 +27,7 @@ async function sync(colid, prnumber, state, session = null) {
 async function refresh(colid, prnumber) {
   const state = await read(colid, prnumber); await sync(colid, prnumber, state); return state;
 }
-async function create(colid, body) {
+async function create(colid, body, loadQuotation) {
   const prnumber = text(body.prnumber), user = text(body.user), session = await mongoose.startSession();
   let result;
   try {
@@ -35,15 +35,22 @@ async function create(colid, body) {
       // Every PR-based creation writes this same document before reading allocations.
       const pr = await PR.findOneAndUpdate({ colid, prnumber }, { $inc: { porevision: 1 } }, { new: true, session }).lean();
       if (!pr) throw new Error('PR not found in this institution');
-      const assignment = await Assignment.findOne({ _id: body.assignmentid, colid, prnumber, assignedtoemail: new RegExp(`^${user.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }).session(session).lean();
+      const assignment = await Assignment.findOne({ ...(loadQuotation ? {} : {_id:body.assignmentid}), colid, prnumber, assignedtoemail: new RegExp(`^${user.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }).session(session).lean();
       if (!assignment || ['hold','rejected','reject'].includes(text(assignment.status).toLowerCase())) throw new Error('Select an available PR assigned to you');
       if (['hold','rejected','reject'].includes(text(pr.status).toLowerCase())) throw new Error('Held or rejected PR cannot create a PO');
       const state = await read(colid, prnumber, session);
       if (state.complete) throw new Error('All PR items are already allocated. No further PO can be created');
+      if (loadQuotation) {
+        const existing = await PO.find({colid,prnumber}).session(session).lean();
+        if (existing.some(require('../utils/purchase2PoRules').draft)) throw new Error('A draft PO already exists for this PR. Reload the comparison to open it.');
+        if (!/^approved$/i.test(pr.status) || state.ordered > 0) throw new Error('An L1 draft requires an approved PR with no existing allocation');
+        body = {...body, ...await loadQuotation(session)};
+      }
       if (!Array.isArray(body.items) || !body.items.length) throw new Error('Select remaining PR items');
       const vendor = await Vendor.findOne({ colid, _id: body.header?.vendorid }).session(session).lean();
       if (!vendor) throw new Error('Select a vendor from this institution');
-      const seen = new Set(), poid = `PO-${Date.now()}-${new mongoose.Types.ObjectId().toString().slice(-6).toUpperCase()}`;
+      const delivery = await require('./purchase2PoDraft').delivery(colid, body.header?.storeid || pr.storeid, session);
+      const seen = new Set(), poid = await require('./purchase2PrCreation').poNumber(colid, delivery.storeunit || {}, session);
       const items = body.items.map(input => {
         const id = text(input.pritemid || input._id);
         const matches = state.lines.filter(row => id ? row.pritemid === id : key(row) === key(input));
@@ -53,12 +60,11 @@ async function create(colid, body) {
         seen.add(line.pritemid);
         if (!Number.isFinite(quantity) || quantity <= 0 || quantity > line.remainingquantity + 1e-8) throw new Error(`${line.itemname || line.itemcode}: quantity exceeds remaining PR quantity (${line.remainingquantity})`);
         const calculated = calculatePoLine({ quantity, price: input.price ?? line.estimatedprice ?? 0, gst: input.gst ?? 0, tax: input.tax, discount: input.discount ?? 0, discounttype: input.discounttype || 'Amount', sgst: input.sgst, cgst: input.cgst, igst: input.igst }, true);
-        return { ...calculated, colid, user, name: text(body.name) || user, poid, pritemid: line.pritemid, prallocation: true, prnumber, itemid: line.itemid, itemcode: line.itemcode, itemname: line.itemname, unit: line.unit, category: line.category, make: input.make || '', vendorid: String(vendor._id), vendor: vendor.vendorname || vendor.name, postatus: 'Draft', storereqid: text(body.assignmentid || pr._id) };
+        return { ...calculated, colid, user, name: text(body.name) || user, poid, pritemid: line.pritemid, prallocation: true, prnumber, itemid: line.itemid, itemcode: line.itemcode, itemname: line.itemname, unit: line.unit, category: line.category, make: input.make || '', vendorid: String(vendor._id), vendor: vendor.vendorname || vendor.name, postatus: 'Draft', storereqid: text(assignment._id || pr._id) };
       });
       await require('./verifyVendorSellsItems').verifyVendorSellsItems(colid,vendor._id,items,session);
       const headerData = { colid, user, name: text(body.name) || user, poid, prnumber, vendorid: String(vendor._id), vendor: vendor.vendorname || vendor.name, ...summarizePo(items, true), creatorEmail: user, creatorName: text(body.name), postatus: 'Draft', approvalStatus: 'Draft', poType: 'Standard' };
-      const storeid = body.header?.storeid || pr.storeid;
-      if (storeid) Object.assign(headerData, await require('./purchase2PoDraft').delivery(colid, storeid, session));
+      Object.assign(headerData, delivery);
       for (const field of ['terms','warranty','creatorSignature','year','description','createdtime']) if (body.header?.[field] !== undefined) headerData[field] = body.header[field];
       const [header] = await PO.create([headerData], { session });
       const savedItems = await POItem.insertMany(items, { session });

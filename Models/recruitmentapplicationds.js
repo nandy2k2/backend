@@ -6,6 +6,7 @@ const RecruitmentApplicationSchema = new mongoose.Schema({
   formid: { type: String, required: true, index: true },
   applicationno: { type: String, default: '', index: true },
   applicantname: { type: String, default: '' },
+  confirmationuserid: mongoose.Schema.Types.ObjectId,
   email: { type: String, default: '', index: true },
   phone: { type: String, default: '', index: true },
   username: { type: String, default: '' },

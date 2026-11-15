@@ -1,7 +1,10 @@
 const router=require('express').Router(),service=require('../services/purchase2PrCreation');
 const upload=require('multer')({storage:require('multer').memoryStorage(),limits:{fileSize:15*1024*1024}});
 const wrap=fn=>async(req,res)=>{try{req.colid=Number(req.body?.colid||req.query.colid);if(!(req.colid>0))throw Error('Institution ID required');await fn(req,res);}catch(e){res.status(400).json({message:e.message});}};
-router.get('/prnumber/next',wrap(async(req,res)=>res.json({prnumber:await service.next(req.colid)})));
+router.get('/prnumber/next',wrap(async(req,res)=>res.json({prnumber:await service.preview(req.colid,req.query.storeid)})));
+router.get('/pr-institutions',wrap(async(req,res)=>res.json({data:await require('../Models/academicmasterinstitutionds').find({colid:req.colid}).select('institution shortname').sort({shortname:1}).lean()})));
+router.get('/unit-stores',wrap(async(req,res)=>res.json({data:await require('../Models/purchasenewstoreds').find({colid:req.colid}).select('store').sort({store:1}).lean()})));
+router.get('/store-unit',wrap(async(req,res)=>res.json({data:await service.resolveUnit(req.colid,req.query.storeid,null)})));
 router.post('/pr-attachment',upload.single('file'),wrap(async(req,res)=>{
  const f=req.file;if(!f||!['application/pdf','image/jpeg','image/png'].includes(f.mimetype))throw Error('Only PDF, JPG and PNG attachments are supported');
  const valid=f.mimetype==='application/pdf'?f.buffer.subarray(0,5).toString()==='%PDF-':f.mimetype==='image/png'?f.buffer.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):f.buffer[0]===255&&f.buffer[1]===216;

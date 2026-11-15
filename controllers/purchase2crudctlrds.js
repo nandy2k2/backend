@@ -90,7 +90,11 @@ async function normalizePoPayload(model, payload, existing = {}) {
     } else if (!rules.draft(payload)) throw new Error('New purchase orders must start as Draft');
     if (payload.prnumber && !existing._id) throw new Error('Use Create PO from PR for atomic PR allocation');
     if (existing._id && String(payload.prnumber ?? existing.prnumber ?? '') !== String(existing.prnumber || '')) throw new Error('A PO cannot change its linked PR');
-    payload.poid = payload.poid || existing.poid;
+    if (!existing._id || payload.storeid) {
+      const delivery = await require('../services/purchase2PoDraft').delivery(payload.colid, payload.storeid || existing.storeid, null);
+      Object.assign(payload, delivery);
+    }
+    payload.poid = existing.poid || await require('../services/purchase2PrCreation').poNumber(payload.colid,payload.storeunit || {});
     if (!payload.poid) throw new Error("PO number is required");
     if (existing.poid && existing.poid !== payload.poid && await models.storepoitemsds2.exists({ colid: payload.colid, poid: existing.poid })) throw new Error("PO number cannot change after items are added");
     const lines=await models.storepoitemsds2.find({ colid: payload.colid, poid: payload.poid }).lean();
@@ -267,7 +271,17 @@ exports.savePoDraft = async (req, res) => {
   catch (error) { res.status(409).json({ success: false, message: error.message }); }
 };
 exports.poAction = async (req, res) => {
-  try { const actor = await require('../services/purchase2PoAccess').staff(req); res.json({ success: true, data: await require('../services/purchase2PoDraft').action(actor, req.body) }); }
+  try {
+    const actor = await require('../services/purchase2PoAccess').staff(req);
+    const service = require('../services/purchase2PoDraft');
+    const data = await service.action(actor, req.body);
+    let warning;
+    if (req.body.action === 'reject') {
+      try { await service.sendRejectionEmail(actor.colid, data); }
+      catch (error) { warning = 'PO rejected, but the notification email could not be sent.'; }
+    }
+    res.json({success:true,data,warning});
+  }
   catch (error) { res.status(403).json({ success: false, message: error.message }); }
 };
 
@@ -369,7 +383,7 @@ exports.bulkPurchase2Rows = async (req, res) => {
     }
     let data;
     if(['storeprrequestds2','storerequisitionds2','storerequisationds2'].includes(req.params.model)){
-      data=[];for(const row of prepared){const service=require('../services/purchase2PrCreation');row.prnumber=await service.next(colid);row.reqid=row.prnumber;data.push(await service.save(Model,req.params.model,row));}
+      data=[];for(const row of prepared){const service=require('../services/purchase2PrCreation');data.push(await service.save(Model,req.params.model,row));}
       return res.json({success:true,inserted:data.length});
     }
     try { data = await Model.insertMany(prepared, { ordered: false }); }

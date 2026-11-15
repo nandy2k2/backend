@@ -56,6 +56,7 @@ function fixture() {
     if (name.endsWith('purchase2PoRules')) return rules;
     if (name.endsWith('verifyVendorSellsItems')) return {verifyVendorSellsItems:async()=>true};
     if (name === './purchase2PrPo') return prModule.exports;
+    if (name === './purchase2PrCreation') return {resolveUnit:async()=>({unitcode:'TEST'}),poNumber:()=>`PO_TEST_${new mongo.Types.ObjectId()}`};
     if (name === './purchase2PoDraft') return draftModule.exports;
     if (name === './purchase2PoAccess') return { canEdit: () => {}, canApprove: async () => ({ current: { level: 1 } }) };
     throw new Error(name);
@@ -73,6 +74,17 @@ test('one atomic creation completes a PR, updates assignment and prevents subseq
 test('two competing full-quantity attempts cannot commit duplicate allocations', async () => {
   const f = fixture(), results = await Promise.allSettled([f.pr.create(42, f.body(10)), f.pr.create(42, f.body(10))]);
   assert.equal(results.filter(row => row.status === 'fulfilled').length, 1); assert.equal(f.state().items.reduce((sum,row) => sum + row.quantity, 0), 10);
+});
+test('quotation and manual PO creation compete for the same PR allocation', async () => {
+  const f = fixture(), {header,items,...request} = f.body(10);
+  const draft = await f.pr.create(42,request,async()=>({header:{...header,terms:'Net 30'},items}));
+  assert.equal(draft.header.terms,'Net 30');
+  assert.equal(draft.header.actualAmount,1180);
+  await assert.rejects(f.pr.create(42,f.body(10)),/already allocated/);
+});
+test('PO rejection requires a written justification', async () => {
+  const f = fixture();
+  await assert.rejects(f.draft.action(f.actor,{action:'reject',justification:'  '}), /rejection justification/);
 });
 test('partial allocations remain available and draft quantity edits respect amounts ordered in other POs', async () => {
   const f = fixture(), first = await f.pr.create(42, f.body(4)); await f.pr.create(42, f.body(3));

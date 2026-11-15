@@ -22,3 +22,6 @@ test('unverified, foreign institution, inactive, or unmapped supply is blocked',
  await assert.rejects(()=>verifier([])(42,'v1',[{itemid:'i1'}]),/not verified/);
  await assert.rejects(()=>verifier([])(99,'v1',[{itemid:'i1'}]),/valid vendor/);
 });
+test('a reused item code does not authorize a different item ID',async()=>{
+ await assert.rejects(()=>verifier([{colid:42,vendorid:'v1',mappingtype:'Item',itemid:'old-id',itemcode:'C1',verified:'Yes'}])(42,'v1',[{itemcode:'C1'}]),/not verified/);
+});

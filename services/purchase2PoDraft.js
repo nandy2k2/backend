@@ -14,9 +14,11 @@ const { key } = require('../utils/purchase2PrAvailability');
 const text = value => String(value ?? '').trim();
 async function delivery(colid, storeid, session) {
   if (!storeid) return {};
-  const store = await Store.findOne({ colid, _id: storeid }).session(session).lean();
+  const store = await Store.findOne({ colid, _id: storeid }).session(session).lean()
+    || await Store.findOne({colid,legacystoreid:storeid}).session(session).lean();
   if (!store) throw new Error('Select a receiving store from Store master');
-  return { storeid: String(store._id), storename: store.storename || store.name, store: store.storename || store.name, deliverylocation: store.storename || store.name, deliveryaddress: store.address || store.location || '', deliveryphone: store.contactnumber || store.phone || '', deliveryemail: store.email || '', deliverycontactperson: store.contactperson || store.storemanager || '' };
+  const storeunit = await require('./purchase2PrCreation').resolveUnit(colid, String(store._id), session);
+  return { storeunit, departmentname: storeunit.departmentname, storeid: String(store._id), storename: store.storename || store.name, store: store.storename || store.name, deliverylocation: store.storename || store.name, deliveryaddress: store.address || store.campusaddress || store.location || '', deliveryphone: store.contactnumber || store.phone || store.campusphone || '', deliveryemail: store.email || store.campusemail || '', deliverycontactperson: store.contactperson || store.storemanager || '' };
 }
 async function save(actor, body) {
   const session = await mongoose.startSession(); let result;
@@ -41,7 +43,7 @@ async function save(actor, body) {
       const previous = header ? await Item.find({ colid: actor.colid, poid: header.poid }).session(session).lean() : [];
       if (header) await Item.deleteMany({ colid: actor.colid, poid: header.poid }, { session });
       const remaining = header?.prnumber ? await prService.read(actor.colid, header.prnumber, session) : null;
-      const used = new Map(), poid = header?.poid || `PO-${Date.now()}-${new mongoose.Types.ObjectId().toString().slice(-6).toUpperCase()}`;
+      const used = new Map(), poid = header?.poid || await require('./purchase2PrCreation').poNumber(actor.colid, store.storeunit, session);
       const items = body.items.map(input => {
         const old = previous.find(row => String(row._id) === String(input._id));
         if (input._id && !old) throw new Error('An item does not belong to this PO');
@@ -80,6 +82,8 @@ async function save(actor, body) {
   } finally { await session.endSession(); }
 }
 async function action(actor, body) {
+  const justification = typeof body.justification === 'string' ? body.justification.trim() : '';
+  if (body.action === 'reject' && (!justification || justification.length > 4000)) throw new Error('Enter a rejection justification (up to 4000 characters)');
   const session = await mongoose.startSession(); let result;
   try {
     await session.withTransaction(async () => {
@@ -97,7 +101,7 @@ async function action(actor, body) {
         if (status !== 'submitted') throw new Error('Only submitted POs may be approved or rejected');
         const { current, next } = await canApprove(actor, header);
         const signature = await Signature.findOne({ colid: actor.colid, useremail: actor.email }).session(session).lean();
-        const history = [...(header.approvalhistory || []), { level: current.level, approvername: actor.name, approveremail: actor.email, signaturelink: signature?.signaturelink || '', date: new Date().toISOString(), status: body.action === 'reject' ? 'Rejected' : 'Approved' }];
+        const history = [...(header.approvalhistory || []), { level: current.level, approvername: actor.name, approveremail: actor.email, signaturelink: signature?.signaturelink || '', date: new Date().toISOString(), status: body.action === 'reject' ? 'Rejected' : 'Approved', ...(body.action === 'reject' ? {remarks:justification} : {}) }];
         Object.assign(patch, { approvalhistory: history }, body.action === 'reject' ? { postatus: 'Rejected', approvalStatus: 'Rejected' } : next ? { currentStep: next.level, postatus: 'Submitted', approvalStatus: 'Pending' } : { postatus: 'Approved', approvalStatus: 'Approved', approvedtime: new Date().toISOString() });
       } else throw new Error('Invalid PO action');
       result = await PO.findOneAndUpdate({ _id: header._id, colid: actor.colid }, { $set: patch }, { new: true, session });
@@ -105,4 +109,17 @@ async function action(actor, body) {
     }); return result;
   } finally { await session.endSession(); }
 }
-module.exports = { save, action, delivery };
+async function sendRejectionEmail(colid, po) {
+  const pr = po.prnumber ? await PR.findOne({colid,prnumber:po.prnumber}).lean() : null;
+  const storeid = pr?.storeid || po.storeid;
+  const store = mongoose.isValidObjectId(storeid) ? await Store.findOne({colid,$or:[{_id:storeid},{legacystoreid:storeid}]}).lean() : null;
+  const recipients = [...new Set([po.creatorEmail || po.user, pr?.requestedbyemail, store?.storemanager, store?.email].map(value=>text(value).toLowerCase()).filter(value=>/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(value)))];
+  if (!recipients.length) throw new Error('No buyer or store contact email configured');
+  const config = await require('../Models/emailconfigurationds').findOne({colid,default:/^yes$/i,isactive:{$not:/^no$/i}}).lean();
+  if (!config) throw new Error('No default active email configuration');
+  const port = Number(config.port || 587);
+  const transport = require('nodemailer').createTransport({host:config.smtp || config.smptp || (/gmail/i.test(config.provider)?'smtp.gmail.com':''),port,secure:/^yes$/i.test(config.secure)||port===465,auth:{user:config.username,pass:config.password}});
+  const entry = po.approvalhistory.at(-1);
+  await transport.sendMail({from:config.username,to:recipients,subject:`PO rejected: ${po.poid}`,text:`PO ${po.poid} was rejected by ${entry.approvername}.\n\nJustification:\n${entry.remarks}`});
+}
+module.exports = { save, action, delivery, sendRejectionEmail };

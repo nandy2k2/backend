@@ -23,6 +23,10 @@ const purchaseNewIndentSchema = new mongoose.Schema({
   submittedrole: { type: String },
   rejectedreason: { type: String },
   approvedat: { type: Date },
+  issuedquantity: { type: Number, default: 0 },
+  shortageprnumber: String,
+  priority: { type: String, default: 'Normal' },
+  transferredfrom: String,
   history: [{
     action: String,
     stage: String,

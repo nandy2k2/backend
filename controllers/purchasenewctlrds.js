@@ -711,15 +711,12 @@ exports.deleteStoreUser = async (req, res) => {
 
 exports.getAssignedStoreIndents = async (req, res) => {
   try {
-    const colid = num(req.query.colid);
-    const useremail = clean(req.query.useremail || req.query.user);
+    const { colid, stores: assignments } = await indentAccess(req);
     const store = clean(req.query.store);
-    if (!colid || !useremail) return res.status(400).json({ success: false, message: "colid and user are required" });
-    const assignments = await PurchaseNewStoreUser.find({ colid, useremail, status: "Active" }).sort({ store: 1 }).lean();
     const assignedStores = [...new Set(assignments.map((item) => item.store).filter(Boolean))];
     if (!store) return res.json({ success: true, stores: assignments, data: [] });
-    if (!assignedStores.includes(store)) return res.status(403).json({ success: false, message: "Store is not assigned to this user" });
-    const filter = { colid, store };
+    if (!assignedStores.some(name => indentEmail(name).test(store))) return res.status(403).json({ success: false, message: "Store is not assigned to this user" });
+    const filter = { colid, store: indentEmail(store), status: /submitted|pending|approved/i };
     if (req.query.fromdate || req.query.todate) {
       filter.createdAt = {};
       if (req.query.fromdate) filter.createdAt.$gte = new Date(req.query.fromdate);
@@ -729,14 +726,83 @@ exports.getAssignedStoreIndents = async (req, res) => {
         filter.createdAt.$lte = toDate;
       }
     }
-    ["department", "category", "categorytype", "item", "submittedby", "stage", "status"].forEach((field) => {
-      if (req.query[field]) filter[field] = new RegExp(clean(req.query[field]), "i");
+    ["department", "category", "categorytype", "item", "submittedby", "stage"].forEach((field) => {
+      if (req.query[field]) filter[field] = new RegExp(indentEmail(clean(req.query[field])).source.slice(1, -1), "i");
     });
     const data = await PurchaseIndent.find(filter).sort({ createdAt: -1 }).lean();
     res.json({ success: true, stores: assignments, data });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    res.status(err.status || 400).json({ success: false, message: err.message });
   }
+};
+
+exports.processAssignedIndent = async (req, res) => {
+  try {
+    const { colid, email, stores } = await indentAccess(req);
+    const action = req.body.action;
+    if (!['issue', 'shortage', 'transfer'].includes(action)) throw Error('Invalid action');
+    const Store = require('../Models/storemasterds2');
+    const Stock = require('../Models/storeitemds2');
+    const prService = require('../services/purchase2PrCreation');
+    const session = await require('mongoose').startSession();
+    let message;
+    try {
+      await session.withTransaction(async () => {
+        const row = await PurchaseIndent.findOne({ _id: req.body.id, colid }).session(session);
+        if (!row || !stores.some(store => indentEmail(store.store).test(row.store))) throw Error('Indent is not assigned to your store');
+        if (row.status !== 'Approved') throw Error('Only approved indents can be processed');
+        const remaining = row.quantity - (row.issuedquantity || 0);
+        if (!(remaining > 0)) throw Error('No outstanding quantity');
+        const itPattern = /\bit\b|information technology/i;
+        const routeIT = /\bit\b|information technology|computer|network|software/i.test(row.category) && !itPattern.test(row.store);
+        if (action === 'transfer') {
+          if (!routeIT || row.shortageprnumber) throw Error('This indent cannot be routed to IT');
+          const targets = await PurchaseNewStore.find({ colid, status: /^Active$/i, store: itPattern }).limit(2).session(session).lean();
+          if (targets.length !== 1) throw Error('Configure exactly one active IT store');
+          const target = targets[0];
+          await PurchaseIndent.create([{ colid, store: target.store, storedescription: target.description, department: row.department, category: row.category, categorytype: row.categorytype, item: row.item, description: row.description, quantity: remaining, approxprice: row.approxprice, approximatevalue: row.approximatevalue, approximatetotalcost: remaining * row.approximatevalue, submittedby: row.submittedby, submittedbyname: row.submittedbyname, status: 'Approved', stage: 'Approved', approvedat: new Date(), transferredfrom: String(row._id) }], { session });
+          row.status = 'Transferred to IT';
+          message = 'Outstanding quantity transferred to IT';
+        } else {
+          if (routeIT) throw Error('Route this IT indent to the IT store first');
+          const mappings = await Store.find({ colid, storename: indentEmail(row.store) }).limit(2).session(session).lean();
+          if (mappings.length !== 1) throw Error('Configure a matching, unique store in Purchase 2 Store Master');
+          const store = mappings[0];
+          const storeid = String(store._id);
+          const stock = await Stock.find({ colid, itemname: indentEmail(row.item), category: indentEmail(row.category), quantity: { $gt: 0 }, $or: [{ storeid }, { storeid: { $in: ['', null] }, storename: indentEmail(store.storename) }] }).session(session).lean();
+          if (new Set(stock.map(item => item.itemcode)).size > 1) throw Error('Multiple stock item codes match this indent');
+          const available = stock.reduce((total, item) => total + item.quantity, 0);
+          if (action === 'issue') {
+            const quantity = Math.min(remaining, available);
+            if (!quantity) throw Error('No stock available');
+            let outstanding = quantity;
+            for (const item of stock) {
+              const take = Math.min(outstanding, item.quantity);
+              if (!take) break;
+              const result = await Stock.updateOne({ _id: item._id, colid, quantity: { $gte: take } }, { $inc: { quantity: -take } }, { session });
+              if (!result.modifiedCount) throw Error('Stock changed. Try again.');
+              outstanding -= take;
+            }
+            row.issuedquantity = (row.issuedquantity || 0) + quantity;
+            message = `Issued ${quantity}; ${remaining - quantity} outstanding`;
+          } else {
+            if (row.shortageprnumber) throw Error('Shortage PR already created');
+            const quantity = Math.max(0, remaining - available);
+            if (!quantity) throw Error('No shortage');
+            const price = row.approximatevalue || row.approxprice || 0;
+            const sourceindentid = String(row._id);
+            const pr = await prService.save(require('../Models/storeprrequestds2'), 'storeprrequestds2', { colid, name: email, user: email, storeid, storename: store.storename, departmentname: row.department, priority: row.priority || 'Normal', status: 'Submitted', sourceindentid, totalamount: quantity * price }, null, session);
+            const prnumber = pr.prnumber;
+            await require('../Models/storeprrequestitemsds2').create([{ colid, name: email, user: email, prnumber, prrequestid: String(pr._id), sourceindentid, itemname: row.item, itemcode: stock[0]?.itemcode, category: row.category, unit: stock[0]?.unit, quantity, estimatedprice: price, estimatedtotal: quantity * price }], { session });
+            row.shortageprnumber = prnumber;
+            message = `Shortage PR ${prnumber} created for ${quantity}`;
+          }
+        }
+        await row.save({ session });
+      });
+    } finally { await session.endSession(); }
+    res.json({ message });
+  } catch (err) { res.status(err.status || 400).json({ message: err.message }); }
 };
 
 exports.getBudgetSummary = async (req, res) => {
@@ -937,15 +1003,34 @@ exports.getIndents = async (req, res) => {
   }
 };
 
+const indentEmail = email => new RegExp('^' + email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i');
+const noIndentStore = "No store assigned to your account. Please contact the administrator.";
+async function indentAccess(req) {
+  let identity;
+  try { identity = require('jsonwebtoken').verify(clean(req.get('authorization')).replace(/^Bearer\s+/i, ''), process.env.JWT_SECRET); }
+  catch { throw Object.assign(new Error('Sign in to create indents.'), { status: 401 }); }
+  const colid = Number(identity.colid), email = clean(identity.user);
+  if (!email || !Number.isFinite(colid) || colid <= 0) throw Object.assign(new Error('Invalid session'), { status: 401 });
+  const names = await PurchaseNewStoreUser.distinct('store', { colid, useremail: indentEmail(email), status: /^Active$/i });
+  const stores = names.length ? await PurchaseNewStore.find({ colid, store: { $in: names.filter(name => typeof name === 'string' && name.trim()).map(name => indentEmail(name.trim())) }, status: /^Active$/i }).select('store description').sort({ store: 1 }).lean() : [];
+  return { colid, email, stores: [...new Map(stores.map(store => [store.store, store])).values()] };
+}
+exports.getIndentStores = async (req, res) => {
+  try { res.json({ data: (await indentAccess(req)).stores }); }
+  catch (err) { res.status(err.status || 400).json({ message: err.message }); }
+};
 exports.saveIndent = async (req, res) => {
   try {
+    const { colid, email, stores } = await indentAccess(req);
+    const store = stores.find(row => row.store === clean(req.body.store));
+    if (!store) return res.status(403).json({ message: stores.length ? 'Store is not assigned to your account.' : noIndentStore });
     const quantity = num(req.body.quantity, 0);
     const approximatevalue = num(req.body.approximatevalue || req.body.approxprice, 0);
     const payload = {
-      colid: num(req.body.colid),
+      colid,
       department: clean(req.body.department),
-      store: clean(req.body.store),
-      storedescription: clean(req.body.storedescription),
+      store: store.store,
+      storedescription: store.description || '',
       category: clean(req.body.category),
       categorytype: clean(req.body.categorytype),
       item: clean(req.body.item),
@@ -954,16 +1039,17 @@ exports.saveIndent = async (req, res) => {
       approxprice: approximatevalue,
       approximatevalue,
       approximatetotalcost: num(req.body.approximatetotalcost, quantity * approximatevalue),
-      submittedby: clean(req.body.useremail || req.body.user),
+      submittedby: email,
       submittedbyname: clean(req.body.username),
       submittedrole: clean(req.body.role)
     };
     if (!payload.department || !payload.category || !payload.item) return res.status(400).json({ success: false, message: "Department, category and item are required" });
     let data;
     if (req.body.id) {
-      const existing = await PurchaseIndent.findById(req.body.id);
+      const existing = await PurchaseIndent.findOne({ _id: req.body.id, colid, submittedby: indentEmail(email) });
       if (!existing) return res.status(404).json({ success: false, message: "Indent not found" });
       if (existing.status !== "Draft") return res.status(400).json({ success: false, message: "Only draft indents can be edited" });
+      if (!stores.some(row => row.store === existing.store)) return res.status(403).json({ message: 'The draft store is not assigned to your account.' });
       const olddata = existing.toObject();
       Object.assign(existing, payload);
       data = await existing.save();
@@ -974,7 +1060,7 @@ exports.saveIndent = async (req, res) => {
     }
     res.json({ success: true, data });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    res.status(err.status || 400).json({ success: false, message: err.message });
   }
 };
 
@@ -993,11 +1079,13 @@ exports.deleteIndent = async (req, res) => {
 
 exports.submitIndents = async (req, res) => {
   try {
+    const { colid, email, stores } = await indentAccess(req);
     const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
-    const indents = await PurchaseIndent.find({ _id: { $in: ids }, colid: num(req.body.colid), status: "Draft" });
+    const indents = await PurchaseIndent.find({ _id: { $in: ids }, colid, submittedby: indentEmail(email), status: "Draft" });
+    if (!stores.length || indents.length !== new Set(ids).size || indents.some(item => !stores.some(row => row.store === item.store))) return res.status(403).json({ message: stores.length ? 'Select only your drafts for assigned stores.' : noIndentStore });
     for (const item of indents) {
       const olddata = item.toObject();
-      item.submittedby = req.body.useremail || req.body.user || item.submittedby;
+      item.submittedby = email;
       item.submittedbyname = req.body.username || item.submittedbyname;
       item.submittedrole = req.body.role || item.submittedrole;
       await nextDepartmentState(item);
@@ -1007,7 +1095,7 @@ exports.submitIndents = async (req, res) => {
     }
     res.json({ success: true, updated: indents.length });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    res.status(err.status || 400).json({ success: false, message: err.message });
   }
 };
 
