@@ -20,6 +20,11 @@ type: String
 accgroup: {
 type: String
 },
+costcenter: {
+type: String,
+trim: true
+},
+institution: {type:String,trim:true},
 account: {
 type: String
 },
@@ -70,6 +75,7 @@ status1: {
     }
 })
 //
+mjournal2schema.index({colid:1,costcenter:1,year:1,activitydate:1});
 const mjournal2=mongoose.model('mjournal2',mjournal2schema);
 
 module.exports=mjournal2;

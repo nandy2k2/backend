@@ -302,7 +302,12 @@ exports.dscreatemjournal2 = async (req, res) => {
       });
     }
 
+    const center = typeof req.body.costcenter === "string" ? req.body.costcenter.trim() : "";
+    const mapping = center && await require('../Models/financecostcenterds').findOne({colid,costcenter:center}).lean();
+    if(center&&!mapping)return res.status(400).json({message:"Select a valid cost center"});
     const newMjournal2 = new Mjournal2({
+      institution: mapping?.institution || "",
+      costcenter: typeof req.body.costcenter === "string" ? req.body.costcenter.trim() : "",
       name,
       user,
       colid,
@@ -372,7 +377,8 @@ exports.dsgetmjournal2 = async (req, res) => {
 exports.dsupdatemjournal2 = async (req, res) => {
   try {
     const { id, colid } = req.query;
-    const updateData = req.body;
+    const updateData = {...req.body};
+    delete updateData.institution;
     if (!id || !colid) {
       return res.status(400).json({
         success: false,
@@ -380,6 +386,12 @@ exports.dsupdatemjournal2 = async (req, res) => {
       });
     }
 
+    if(typeof updateData.costcenter==="string"){
+      updateData.costcenter=updateData.costcenter.trim();
+      const center=updateData.costcenter&&await require('../Models/financecostcenterds').findOne({colid,costcenter:updateData.costcenter}).lean();
+      if(updateData.costcenter&&!center)return res.status(400).json({message:"Select a valid cost center"});
+      updateData.institution=center?.institution||"";
+    }
     const updated = await Mjournal2.findOneAndUpdate(
       { _id: id, colid: parseInt(colid) },
       updateData,

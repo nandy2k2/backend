@@ -5579,6 +5579,7 @@ app.get("/api/v2/dsgetaccountsbygroup", accountdsctlr.dsgetaccountsbygroup); // 
 app.get("/api/v2/dsgetaccountgroupswithtypes", accountdsctlr.dsgetaccountgroupswithtypes); 
 
 app.get("/api/v2/finance-new/voucher/options", financenewctlrds.voucherOptions);
+app.post("/api/v2/finance-new/cost-center-report", financenewctlrds.costReport);
 app.post("/api/v2/finance-new/voucher/load", financenewctlrds.voucherLoad);
 app.get("/api/v2/finance-new/:kind/options", financenewctlrds.options);
 app.post("/api/v2/finance-new/:kind/list", financenewctlrds.list);

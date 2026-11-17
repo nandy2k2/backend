@@ -4,8 +4,11 @@ const Mjournal2 = require("../Models/mjournal2");
 const Ledgerstud = require("../Models/ledgerstud");
 const ChequeFeesPayment = require("../Models/chequefeespaymentds");
 const Institution = require("../Models/insdetails");
+const CostCenter = require("../Models/financecostcenterds");
+const AcademicInstitution = require("../Models/academicmasterinstitutionds");
 
 const models = {
+  costcenters: CostCenter,
   accountgroups: AccountGroup,
   accounts: Accountds,
   journals: Mjournal2
@@ -131,7 +134,13 @@ exports.options = async (req, res) => {
     const colid = number(req.query.colid, undefined);
     if (!cfg) return res.status(404).json({ success: false, message: "Invalid finance master" });
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
-    res.json({ success: true, ...(await getOptionsFor(req.params.kind, colid)) });
+    const options = await getOptionsFor(req.params.kind, colid);
+    if(req.params.kind==="costcenters") {
+      const names=await AcademicInstitution.distinct("institution",{colid});
+      options.values.institution=[...new Set([...names,...options.values.institution])].sort();
+    }
+    if(req.params.kind==="journals") options.costcenters=await CostCenter.find({colid}).select("costcenter institution").sort({costcenter:1}).lean();
+    res.json({ success: true, ...options });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -153,6 +162,62 @@ exports.list = async (req, res) => {
   }
 };
 
+const costReportFields = ["account","accgroup","acctype","type","transaction","transactionref","subledger","cogs","student","regno","empid","status1","comments","name","user","costcenter","institution"];
+exports.costReport = async (req,res) => {
+  try {
+    const colid=Number(req.body.colid);
+    if(!Number.isSafeInteger(colid)||colid<=0) return res.status(400).json({message:"Institution is required"});
+    if(req.body.options) {
+      const fields=["year","institution","costcenter",...costReportFields.slice(0,8)];
+      const entries=await Promise.all(fields.map(async field=>[field,(await Mjournal2.distinct(field,{colid})).filter(Boolean).sort()]));
+      const values=Object.fromEntries(entries);
+      values.institution=[...new Set([...values.institution,...await CostCenter.distinct("institution",{colid})].filter(Boolean))].sort();
+      const centers=await CostCenter.distinct("costcenter",{colid});
+      const posted=await Mjournal2.distinct("costcenter",{colid});
+      const allCenters=[...new Set([...centers,...posted].filter(Boolean))].sort();
+      values.costcenter=allCenters;
+      return res.json({values,centers:allCenters});
+    }
+    const {costcenter,year,from,to,profitLoss,balanceSheet}=req.body;
+    if(typeof year!=="string"||!year.trim()||(!profitLoss&&!balanceSheet&&(typeof costcenter!=="string"||!costcenter.trim()))) return res.status(400).json({message:"Select the required cost center and year"});
+    const query={colid,year:year.trim()};
+    if(typeof costcenter==="string"&&costcenter.trim())query.costcenter=costcenter.trim();
+    if(from||to){
+      const valid=value=>typeof value==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&dateValue(value)?.toISOString().slice(0,10)===value;
+      if((from&&!valid(from))||(to&&!valid(to))||(from&&to&&from>to))return res.status(400).json({message:"Enter a valid date range"});
+      query.activitydate={};
+      if(from)query.activitydate.$gte=new Date(from);
+      if(to)query.activitydate.$lt=new Date(new Date(to).getTime()+86400000);
+    }
+    if(profitLoss)query.acctype=/^(income|revenue|expense|expenses|expenditure)$/i;
+    const filters=Array.isArray(req.body.filters)?req.body.filters:[];
+    query.$and=[];
+    for(const f of filters){
+      if(!costReportFields.includes(f?.field)||typeof f.value!=="string"||!f.value.trim())continue;
+      const value=f.value.trim();
+      if(f.field==="institution"){
+        const centers=await CostCenter.distinct("costcenter",{colid,institution:value});
+        query.$and.push({$or:[{institution:value},{institution:{$in:[null,""]},costcenter:{$in:centers}}]});
+      }else query.$and.push({[f.field]:f.field==="costcenter"?value:new RegExp(escapeRegex(value),"i")});
+    }
+    if(!query.$and.length)delete query.$and;
+    const data=await Mjournal2.find(query).sort({activitydate:1,_id:1}).lean();
+    const missing=[...new Set(data.filter(row=>!row.institution&&row.costcenter).map(row=>row.costcenter))];
+    if(missing.length){
+      const mappings=new Map((await CostCenter.find({colid,costcenter:{$in:missing}}).lean()).map(row=>[row.costcenter,row.institution]));
+      for(const row of data)if(!row.institution&&mappings.has(row.costcenter))row.institution=mappings.get(row.costcenter);
+    }
+    res.json({data});
+  }catch(error){res.status(500).json({message:error.message});}
+};
+
+async function assignJournalInstitution(payload){
+  if(payload.costcenter===undefined){delete payload.institution;return;}
+  const center=payload.costcenter&&await CostCenter.findOne({colid:payload.colid,costcenter:payload.costcenter}).lean();
+  if(payload.costcenter&&!center)throw Error("Select a valid cost center");
+  payload.institution=center?.institution||"";
+}
+
 exports.save = async (req, res) => {
   try {
     const cfg = modelConfig(req.params.kind);
@@ -161,6 +226,11 @@ exports.save = async (req, res) => {
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     const payload = { ...buildPayload(req.params.kind, req.body, { user: req.body.currentuser, name: req.body.currentname }), colid };
     const id = req.body.id || req.body._id;
+    if(req.params.kind==="journals") await assignJournalInstitution(payload);
+    if(req.params.kind==="costcenters"&&id){
+      const existing=await CostCenter.findOne({_id:id,colid}).lean();
+      if(existing&&existing.costcenter!==payload.costcenter&&await Mjournal2.exists({colid,costcenter:existing.costcenter}))return res.status(409).json({message:"A cost center with journal entries cannot be renamed"});
+    }
     const data = id
       ? await cfg.Model.findOneAndUpdate({ _id: id, colid }, payload, { new: true, runValidators: true })
       : await cfg.Model.create(payload);
@@ -207,6 +277,14 @@ exports.bulk = async (req, res) => {
     if (colid === undefined) return res.status(400).json({ success: false, message: "colid is required" });
     if (!rows.length) return res.status(400).json({ success: false, message: "No rows found" });
     const docs = rows.map((row) => ({ ...buildPayload(req.params.kind, row, { user: req.body.user, name: req.body.name }), colid }));
+    if(req.params.kind==="journals"){
+      const mappings=await CostCenter.find({colid,costcenter:{$in:[...new Set(docs.map(row=>row.costcenter).filter(Boolean))]}}).lean();
+      const institutions=new Map(mappings.map(row=>[row.costcenter,row.institution]));
+      for(const row of docs){
+        if(row.costcenter&&!institutions.has(row.costcenter))throw Error("Select a valid cost center: "+row.costcenter);
+        row.institution=institutions.get(row.costcenter)||"";
+      }
+    }
     const data = await cfg.Model.insertMany(docs, { ordered: false });
     res.json({ success: true, inserted: data.length });
   } catch (error) {
