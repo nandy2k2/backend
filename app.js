@@ -733,6 +733,9 @@ app.post('/api/v2/recruitment/offer-templates-delete', recruitmentController.del
 app.get('/api/v2/recruitment/final-candidates', recruitmentController.getFinalCandidates);
 app.post('/api/v2/recruitment/generate-offer-letter', recruitmentController.generateOfferLetter);
 app.use('/api/v2/recruitment-confirmation', require('./controllers/recruitmentConfirmation'));
+app.use('/api/v2/visiting-faculty', require('./controllers/visitingFaculty'));
+app.use('/api/v2/temporary-access', require('./controllers/temporaryAccess'));
+app.use('/api/v2/faculty-feedback', require('./controllers/facultyFeedback'));
 app.get('/api/v2/recruitment/onboarding-steps', recruitmentController.getOnboardingSteps);
 app.post('/api/v2/recruitment/onboarding-steps', recruitmentController.saveOnboardingStep);
 app.post('/api/v2/recruitment/onboarding-steps-delete', recruitmentController.deleteOnboardingStep);
@@ -12114,6 +12117,7 @@ app.get('/api/v2/getprojectssecond',  aimatcontroller.getprojectssecond);
 
 
 app.get('/api/v2/getprojectsbyfac',  aimatcontroller.getprojectsbyfac);
+app.get('/api/v2/faculty-dashboard/research',require('./controllers/facultyResearchDashboard').summary);
 app.get('/api/v2/projectsbyprog',  aimatcontroller.projectsbyprog);
 app.get('/api/v2/updateprojectsbyfac',  aimatcontroller.updateprojectsbyfac);
 app.get('/api/v2/updateprojectscomments',  aimatcontroller.updateprojectscomments);
