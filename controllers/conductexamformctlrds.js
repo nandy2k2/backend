@@ -445,6 +445,22 @@ const findAtktFailedMarks = async (params) => {
 
 const atktModeFrom = (source = {}) => /^ATKT$/i.test(clean(source.mode || source.examtype));
 
+async function paidExamSubmission({colid,regno,academicyear,examcode}) {
+  const submissions=await ConductExamFormSubmission.find({colid,regno,academicyear,examcode}).select('_id').lean();
+  if(!submissions.length)return false;
+  const prefixes=submissions.map(row=>new RegExp('^'+String(row._id)+'-'));
+  const fees=await Ledgerstud.find({colid,regno,academicyear,feeid:{$in:prefixes},feecategory:/^exam fee$/i}).select('feeid paid balance').lean();
+  const groups=new Map();
+  for(const fee of fees){
+    const id=String(fee.feeid).split('-')[0];
+    const group=groups.get(id)||{paid:false,settled:true};
+    group.paid ||= Number(fee.paid)>0;
+    group.settled &&= fee.balance!=null && Number(fee.balance)<=0;
+    groups.set(id,group);
+  }
+  return [...groups.values()].some(row=>row.paid&&row.settled);
+}
+
 exports.studentContext = async (req, res) => {
   try {
     const colid = num(req.query.colid);
@@ -563,7 +579,8 @@ exports.studentContext = async (req, res) => {
     }
     const examFineRules = req.query.examFine === 'Yes' ? await ExamFine.find({ colid, academicyear, examcode, program: clean(student.program), programcode: clean(student.programcode) }).lean() : [];
     const examScholarship = req.query.examFine === 'Yes' ? !!await ExamScholarship.findOne({ colid, academicyear, regulation, examcode, programcode: clean(student.programcode), semester, regno, status: { $not: /^Inactive$/i } }).lean() : false;
-    res.json({ data: { student, exam, forms, regularCourses, supplementaryCourses, atktCourses: atktMode ? supplementaryCourses : [], examFeeLedger, maxFee, atktDiagnostics, formOverview, examFineRules, fineDate: fineToday(), examScholarship } });
+    const paidSubmissionLocked=req.query.examFine==='Yes'&&await paidExamSubmission({colid,regno,academicyear,examcode:clean(req.query.examcode)});
+    res.json({ data: { student, exam, forms, regularCourses, supplementaryCourses, atktCourses: atktMode ? supplementaryCourses : [], examFeeLedger, maxFee, atktDiagnostics, formOverview, examFineRules, fineDate: fineToday(), examScholarship, paidSubmissionLocked } });
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to load student exam form context" });
   }
@@ -867,6 +884,9 @@ exports.submitStudentExamForm = async (req, res) => {
     if (!student) return res.status(404).json({ message: "Student not found" });
     const form = await ConductExamForm.findOne({ colid, formid }).lean();
     if (!form) return res.status(404).json({ message: "Exam form not found" });
+    if(req.programwiseExamFine&&await paidExamSubmission({colid,regno,academicyear:clean(req.body.academicyear)||form.academicyear,examcode:clean(req.body.examcode)})){
+      return res.status(409).json({message:"This exam form was already submitted and paid. It cannot be submitted again.",paidSubmissionLocked:true});
+    }
 
     const mandatoryErrors = [];
     (form.tabs || []).forEach((tab) => {

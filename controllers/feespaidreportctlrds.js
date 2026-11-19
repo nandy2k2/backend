@@ -1,6 +1,7 @@
 const Ledgerstud = require("../Models/ledgerstud");
 const User = require("../Models/user");
 const StudentOnlinePayment = require("../Models/studentonlinepaymentds");
+const examFeeScope = {paid:{$gt:0},$or:[{feecategory:/^(practical\s+)?exam\s+fees?$/i},{feegroup:/^(practical\s+)?exam\s+fees?$/i}]};
 
 const filterFields = [
   "academicyear",
@@ -117,11 +118,21 @@ exports.getFeesPaidReportOptions = async (req, res) => {
     if (from) paiddate.$gte = from;
     if (to) paiddate.$lte = to;
     if (Object.keys(paiddate).length) baseQuery.paiddate = paiddate;
+    if(req.examFeesOnly){
+      Object.assign(baseQuery,examFeeScope);
+      baseQuery.paiddate={...paiddate,$exists:true,$ne:null};
+      if(typeof req.query.academicyear==="string"&&req.query.academicyear.trim())baseQuery.academicyear=req.query.academicyear.trim();
+    }
 
     const optionPairs = await Promise.all(
       filterFields.map(async (field) => {
-        const values = await Ledgerstud.distinct(field, baseQuery);
-        return [field, values.map(text).filter(Boolean).sort((a, b) => a.localeCompare(b))];
+        const values = req.examFeesOnly && field === "academicyear"
+          ? (await Promise.all([
+              require("../Models/conductexamds").distinct("academicyear", { colid }),
+              Ledgerstud.distinct("academicyear", { colid, ...examFeeScope })
+            ])).flat()
+          : await Ledgerstud.distinct(field, baseQuery);
+        return [field, [...new Set(values.map(text).filter(Boolean))].sort((a, b) => a.localeCompare(b))];
       })
     );
 
@@ -139,6 +150,10 @@ exports.getFeesPaidReport = async (req, res) => {
   try {
     const { query, error } = buildQuery(req.query);
     if (error) return res.status(400).json({ success: false, message: error });
+    if(req.examFeesOnly){
+      if(typeof req.query.academicyear!=="string"||!req.query.academicyear.trim()||req.query.academicyear.includes(","))return res.status(400).json({message:"Select one academic year"});
+      Object.assign(query,examFeeScope);
+    }
 
     const data = await Ledgerstud.find(query)
       .select("academicyear admissionyear regulation program programcode major minor semester section student name regno user feegroup feecategory feeitem feebook cashbook status paymode paydetails type installment paiddate amount paid concession balance comments colid")
@@ -208,3 +223,6 @@ exports.getFeesPaidReport = async (req, res) => {
     res.status(500).json({ success: false, message: error.message || "Unable to load fees paid report" });
   }
 };
+
+exports.examFeesOptions=(req,res)=>{req.examFeesOnly=true;return exports.getFeesPaidReportOptions(req,res);};
+exports.examFeesReport=(req,res)=>{req.examFeesOnly=true;return exports.getFeesPaidReport(req,res);};

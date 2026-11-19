@@ -7357,6 +7357,8 @@ app.get("/api/v2/feespivot", feespivotctlrds.getFeesPivot);
 app.get("/api/v2/feespivot2", feespivotctlrds.getFeesPivot2);
 app.get("/api/v2/feespaidreport/options", feespaidreportctlrds.getFeesPaidReportOptions);
 app.get("/api/v2/feespaidreport", feespaidreportctlrds.getFeesPaidReport);
+app.get("/api/v2/exam-fees-report/options", feespaidreportctlrds.examFeesOptions);
+app.get("/api/v2/exam-fees-report", feespaidreportctlrds.examFeesReport);
 app.get("/api/v2/repair-maintenance/match-regno-options", repairmaintenancectlrds.options);
 app.post("/api/v2/repair-maintenance/match-regno-list", repairmaintenancectlrds.listLedgerMatches);
 app.post("/api/v2/repair-maintenance/match-regno-update", repairmaintenancectlrds.updateLedgerRegno);
