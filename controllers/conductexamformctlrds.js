@@ -710,6 +710,11 @@ exports.studentExamFormReport = async (req, res) => {
     if (!filter.academicyear || !filter.examcode || !filter.programcode) {
       return res.status(400).json({ message: "Academic year, exam code and program code are required" });
     }
+    const submissions=await ConductExamFormSubmission.find({
+      colid,academicyear:filter.academicyear,examcode:filter.examcode,programcode:filter.programcode,
+      ...(filter.semester?{semester:filter.semester}:{}),...(filter.regno?{regno:filter.regno}:{})
+    }).select('_id regno').lean();
+    const submissionIds=regno=>submissions.filter(row=>clean(row.regno)===regno).map(row=>String(row._id));
     if(!atktModeFrom(req.query) && req.query.dynamicfilters){
       const rows=JSON.parse(req.query.dynamicfilters);
       if(!Array.isArray(rows))throw Error('Invalid dynamic filters');
@@ -786,6 +791,7 @@ exports.studentExamFormReport = async (req, res) => {
             section: clean(user.section)
           },
           courses,
+          submissionIds:submissionIds(regno),
           examFeeLedger: ledgerMap.get(regno) || []
         };
       });
@@ -852,6 +858,7 @@ exports.studentExamFormReport = async (req, res) => {
           section: clean(user.section) || clean(first.section)
         },
         courses,
+        submissionIds:submissionIds(regno),
         examFeeLedger: ledgerMap.get(regno) || []
       };
     });
@@ -1110,6 +1117,7 @@ exports.submitStudentExamForm = async (req, res) => {
       }
       examRollCreated += 1;
     }
+    await require('../services/examRollPayments').reconcile({colid,regno,academicyear,examcode});
     res.json({ data: submission, ledgerCreated, examRollCreated, barred: barredRows, scholarship: scholarshipRow, scholarshipApplied: !!scholarshipRow, deficiencies, examFeeLedger, rawtotalfee, maxFee, totalfee, basefee, fineamount, fine });
   } catch (err) {
     res.status(500).json({ message: err.message || "Unable to submit exam form" });

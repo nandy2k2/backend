@@ -22,7 +22,7 @@ const wrap = (handler, path = '/crm2-campus-queue-management') => async (req, re
     if (!Number.isFinite(colid) || colid <= 0 || !email) return res.status(401).json({ message: 'Sign in to continue' });
     const actor = await User.findOne({ colid, email: new RegExp(`^${escape(email)}$`, 'i') }).select('role').lean();
     const role = text(actor?.role);
-    if (!role || /^(Student|Agent|Publisher)$/i.test(role) || path && !/^(All|crmadmin)$/i.test(role) && !await Menu.exists({ colid, role: actor.role, path, access: 'Allow' })) return res.status(403).json({ message: 'Campus queue access is not available for this role' });
+    if (!role || /^(Student|Agent|Publisher)$/i.test(role) || path && !/^(All|crmadmin)$/i.test(role) && !(await Menu.exists({ colid, role: actor.role, path, access: 'Allow' })||await require('../services/additionalAccess').hasPage({...actor,colid},path))) return res.status(403).json({ message: 'Campus queue access is not available for this role' });
     await handler(req, res, { colid, email, userid: actor._id });
   } catch (err) {
     res.status(err.code === 11000 ? 409 : 400).json({ message: err.code === 11000 ? (req.path === '/levels' ? 'This level already exists for the selected program' : 'This counter, booking, or token already exists for the selection') : err.message });

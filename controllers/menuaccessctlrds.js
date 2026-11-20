@@ -16,7 +16,22 @@ exports.getMenuAccessRules = async (req, res) => {
       filter.colid = Number(colid);
     }
 
-    const data = await menuaccessds.find(filter).sort({ menugroup: 1, title: 1, role: 1 });
+    let access;
+    if(req.query.effective==='1'){
+      access=await require('../services/additionalAccess').grantsForRequest(req);
+      if(!access||access.colid!==Number(colid))return res.status(401).json({message:'Sign in to load effective access'});
+      if(!/^(all|admin)$/i.test(access.actor.role)){
+        const escape=value=>String(value).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+        filter.role={$in:[new RegExp('^'+escape(access.actor.role)+'$','i'),/^all$/i]};
+      }
+    }
+    let data = await menuaccessds.find(filter).select('colid role menugroup groupname title path access order').sort({ menugroup: 1, title: 1, role: 1 }).lean();
+    if(access){
+      const pages=access.rows.flatMap(row=>row.pages.map(page=>({colid:access.colid,role:access.actor.role,menugroup:row.group,title:page.title,path:page.path,access:'Allow'})));
+      const paths=new Set(pages.map(page=>page.path));
+      data=data.filter(row=>!(paths.has(row.path)&&[String(access.actor.role).toLowerCase(),'all'].includes(String(row.role).toLowerCase())));
+      data.push(...pages);
+    }
     res.json({ status: 'Success', data });
   } catch (err) {
     res.status(500).json({ status: 'Failed', message: err.message });

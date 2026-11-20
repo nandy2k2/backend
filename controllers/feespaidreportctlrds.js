@@ -156,7 +156,7 @@ exports.getFeesPaidReport = async (req, res) => {
     }
 
     const data = await Ledgerstud.find(query)
-      .select("academicyear admissionyear regulation program programcode major minor semester section student name regno user feegroup feecategory feeitem feebook cashbook status paymode paydetails type installment paiddate amount paid concession balance comments colid")
+      .select("feeid academicyear admissionyear regulation program programcode major minor semester section student name regno user feegroup feecategory feeitem feebook cashbook status paymode paydetails type installment paiddate amount paid concession balance comments colid")
       .sort({ programcode: 1, student: 1, paiddate: -1, feegroup: 1, feeitem: 1 })
       .limit(10000)
       .lean();

@@ -194,6 +194,16 @@ ledgerstudschema.index({ colid: 1, classdate: 1 });
 ledgerstudschema.index({ colid: 1, regno: 1 });
 
 
+ledgerstudschema.post('save',async function(doc){
+  try{await require('../services/examRollPayments').ledgerChanged(doc);}
+  catch(error){console.error('Examroll payment sync failed; reconciliation required',doc._id,error.message);}
+});
+ledgerstudschema.post('findOneAndUpdate',async function(doc){
+  if(!doc)return;
+  const latest=await this.model.findById(doc._id).lean();
+  try{await require('../services/examRollPayments').ledgerChanged(latest);}
+  catch(error){console.error('Examroll payment sync failed; reconciliation required',doc._id,error.message);}
+});
 const Ledgerstud=mongoose.model('Ledgerstud',ledgerstudschema);
 
 module.exports=Ledgerstud;

@@ -30,7 +30,7 @@ const wrap=(page,fn)=>async(req,res)=>{
   try{
     if(!identity.user||!Number(identity.colid))return res.sendStatus(401);
     const actor=await User.findOne({colid:Number(identity.colid),email:exact(identity.user)}).select('colid role name email').lean();
-    if(!actor||/^student$/i.test(actor.role)||!(/^all$/i.test(actor.role)||await Menu.exists({colid:actor.colid,role:actor.role,path:paths[page],access:'Allow'})))return res.status(403).json({message:'Page access is required'});
+    if(!actor||/^student$/i.test(actor.role)||!(/^all$/i.test(actor.role)||(await Menu.exists({colid:actor.colid,role:actor.role,path:paths[page],access:'Allow'})||await require('../services/additionalAccess').hasPage(actor,paths[page]))))return res.status(403).json({message:'Page access is required'});
     await fn(req,res,actor);
   }catch(e){res.status(e.code===11000?409:400).json({message:e.code===11000?'This user is already appointed for this requirement':e.message});}
 };

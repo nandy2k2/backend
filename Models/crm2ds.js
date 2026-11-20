@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 const User = require("./user");
 
 const masters = {
-  source: "Source", pipeline: "Pipeline", type: "Type", category: "Category",
+  source: "Source", utmsource:"UTM Source", pipeline: "Pipeline", type: "Type", category: "Category",
   leadrating: "Lead rating", leadgroup: "Lead group", case: "Case", distributiontype: "Distribution type",
   mediumofinstruction: "Medium of Instruction", quota: "Quota", document: "Document",
   admissionoffice: "Admission office", interactionmode: "Interaction mode", agent: "Agent", publisher: "Publisher"
@@ -36,6 +36,7 @@ Object.assign(definitions, {
 });
 definitions.crm2profileversion = { type: Number, default: 2 };
 definitions.leadgroup = { type: String };
+definitions.utmsource = {type:String,trim:true};
 const educationFields = [];
 for (const level of ["12th", "10th"]) for (const suffix of ["institution", "passingyear", "grade", "marks", "board"]) {
   const field = `${level}${suffix}`; educationFields.push(field); definitions[field] = { type: suffix === "marks" ? Number : String };

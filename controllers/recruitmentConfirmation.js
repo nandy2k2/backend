@@ -28,7 +28,7 @@ const wrap = fn => async (req, res) => {
     const colid = Number(identity.colid);
     if (!(colid > 0) || !text(identity.user)) return res.sendStatus(401);
     const actor = await User.findOne({ colid, email: exact(identity.user) }).select('role email name').lean();
-    if (!actor || /^(student|agent|publisher|telecaller)$/i.test(actor.role) || !/^All$/i.test(actor.role) && !await Menu.exists({ colid, role: actor.role, path: '/recruitment-confirmation-wizard', access: 'Allow' })) return res.sendStatus(403);
+    if (!actor || /^(student|agent|publisher|telecaller)$/i.test(actor.role) || !/^All$/i.test(actor.role) && !(await Menu.exists({ colid, role: actor.role, path: '/recruitment-confirmation-wizard', access: 'Allow' })||await require('../services/additionalAccess').hasPage({...actor,colid},'/recruitment-confirmation-wizard'))) return res.sendStatus(403);
     await fn(req, res, colid, actor);
   } catch (err) { res.status(err.status || (err.code === 11000 ? 409 : 400)).json({ message: err.code === 11000 ? 'An account with that email already exists. Change the account email or cancel.' : err.message }); }
 };

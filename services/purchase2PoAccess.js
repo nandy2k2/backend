@@ -7,7 +7,7 @@ async function staff(req) {
   const identity = jwt.verify(String(req.get('authorization') || '').replace(/^Bearer\s+/i, ''), process.env.JWT_SECRET);
   const person = await User.findOne({ colid: Number(identity.colid), email: new RegExp(`^${esc(identity.user)}$`, 'i'), role: { $not: /^Student$/i } }).select('name email colid role').lean();
   if (!person) throw new Error('A staff login is required');
-  const admin = /^All$/i.test(person.role) || !!await Menu.exists({ colid: person.colid, role: person.role, path: '/purchase2-manage-po-admin', access: 'Allow' });
+  const admin = /^All$/i.test(person.role) || (!!await Menu.exists({ colid: person.colid, role: person.role, path: '/purchase2-manage-po-admin', access: 'Allow' })||await require('./additionalAccess').hasPage(person,'/purchase2-manage-po-admin'));
   return { ...person, admin };
 }
 function canEdit(actor, po) {

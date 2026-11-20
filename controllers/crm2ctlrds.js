@@ -377,6 +377,7 @@ router.post('/leads/check', wrap(async (req, res) => {
   const matches = req.leadMode === 'agent' ? [] : await Lead.find({ colid: req.colid, $or: [{ emailkey: email }, { phonekey: phone }, { email: exactEmail(email) }] }).lean();
   if (matches.length) {
     for (const lead of matches) await require('../services/crm2LeadHistory').recordDuplicate(lead, req.body, req.leadOwner || req.body.user, 'Counselor/API');
+    if(req.leadMode==='my'&&matches.length===1)return res.status(409).json({success:false,message:'Duplicate found: lead already exists. Do you want to request transfer to you?',transferleadid:String(matches[0]._id)});
     throw duplicateLeadError(matches, req.body);
   }
   res.json({ success: true, available: true });
@@ -386,6 +387,10 @@ router.post("/leads/save", wrap(async (req, res) => {
   if (reclaimed) return res.json(reclaimed);
   const feedback = {};
   const saved = await saveLead(req.body, req.colid, req.leadMode, req.leadOwner, feedback);
+  try{
+    const result=await require('./crm2MergeApproval').detect(saved);
+    if(result.created)feedback.message='Lead saved. Guardian mobile matched another lead; merge approval requested.';
+  }catch(e){feedback.message='Lead saved. '+e.message;}
   res.json({ success: true, ...feedback, data: publicLead(saved) });
 }));
 router.get('/leads/merge-candidates', wrap(async (req, res) => {

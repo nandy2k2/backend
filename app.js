@@ -736,6 +736,10 @@ app.use('/api/v2/recruitment-confirmation', require('./controllers/recruitmentCo
 app.use('/api/v2/visiting-faculty', require('./controllers/visitingFaculty'));
 app.use('/api/v2/temporary-access', require('./controllers/temporaryAccess'));
 app.use('/api/v2/faculty-feedback', require('./controllers/facultyFeedback'));
+app.use('/api/v2/lead-transfer-notifications',require('./controllers/leadTransferNotifications'));
+app.use('/api/v2/crm2-merge-approval',require('./controllers/crm2MergeApproval').router);
+app.use('/api/v2/crm2-lead-forms',require('./controllers/crm2PublicLeadForms'));
+app.use('/api/v2/institution-dashboard',require('./controllers/institutionDashboard'));
 app.get('/api/v2/recruitment/onboarding-steps', recruitmentController.getOnboardingSteps);
 app.post('/api/v2/recruitment/onboarding-steps', recruitmentController.saveOnboardingStep);
 app.post('/api/v2/recruitment/onboarding-steps-delete', recruitmentController.deleteOnboardingStep);
@@ -6214,6 +6218,7 @@ app.post("/api/v2/conductexam/student-programwise-exam-form-2-submit", (req, res
   req.programwiseExamFine = true;
   return conductexamformctlrds.submitStudentExamForm(req, res);
 });
+app.post('/api/v2/conductexam/examroll-payment-reconcile',require('./controllers/examRollPaymentReconcile').run);
 app.get("/api/v2/conductexam/form-fillup-dates", conductexamformfillupdatesctlrds.list);
 app.post("/api/v2/conductexam/form-fillup-dates", conductexamformfillupdatesctlrds.save);
 app.post("/api/v2/conductexam/form-fillup-dates-delete", conductexamformfillupdatesctlrds.remove);

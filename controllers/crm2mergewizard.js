@@ -17,7 +17,7 @@ const wrap = fn => async (req, res) => {
     if (!Number.isFinite(colid) || colid <= 0 || !email) return res.status(401).json({ message: 'Sign in to continue' });
     const user = await User.findOne({ colid, email: exact(email) }).select('role').lean();
     const role = String(user?.role || '').trim();
-    if (!role || /^(student|agent|publisher|telecaller)$/i.test(role) || !/^(all|crmadmin)$/i.test(role) && !await Menu.exists({ colid, role: user.role, path: '/crm2-merge-lead-wizard', access: 'Allow' })) return res.status(403).json({ message: 'Merge wizard access is not available for this role' });
+    if (!role || /^(student|agent|publisher|telecaller)$/i.test(role) || !/^(all|crmadmin)$/i.test(role) && !(await Menu.exists({ colid, role: user.role, path: '/crm2-merge-lead-wizard', access: 'Allow' })||await require('../services/additionalAccess').hasPage({...user,colid},'/crm2-merge-lead-wizard'))) return res.status(403).json({ message: 'Merge wizard access is not available for this role' });
     const scope = { colid, ...(/^counsel+or$/i.test(role) ? { counselloremail: exact(email) } : {}) };
     await fn(req, res, scope, email);
   } catch (err) { res.status(400).json({ message: /replica set|Transaction numbers/i.test(err.message) ? 'The database does not support atomic merges. No changes were saved.' : err.message }); }

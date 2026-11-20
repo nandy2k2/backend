@@ -41,4 +41,5 @@ const menuaccessdsschema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
+menuaccessdsschema.index({colid:1,role:1});
 module.exports = mongoose.model('menuaccessds', menuaccessdsschema);

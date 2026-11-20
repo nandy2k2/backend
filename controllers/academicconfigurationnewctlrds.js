@@ -18,6 +18,7 @@ const regex = (value) => new RegExp(escapeRegex(value), "i");
 const uniqueSorted = (values = []) => [...new Set(values.map(text).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 
 const config = {
+  semester:{Model:require("../Models/semestermasterds"),fields:["semester","description","status"],required:["semester"]},
   institution: {
     Model: InstitutionMaster,
     fields: ["institution", "institutioncode", "shortname", "parentschool", "university", "yearofestablishment", "institutiontype", "type", "description", "status"],
@@ -138,6 +139,7 @@ exports.bulkMaster = async (req, res) => {
         continue;
       }
       let key = { colid: payload.colid };
+      if (kind === "semester") key.semester = payload.semester;
       if (kind === "institution") key.institution = payload.institution;
       if (kind === "faculty") key.faculty = payload.faculty;
       if (kind === "department") key = { colid: payload.colid, faculty: payload.faculty, institution: payload.institution, department: payload.department };
