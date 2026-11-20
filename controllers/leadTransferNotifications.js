@@ -2,8 +2,7 @@ const router=require('express').Router(),mongoose=require('mongoose'),jwt=requir
 const User=require('../Models/user'),Menu=require('../Models/menuaccessds'),Task=require('../Models/academicnewtaskds');
 const {Lead}=require('../Models/crm2ds');
 const schema=(name,fields)=>mongoose.model(name,new mongoose.Schema(fields,{timestamps:true}));
-const Notification=schema('userinboxnotification',{colid:Number,recipient:String,title:String,text:String,filelink:String,link:String,read:{type:Boolean,default:false}});
-Notification.schema.index({colid:1,recipient:1,createdAt:-1});
+const Notification=require('../Models/userinboxnotification');
 const Flow=schema('crm2leadtransferflow',{colid:{type:Number,unique:true},approvers:[String]});
 const Transfer=schema('crm2leadtransferrequest',{colid:Number,leadid:String,requester:String,requestername:String,previous:String,status:String,step:Number,approvers:[String],history:[mongoose.Schema.Types.Mixed]});
 const text=v=>typeof v==='string'?v.trim():'';

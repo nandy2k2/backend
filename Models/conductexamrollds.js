@@ -7,6 +7,7 @@ const conductExamRollSchema = new mongoose.Schema({
   exam: { type: String, required: true, trim: true },
   examcode: { type: String, required: true, trim: true },
   batch: { type: String, trim: true },
+  practicalbatchid: {type:String,index:true},
   program: { type: String, trim: true },
   programcode: { type: String, required: true, trim: true },
   type: { type: String, enum: ["Major", "Minor", "IDC", "MDC", "AEC", "SEC", "VAC"], required: true },

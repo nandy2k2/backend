@@ -734,6 +734,7 @@ app.get('/api/v2/recruitment/final-candidates', recruitmentController.getFinalCa
 app.post('/api/v2/recruitment/generate-offer-letter', recruitmentController.generateOfferLetter);
 app.use('/api/v2/recruitment-confirmation', require('./controllers/recruitmentConfirmation'));
 app.use('/api/v2/visiting-faculty', require('./controllers/visitingFaculty'));
+app.use('/api/v2/course-design', require('./controllers/courseDesign'));
 app.use('/api/v2/temporary-access', require('./controllers/temporaryAccess'));
 app.use('/api/v2/faculty-feedback', require('./controllers/facultyFeedback'));
 app.use('/api/v2/lead-transfer-notifications',require('./controllers/leadTransferNotifications'));
@@ -7406,6 +7407,7 @@ app.use('/api/v2/crm2-merge-wizard', require('./controllers/crm2mergewizard'));
 app.use('/api/v2/crm2-campus-queue', require('./controllers/crm2campusqueue'));
 app.use('/api/v2/rolewise-dashboard', require('./controllers/rolewisedashboard'));
 app.use('/api/v2/practical-scheduling', require('./controllers/practicalScheduling'));
+app.use('/api/v2/practical-batch', require('./controllers/practicalBatch'));
 app.use('/api/v2/exam-form-3', require('./controllers/examform3lifecycle'));
 app.use("/api/v2/crm2-programs", require("./controllers/crm2programctlrds"));
 app.post("/api/v2/repair-maintenance/program-change/apply", repairmaintenancectlrds.applyProgramChange);
