@@ -99,10 +99,11 @@ router.get('/counter-master', wrap(async (req, res, { colid }) => {
 }, counterPage));
 router.post('/counter-master', wrap(async (req, res, { colid }) => {
   const { id, levelid, active } = req.body, number = text(req.body.number);
+  const building=text(req.body.building).slice(0,150),floor=text(req.body.floor).slice(0,50);
   if (!validId(levelid) || id && !validId(id) || !number || number.length > 30 || !['Yes', 'No'].includes(active)) throw Error('Select a level, counter number and active status');
   if (!await Level.exists({ colid, _id: levelid })) throw Error('Level not found');
   await Counter.init();
-  const data = id ? await Counter.findOneAndUpdate({ colid, _id: id, levelid }, { $set: { number, active } }, { new: true }).lean() : await Counter.create({ colid, levelid, number, active });
+  const data = id ? await Counter.findOneAndUpdate({ colid, _id: id, levelid }, { $set: { number, active,building,floor } }, { new: true }).lean() : await Counter.create({ colid, levelid, number, active,building,floor });
   if (!data) throw Error('Counter not found for this level');
   res.json({ data });
 }, counterPage));
@@ -115,7 +116,7 @@ router.get('/counter-options', wrap(async (req, res, { colid, userid }) => {
     Booking.findOne({ colid, levelid: level._id, day, userid }).lean(),
     Counter.find({ colid, levelid: level._id, active: 'Yes' }).sort({ number: 1 }).lean()
   ]);
-  const savedCounter = booking && await Counter.findOne({ colid, levelid: level._id, _id: booking.counterid }).select('number active').lean();
+  const savedCounter = booking && await Counter.findOne({ colid, levelid: level._id, _id: booking.counterid }).select('number active building floor').lean();
   res.json({ data, current: booking?.counterid || null, savedCounter: savedCounter || null });
 }, null));
 router.get('/counter-admin', wrap(async (req, res, { colid }) => {
@@ -123,14 +124,14 @@ router.get('/counter-admin', wrap(async (req, res, { colid }) => {
   const bookings = await Booking.find({ colid, day }).lean();
   const [levels, counters, users] = await Promise.all([
     Level.find({ colid, _id: { $in: bookings.map(row => row.levelid) } }).select('program programcode level title').lean(),
-    Counter.find({ colid, _id: { $in: bookings.map(row => row.counterid) } }).select('number').lean(),
+    Counter.find({ colid, _id: { $in: bookings.map(row => row.counterid) } }).select('number building floor').lean(),
     User.find({ colid, _id: { $in: bookings.map(row => row.userid) } }).select('name email').lean()
   ]);
   const index = rows => new Map(rows.map(row => [String(row._id), row]));
   const byLevel = index(levels), byCounter = index(counters), byUser = index(users);
   const data = bookings.map(row => {
     const level = byLevel.get(String(row.levelid)), user = byUser.get(String(row.userid));
-    return { _id: row._id, day, program: level?.program, programcode: level?.programcode, level: level?.level, title: level?.title, counter: byCounter.get(String(row.counterid))?.number, user: user?.name, email: user?.email };
+    return { _id: row._id, day, program: level?.program, programcode: level?.programcode, level: level?.level, title: level?.title, building:byCounter.get(String(row.counterid))?.building,floor:byCounter.get(String(row.counterid))?.floor,counter: byCounter.get(String(row.counterid))?.number, user: user?.name, email: user?.email };
   }).sort((a, b) => (a.program || '').localeCompare(b.program || '') || (a.level || 0) - (b.level || 0) || (a.counter || '').localeCompare(b.counter || '', undefined, { numeric: true }));
   res.json({ day, data });
 }, '/crm2-queue-counter-admin'));

@@ -10,6 +10,18 @@ const router = require('../controllers/crm2campusqueue');
 const id = '111111111111111111111111', userid = '222222222222222222222222';
 const chain = value => ({ select() { return this; }, sort() { return this; }, limit() { return this; }, lean: async () => value });
 const signIn = t => t.mock.method(jwt, 'verify', () => ({ colid: 42, user: 'admin@example.com' }));
+test('counter master persists building and floor within the institution', async t=>{
+  signIn(t);
+  t.mock.method(User,'findOne',()=>chain({role:'All'}));
+  t.mock.method(Level,'exists',async()=>true);
+  t.mock.method(Counter,'init',async()=>{});
+  const create=t.mock.method(Counter,'create',async row=>row);
+  const result=await post('/counter-master',{levelid:id,number:'A1',active:'Yes',building:'Main',floor:'2',colid:99});
+  assert.equal(result.status,200);
+  assert.equal(create.mock.calls[0].arguments[0].colid,42);
+  assert.equal(result.data.data.building,'Main');
+  assert.equal(result.data.data.floor,'2');
+});
 async function post(path, body, params = {}) {
   let status = 200, data;
   const handler = router.stack.find(layer => layer.route?.path === path && layer.route.methods.post).route.stack[0].handle;

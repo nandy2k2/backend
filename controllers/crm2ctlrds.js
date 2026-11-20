@@ -450,6 +450,7 @@ router.get("/leads", wrap(async (req, res) => {
     if (dates.length) query.$and = [...(query.$and || []), ...dates];
   }
   if (ownerField(req.leadMode)) query[ownerField(req.leadMode)] = exactEmail(req.leadOwner.email);
+  if(req.query.campuswalkin==='Yes') query.$and=[...(query.$and||[]),{campuswalkin:true},{counselloremail:{$in:['',null]}}];
   const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100), skip = Math.max(Number(req.query.skip) || 0, 0);
   const [data, total] = await Promise.all([Lead.find(query).select("-interactions").sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(), Lead.countDocuments(query)]);
   res.json({ success: true, data: data.map(publicLead), total });

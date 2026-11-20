@@ -37,6 +37,7 @@ Object.assign(definitions, {
 definitions.crm2profileversion = { type: Number, default: 2 };
 definitions.leadgroup = { type: String };
 definitions.utmsource = {type:String,trim:true};
+definitions.campuswalkin = {type:Boolean,default:false};
 const educationFields = [];
 for (const level of ["12th", "10th"]) for (const suffix of ["institution", "passingyear", "grade", "marks", "board"]) {
   const field = `${level}${suffix}`; educationFields.push(field); definitions[field] = { type: suffix === "marks" ? Number : String };
@@ -49,7 +50,7 @@ const groups = {
   "Additional Details": []
 };
 const managed = new Set(["colid", "user", "addedby", "authenticatordate", "authenticatorsetupdate", "crm2profileversion"]);
-for (const field of ['dateadded', 'stage', 'stagetime', 'wizardcompleted']) managed.add(field);
+for (const field of ['dateadded', 'stage', 'stagetime', 'wizardcompleted','campuswalkin']) managed.add(field);
 const profileSchema = new mongoose.Schema(definitions);
 const fields = Object.keys(definitions).filter(field => !field.includes(".$") && !managed.has(field)).map(field => {
   const original = profileSchema.path(field);
